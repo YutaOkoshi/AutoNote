@@ -1,0 +1,10 @@
+.build/
+build/
+tools/
+*.wav
+*.aiff
+*.m4a
+.DS_Store
+Spikes/.build/
+*.p12
+*.pem
