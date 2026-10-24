@@ -11,13 +11,13 @@
 - 結果表 `docs/superpowers/research/2026-10-24-spike-results.md` は各実装者が自分の節だけ書き、並列中は Lead がまとめてコミット
 
 ## 終わったタスク
-（なし）
+- Task 1 骨組み（b2a5f3a、レビュー承認）
 
 ## 進行中
-- Task 1
+- Task 2（.app 組み立て・自己署名・TCC 持続確認）
 
 ## 利用者待ち
 （なし）
 
 ## 次にやること
-- Task 1 完了後 `git switch -c plan-00`、Task 2 へ
+- Task 2 Step 6 で利用者に TCC 確認を依頼 → Step 7 → コミット → wave A（T3 ∥ T5a）
