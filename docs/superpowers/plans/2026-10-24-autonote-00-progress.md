@@ -12,12 +12,14 @@
 
 ## 終わったタスク
 - Task 1 骨組み（b2a5f3a、レビュー承認）
+- Task 2 .app 組み立て・自己署名・TCC 持続確認（3e3b599 + 修正 09fbe18、レビュー承認）。TCC 許可は自己署名で再ビルド後も保たれた（項目 9 済）
 
 ## 進行中
-- Task 2（.app 組み立て・自己署名・TCC 持続確認）
+- Task 3 process tap スパイク（Spikes/TapCapture）
+- Task 5 前半（whisper.cpp 取得・ビルド・サンプル音声・XCFramework 確認。ベンチ実行は後半で）
 
 ## 利用者待ち
 （なし）
 
 ## 次にやること
-- Task 2 Step 6 で利用者に TCC 確認を依頼 → Step 7 → コミット → wave A（T3 ∥ T5a）
+- Task 3 Step 3（許可なし確認）と Task 5 後半（ベンチ）→ Task 4 ∥ Task 7 → Task 6 → Task 8 確認 → Task 9
