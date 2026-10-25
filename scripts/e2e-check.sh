@@ -265,6 +265,28 @@ check_results_doc() {
     if [[ ${#missing[@]} -eq 0 ]]; then pass; else fail "見出しが無い項目: ${missing[*]}"; fi
 }
 
+check_fake_transcript() {
+    CURRENT="12. scripts/make-fake-transcript.py で偽の文字起こし"
+    if ! run python3 -I scripts/make-fake-transcript.py --minutes 1; then fail "make-fake-transcript.py が 0 以外で終了"; return; fi
+    local lines bad
+    lines=$(grep -c . "${LAST_LOG}" || true)
+    bad=$(grep -v -c -E '^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\] (自分|相手): ' "${LAST_LOG}" || true)
+    if [[ "${lines}" -eq 0 ]]; then fail "出力が空"; return; fi
+    if [[ "${bad}" -ne 0 ]]; then fail "[HH:MM:SS] 自分|相手: 形式でない行が ${bad} 行"; return; fi
+    if ! run python3 -I scripts/make-fake-transcript.py --minutes 2 --inject; then fail "--inject が 0 以外で終了"; return; fi
+    if [[ "$(grep -c 'HACKED' "${LAST_LOG}" || true)" -ne 1 ]]; then fail "--inject の注入行が 1 行でない"; return; fi
+    LAST_LOG=""; pass "${lines} 行、注入行あり"
+}
+
+check_claude_probe_files() {
+    CURRENT="13. scripts/minutes-schema.json と probe-claude.sh の静的確認"
+    if ! run jq -e '(.required | sort) == (["agenda","decisions","next_actions","suggested_terms","summary","title"]) and .additionalProperties == false and .properties.title.maxLength == 20 and .properties.summary.minItems == 3 and .properties.summary.maxItems == 3' scripts/minutes-schema.json; then
+        fail "minutes-schema.json が JSON でない、または必須キー・制約が違う"; return
+    fi
+    if ! run bash -n scripts/probe-claude.sh; then fail "probe-claude.sh に構文エラー"; return; fi
+    LAST_LOG=""; pass "（claude の実呼び出しは費用がかかるので E2E では行わない）"
+}
+
 # ---------------------------------------------------------------- 実行
 
 CHECKS=(
@@ -279,6 +301,8 @@ CHECKS=(
     check_cer
     check_whisper
     check_results_doc
+    check_fake_transcript
+    check_claude_probe_files
 )
 
 START=${SECONDS}
