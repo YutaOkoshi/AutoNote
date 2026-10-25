@@ -73,6 +73,11 @@ do {
         }
     }
 }
+// transcriber は情報表示だけ。live / file の経路は未実装なので、付けられたら黙って無視せず止める。
+if opts.engine == "transcriber", opts.live || opts.file != nil {
+    FileHandle.standardError.write("SpeechTranscriber の live/file 経路は未実装（Task 8 の前に追加が必要）\n".data(using: .utf8)!)
+    exit(2)
+}
 guard ["dictation", "sf", "transcriber"].contains(opts.engine),
       opts.engine == "transcriber" || (opts.file != nil) != opts.live
 else {

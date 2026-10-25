@@ -143,6 +143,18 @@ check_info_plist() {
     if [[ ${#problems[@]} -eq 0 ]]; then pass; else fail "${problems[*]}"; fi
 }
 
+check_bundle_version() {
+    CURRENT="5b. Info.plist の CFBundleShortVersionString と AutoNoteVersion.current"
+    local plist="${APP}/Contents/Info.plist"
+    [[ -f "${plist}" ]] || { skip "build/AutoNote.app が無い"; return; }
+    local plist_v swift_v
+    plist_v="$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "${plist}" 2>/dev/null)"
+    swift_v="$(sed -n 's/.*static let current = "\([^"]*\)".*/\1/p' Sources/AutoNoteCore/AutoNoteVersion.swift)"
+    LAST_LOG=""
+    [[ -n "${swift_v}" ]] || { fail "AutoNoteVersion.swift から版を読めない"; return; }
+    if [[ "${plist_v}" == "${swift_v}" ]]; then pass "${plist_v}"; else fail "Info.plist ${plist_v:-なし} ≠ AutoNoteVersion ${swift_v}"; fi
+}
+
 check_cli() {
     CURRENT="6. autonote --version と使い方"
     local cli="${APP}/Contents/MacOS/autonote"
@@ -267,6 +279,9 @@ check_results_doc() {
 
 check_fake_transcript() {
     CURRENT="12. scripts/make-fake-transcript.py で偽の文字起こし"
+    # 既定の入力はコミット済みの scripts/samples/ja-5min.txt（tools/ の無い新しい clone でも動く）
+    [[ -f scripts/samples/ja-5min.txt ]] || { skip "入力 scripts/samples/ja-5min.txt が無い"; return; }
+    command -v python3 >/dev/null || { skip "python3 が無い"; return; }
     if ! run python3 -I scripts/make-fake-transcript.py --minutes 1; then fail "make-fake-transcript.py が 0 以外で終了"; return; fi
     local lines bad
     lines=$(grep -c . "${LAST_LOG}" || true)
@@ -328,6 +343,20 @@ check_apple_speech_probe() {
     pass "${line}、$(grep -m1 '^DictationTranscriber.supportedLocales: ' "${LAST_LOG}")"
 }
 
+check_apple_speech_probe_guard() {
+    CURRENT="15b. AppleSpeechProbe --engine transcriber --live / --file は未実装として exit 2"
+    local bin=Spikes/.build/debug/AppleSpeechProbe
+    [[ -x "${bin}" ]] || { skip "${bin} が無い（swift build --package-path Spikes を先に）"; return; }
+    local args code
+    for args in "--live" "--file /dev/null"; do
+        # shellcheck disable=SC2086
+        run_timeout 30 "${bin}" --engine transcriber --locale ja-JP ${args}; code=$?
+        if [[ ${code} -ne 2 ]]; then fail "${args}: exit ${code}（期待 2）"; return; fi
+        grep -q '未実装' "${LAST_LOG}" || { fail "${args}: stderr に「未実装」が無い"; return; }
+    done
+    pass "--live / --file とも exit 2"
+}
+
 # ---------------------------------------------------------------- 実行
 
 CHECKS=(
@@ -336,6 +365,7 @@ CHECKS=(
     check_codesign_identity
     check_codesign_verify
     check_info_plist
+    check_bundle_version
     check_cli
     check_app_launch
     check_spikes_build
@@ -346,6 +376,7 @@ CHECKS=(
     check_claude_probe_files
     check_device_probe
     check_apple_speech_probe
+    check_apple_speech_probe_guard
 )
 
 START=${SECONDS}

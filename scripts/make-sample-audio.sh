@@ -1,26 +1,25 @@
 #!/bin/bash
 # whisper ベンチ用のサンプル音声を合成する（計画 00 Task 5 のスパイク用）。
 #
+# 入力（コミット済み。ベンチの CER の参照テキストそのもの）:
+#   scripts/samples/ja-5min.txt  日本語 約 5 分ぶんの読み上げ文
+#   scripts/samples/en-30s.txt   英語 約 30 秒ぶんの読み上げ文
 # 出力（tools/ は .gitignore 済み。コミットしない）:
 #   tools/samples/ja-5min.wav  日本語 約 5 分（16kHz モノラル 16bit）
-#   tools/samples/ja-5min.txt  その参照テキスト（CER 計算用。読み上げた文字列そのもの）
 #   tools/samples/en-30s.wav   英語 約 30 秒（16kHz モノラル 16bit。日本語とは別ファイルのまま）
-#   tools/samples/en-30s.txt   その参照テキスト
 #
 # 使い方: scripts/make-sample-audio.sh
 #   JA_VOICE    日本語ボイス（既定: Kyoko。無ければ say -v '?' の ja_JP の先頭）
 #   EN_VOICE    英語ボイス（既定: Samantha）
-#   TARGET_SEC  日本語音声の目標秒数（既定: 300）
 #
-# 日本語テキストは要件書 docs/superpowers/specs/2026-10-24-autonote-design.md の 12〜147 行
-# （第 1〜4 章）から Markdown 記号を sed で落として使う。全文を一度合成して長さを測り、
-# 目標秒数に収まるよう先頭から行単位で切り詰めて合成し直す。
+# 参照テキストは計画 00 Task 5 で要件書の第 1〜4 章から作り、5 分に切り詰めたもの。
+# 要件書はその後書き換わったので、作り直さずに固定のテキストを読み上げるだけにする
+# （Intel と Apple Silicon で同じ入力を使うため）。
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SPEC="$REPO_ROOT/docs/superpowers/specs/2026-10-24-autonote-design.md"
+SRC="$REPO_ROOT/scripts/samples"
 OUT="$REPO_ROOT/tools/samples"
-TARGET_SEC="${TARGET_SEC:-300}"
 EN_VOICE="${EN_VOICE:-Samantha}"
 RATE=180
 
@@ -44,66 +43,17 @@ mkdir -p "$OUT"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# 1. 要件書の第 1〜4 章から Markdown 記号を落とす
-sed -n '12,147p' "$SPEC" \
-    | sed -E \
-        -e '/^```/d' \
-        -e '/^-{3,}$/d' \
-        -e '/^\|[-| :]+\|$/d' \
-        -e 's/^#+ +//' \
-        -e 's/^ *- +//' \
-        -e 's/^ *[0-9]+\. +//' \
-        -e 's/^> *//' \
-        -e 's/\[([^]]*)\]\([^)]*\)/\1/g' \
-        -e 's/\*\*//g' \
-        -e 's/`//g' \
-        -e 's/^\| *//' \
-        -e 's/ *\|$//' \
-        -e 's/ *\| */、/g' \
-    | awk '{ gsub(/。/, "。\n"); print }' \
-    | sed -E '/^[[:space:]]*$/d' > "$TMP/full.txt"   # 切り詰めの単位を細かくするため「。」で改行する
-
-# 2. 全文を合成して長さを測り、目標秒数に合わせて行単位で切り詰める
-say -v "$JA_VOICE" -r "$RATE" -o "$TMP/full.aiff" -f "$TMP/full.txt"
-full_sec="$(duration "$TMP/full.aiff")"
-full_bytes="$(wc -c < "$TMP/full.txt" | tr -d ' ')"
-log "全文: ${full_bytes} バイト、${full_sec} 秒"
-
-# 区間によって 1 バイトあたりの秒数が違うので、直前の合成結果の比率で最大 3 回詰め直す。
-# 目標の ±3% に入ったら止める。
-src_bytes="$full_bytes"; src_sec="$full_sec"
-for try in 1 2 3; do
-    keep_bytes="$(awk -v b="$src_bytes" -v s="$src_sec" -v t="$TARGET_SEC" 'BEGIN { printf "%d", b * t / s }')"
-    awk -v keep="$keep_bytes" '
-        { n += length($0) + 1 }   # BSD awk の length はバイト数でも比率なので問題ない
-        n > keep && NR > 1 { exit }
-        { print }
-    ' "$TMP/full.txt" > "$OUT/ja-5min.txt"
-    new_bytes="$(wc -c < "$OUT/ja-5min.txt" | tr -d ' ')"
-    if [ "$try" -gt 1 ] && [ "$new_bytes" = "$src_bytes" ]; then
-        break   # 行単位ではこれ以上詰められない
-    fi
-    say -v "$JA_VOICE" -r "$RATE" -o "$TMP/ja.aiff" -f "$OUT/ja-5min.txt"
-    src_sec="$(duration "$TMP/ja.aiff")"
-    src_bytes="$(wc -c < "$OUT/ja-5min.txt" | tr -d ' ')"
-    log "試行 ${try}: ${src_bytes} バイト、${src_sec} 秒"
-    if awk -v s="$src_sec" -v t="$TARGET_SEC" 'BEGIN { exit !(s > t * 0.97 && s < t * 1.03) }'; then
-        break
-    fi
+for f in ja-5min.txt en-30s.txt; do
+    [ -f "$SRC/$f" ] || { echo "参照テキストが無い: $SRC/$f" >&2; exit 1; }
 done
 
+# 1. 日本語 約 5 分
+say -v "$JA_VOICE" -r "$RATE" -o "$TMP/ja.aiff" -f "$SRC/ja-5min.txt"
 afconvert -f WAVE -d LEI16@16000 -c 1 "$TMP/ja.aiff" "$OUT/ja-5min.wav"
-log "ja-5min.wav: $(duration "$OUT/ja-5min.wav") 秒、参照テキスト $(wc -l < "$OUT/ja-5min.txt" | tr -d ' ') 行"
+log "ja-5min.wav: $(duration "$OUT/ja-5min.wav") 秒、参照テキスト $(wc -l < "$SRC/ja-5min.txt" | tr -d ' ') 行"
 
-# 3. 英語 約 30 秒
-cat > "$OUT/en-30s.txt" <<'EOF'
-Good morning everyone, thanks for joining today's weekly sync.
-First, the release schedule. We agreed to ship the beta on Friday, and Ken will send the build to the testers on Thursday evening.
-Second, the transcription accuracy on Intel Macs is still lower than we hoped, so we will compare the small and medium models next week.
-Finally, please add your action items to the shared notes before the end of the day.
-Ken, could you also check why the Bluetooth headset keeps disconnecting? Any questions before we wrap up?
-EOF
-say -v "$EN_VOICE" -o "$TMP/en.aiff" -f "$OUT/en-30s.txt"
+# 2. 英語 約 30 秒
+say -v "$EN_VOICE" -o "$TMP/en.aiff" -f "$SRC/en-30s.txt"
 afconvert -f WAVE -d LEI16@16000 -c 1 "$TMP/en.aiff" "$OUT/en-30s.wav"
 log "en-30s.wav: $(duration "$OUT/en-30s.wav") 秒"
 

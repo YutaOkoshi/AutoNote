@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """偽の会議文字起こしを作る（スパイク用・使い捨て）。
 
-tools/samples/ja-5min.txt の文を繰り返し、`[HH:MM:SS] 自分:` / `[HH:MM:SS] 相手:` を
+scripts/samples/ja-5min.txt（ベンチの参照テキスト）の文を繰り返し、`[HH:MM:SS] 自分:` / `[HH:MM:SS] 相手:` を
 交互に付けて、指定分数ぶん（1 分あたり約 250 文字）を標準出力に出す。
 時刻は会議開始からの経過時刻。標準ライブラリのみ。`python3 -I` で実行する。
 
@@ -41,7 +41,7 @@ def main() -> None:
     ap.add_argument("--inject", action="store_true",
                     help="途中に指示の注入を試みる 1 行を混ぜる")
     ap.add_argument("--source", type=pathlib.Path,
-                    default=repo / "tools" / "samples" / "ja-5min.txt")
+                    default=repo / "scripts" / "samples" / "ja-5min.txt")
     args = ap.parse_args()
 
     sentences = load_sentences(args.source)

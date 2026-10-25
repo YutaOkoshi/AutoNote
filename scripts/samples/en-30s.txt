@@ -1,0 +1,5 @@
+Good morning everyone, thanks for joining today's weekly sync.
+First, the release schedule. We agreed to ship the beta on Friday, and Ken will send the build to the testers on Thursday evening.
+Second, the transcription accuracy on Intel Macs is still lower than we hoped, so we will compare the small and medium models next week.
+Finally, please add your action items to the shared notes before the end of the day.
+Ken, could you also check why the Bluetooth headset keeps disconnecting? Any questions before we wrap up?

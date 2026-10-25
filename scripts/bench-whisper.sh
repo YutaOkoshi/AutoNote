@@ -23,7 +23,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WHISPER_DIR="$REPO_ROOT/tools/whisper.cpp"
 SAMPLE_WAV="$REPO_ROOT/tools/samples/ja-5min.wav"
-SAMPLE_REF="$REPO_ROOT/tools/samples/ja-5min.txt"
+SAMPLE_REF="$REPO_ROOT/scripts/samples/ja-5min.txt"
 MODELS="${MODELS:-base small small-q5_1 medium medium-q5_0 large-v3-turbo large-v3-turbo-q5_0}"
 THREADS="${THREADS:-4}"
 OUT_DIR="${OUT_DIR:-/tmp}"
@@ -118,6 +118,7 @@ bench_build() {
         fi
 
         # (b) whisper-cli で ja-5min.wav を文字起こしした経過秒
+        rm -f "$out.txt"   # 前回の出力が残っていると、書かれなかったときに古い txt で CER を計算してしまう
         start="$(now)"
         if run_child "$cli_log" "$bin/whisper-cli" -m "$model" -l ja -t "$THREADS" -f "$SAMPLE_WAV" -otxt -of "$out"; then
             end="$(now)"
