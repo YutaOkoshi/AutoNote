@@ -6,7 +6,7 @@
 
 **Architecture:** 音声コールバック（tap の IOProc、AVAudioEngine の tap）は固定長リングバッファへのコピーだけを行い、取り出しタスクが 16k/mono/Int16 に変換して `AudioChunk`（ホスト時刻から求めた会議タイムライン上の開始時刻つき）を出す。`RecordingSession`（actor）が 2 本の `AudioSource` を束ね、`TimelineAligner` で欠けた時間を無音で埋めながら `WAVSegmentWriter` に書き、manifest を更新する。Core Audio・AVAudioEngine・ディスク空き・時計はすべて protocol の後ろに置き、フェイクとファイル入力で自動テストする。実機でしか分からない部分（許可、tap の受信、BT 出力、ボイスプロセッシング）は 👤 手順にする。
 
-**Tech Stack:** Swift 6.2（strict concurrency）/ Core Audio process tap（`CATapDescription`、`AudioHardwareCreateProcessTap`、aggregate device、IOProc）/ AVFoundation（`AVAudioEngine`、`AVAudioConverter`、`AVAssetReader`）/ `Synchronization`（`Atomic`）/ Speech（Task 1 の確認だけ）/ Swift Testing
+**Tech Stack:** Swift 6.3 ツールチェーン（swift-tools-version 6.2、strict concurrency）/ Core Audio process tap（`CATapDescription`、`AudioHardwareCreateProcessTap`、aggregate device、IOProc）/ AVFoundation（`AVAudioEngine`、`AVAudioConverter`、`AVAssetReader`）/ `Synchronization`（`Atomic`）/ Speech（Task 1 の確認だけ）/ Swift Testing
 
 **Spec:** `docs/superpowers/specs/2026-10-24-autonote-design.md`（§3.4、§5.1〜5.9、§10、§11.5 の猶予中の無音、§17）と `docs/superpowers/plans/2026-10-25-autonote-plans-overview.md`（共通契約）。根拠: `docs/superpowers/research/2026-10-24-spike-results.md` 項目 3・5・9・10、`Spikes/Sources/TapCapture/main.swift`、`docs/superpowers/plans/2026-10-24-autonote-00-progress.md` の「計画 02 への申し送り」
 
@@ -802,7 +802,7 @@ Expected: 記録した値
 - [ ] **Step 1: E2E の確認項目を足す**
 
 `scripts/e2e-check.sh` に 2 関数を足し、`CHECKS` の計画 01 の項目の後に入れる。どちらも `AUTONOTE_CLI` が実行できなければ SKIP:
-- `check_dev_record`（02.1）: `"${AUTONOTE_CLI}" dev record --check-permission` の `mic_permission` が `authorized` でなければ SKIP（「マイク許可がない（責任プロセス: ターミナル）」）。`run_timeout 40 "${AUTONOTE_CLI}" dev record --seconds 5 --out "${WORK}/rec"` が exit 0、JSON の `status` が `tooShort`（`MeetingStatus.tooShort.rawValue`。5 秒は 1 分未満）、manifest ファイルがあり `plutil -extract status raw` が同じ、mic と system の `seconds` がともに 5.0±0.5（システム音はコールバックが無くても無音で埋まる）、`afinfo` で各 WAV が `16000 Hz`・`1 ch`・16 bit。PASS の説明に system の `chunks` を出す（0 は失敗にしない）
+- `check_dev_record`（02.1）: `"${AUTONOTE_CLI}" dev record --check-permission` の `mic_permission` が `authorized` でなければ SKIP（「マイク許可がない（責任プロセス: ターミナル）」）。`run_timeout 40 "${AUTONOTE_CLI}" dev record --seconds 5 --out "${WORK}/rec"` が exit 0、JSON の `status` が `too_short`（`MeetingStatus.tooShort.rawValue`。raw value は snake_case。5 秒は 1 分未満）、manifest ファイルがあり `plutil -extract status raw` が同じ、mic と system の `seconds` がともに 5.0±0.5（システム音はコールバックが無くても無音で埋まる）、`afinfo` で各 WAV が `16000 Hz`・`1 ch`・16 bit。PASS の説明に system の `chunks` を出す（0 は失敗にしない）
 - `check_dev_import`（02.2）: `say -o "${WORK}/s.aiff" "テストです"` → `afconvert -f m4af -d aac` と `afconvert -f WAVE -d LEI16@44100` で m4a と wav を作る → それぞれ `"${AUTONOTE_CLI}" dev import … --out "${WORK}/imp" --start 2026-10-20T10:00:00+09:00` が exit 0、manifest の `source` が `imported`、`device.name` が `import`、`tracks.0.relative_path` が `tracks/import-000.wav`、出力 WAV が `afinfo` で 16000 Hz / 1 ch。`say` が無ければ SKIP
 - [ ] **Step 2: E2E を全部回す** — Run: `scripts/build-app.sh && scripts/e2e-check.sh` → Expected: FAIL 0。02.1 はターミナルにマイク許可があれば PASS、無ければ SKIP。02.2 は PASS
 - [ ] **Step 3: Commit** — `git add scripts/e2e-check.sh && git commit -m "test: add e2e checks for dev record and dev import"`

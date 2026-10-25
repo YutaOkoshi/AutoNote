@@ -417,10 +417,10 @@ scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
 - Produces:
   - `public protocol QueueClock: Sendable { func now() -> Date; func sleep(until: Date) async throws }`、`public struct SystemQueueClock: QueueClock`
   - `public protocol RecordingActivity: Sendable { func isRecordingUpdates() async -> AsyncStream<Bool> }`（購読直後に現在値を 1 回流し、以後は変化のたびに流す）、`public struct NeverRecording: RecordingActivity`（常に `false`。`dev summarize` 用）。録音状態で何をするかは Task 8
-  - `public struct QueueSnapshot: Equatable, Sendable { public var jobs: [JobProgress]; public var pausedForRecording: Bool }`
+  - `public struct QueueSnapshot: Equatable, Sendable { public var jobs: [JobProgress]; public var pausedForRecording: Bool }`。各ジョブの `summaryFailure`（議事録の失敗の分類）と `awaitingConfirmation`（編集済みファイルの上書き確認待ち）を `JobProgress` に必ず含める（計画 06 の `NoticeRelay` が読む）
   - `public struct JobProgress: Equatable, Sendable { public var meetingID: MeetingID; public var stage: String?; public var state: JobState; public var progress: Double?; public var notBefore: Date?; public var lastError: String?; public var summaryFailure: SummaryFailureKind?; public var awaitingConfirmation: Bool; public var generation: Int }`。並びは `createdAt` 昇順。完了したジョブは `summaryFailure` を持つものだけ入れる。計画 06 の `NoticeRelay` はこれを見て `claudeNotLoggedIn`・`overwriteConfirmation`・`transcriptOnly` などの通知を出す（本計画は通知を出さない）
-  - `public actor PostProcessingQueue { public init(paths: AppPaths, stages: [any QueueStage], activity: any RecordingActivity, gate: BatchGate? = nil, clock: any QueueClock = SystemQueueClock()); public func register(_ stage: any QueueStage); public func start() async; public func stop() async; public func enqueue(_ id: MeetingID) async; public func rerun(_ id: MeetingID, from stage: String) async throws; public func retry(_ id: MeetingID) async throws; public func resolveOverwrite(_ id: MeetingID, overwrite: Bool) async throws; public func snapshot() -> QueueSnapshot; public nonisolated func snapshots() -> AsyncStream<QueueSnapshot>; public func runUntilIdle() async }`。呼び出し形 `PostProcessingQueue(paths:stages:activity:)` は overview §8b のとおり。`gate` は計画 06 が `FinalTranscriptionRunner` に渡したものと同じものを渡す。内部で `JobStore(paths:)`・`ManifestStore(paths:)`・`SettingsStore(paths:)` を作る
-  - `public enum QueueError: Error, Equatable { case unknownMeeting(MeetingID); case unknownStage(String); case transcriptMissing(MeetingID); case notTooShort(MeetingStatus) }`
+  - `public actor PostProcessingQueue { public init(paths: AppPaths, stages: [any QueueStage], activity: any RecordingActivity, gate: BatchGate, clock: any QueueClock = SystemQueueClock()); public func register(_ stage: any QueueStage); public func start() async; public func stop() async; public func enqueue(_ id: MeetingID) async; public func rerun(_ id: MeetingID, from stage: String) async throws; public func retry(_ id: MeetingID) async; public func resolveOverwrite(_ id: MeetingID, overwrite: Bool) async throws; public func snapshot() -> QueueSnapshot; public nonisolated func snapshots() -> AsyncStream<QueueSnapshot>; public func runUntilIdle() async }`。呼び出し形 `PostProcessingQueue(paths:stages:activity:gate:)` は overview §8b のとおりで、`gate` は既定値なしの必須引数（渡し忘れを防ぐ。`clock` だけ既定値つき）。`gate` は計画 06 が `FinalTranscriptionRunner` に渡したものと同じものを渡す。内部で `JobStore(paths:)`・`ManifestStore(paths:)`・`SettingsStore(paths:)` を作る
+  - `public enum QueueError: Error, Equatable { case unknownMeeting(MeetingID); case unknownStage(String); case notTooShort(MeetingStatus) }`
   - TestSupport: `public final class FakeQueueClock: QueueClock, @unchecked Sendable`（`advance(by:)` で進む。`sleep(until:)` は時刻がそこへ進むまで待つ）、`public struct ScriptedStage: QueueStage`（`init(name: String, log: CallLog, results: [Result<Void, StageError>] = [], progress: Double? = nil, onRun: (@Sendable (inout Job) -> Void)? = nil, gate: AsyncStream<Void>? = nil)`。n 回目の呼び出しで `results[n]` を返し、尽きたら成功。`gate` があれば 1 要素届くまで待つ）
 
 規則（`Job` の各項目の意味。実装とテストの両方の基準）:
@@ -432,7 +432,7 @@ scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
 - 全段階が済んだとき: `SummaryFailureKind.of(job.summaryFailure) == .rateLimited` なら `.waiting`・`notBefore = now + 3600`（§8.1「上限由来なら 1 時間後に自動で再試行」）。それ以外は `.done`。`nextStage == nil` の `.waiting` が時刻に達したら、`rerun(id, from: "summarize")` と同じ処理をする
 - 登録されていない段階名（初期状態の `automations`）は実行せずに `completedStages` へ足す
 - `rerun(_:from:)`: `completedStages` を、`StageName.all` で `from` より前のものだけにする。`state = .pending`、`attempts = 0`、`lastError = nil`、`notBefore = nil`、`overwriteApproved = false`。`from` が `summarize` 以前なら `generation += 1`（議事録が作り直されるので、Automations の `minutes_generated` がもう一度走る。overview §3）
-- `retry(_:)`: `.failed` か `.waiting` のジョブを `.pending`・`notBefore = nil` にする（同じ段階をすぐ再実行。`generation` は変えない）
+- `retry(_:)`（`async`。投げない）: `.failed` のジョブ（と `notBefore` 付きの `.waiting`）を `.pending`・`notBefore = nil` にする（失敗した段階からすぐ再実行。`generation` は変えない）。ジョブが無い・それ以外の状態ならログに書いて何もしない
 - `resolveOverwrite(_:overwrite: true)`: `overwriteApproved = true`・`.pending`。`false`: `write_vault`・`update_index`・`automations` を `completedStages` に足して `.done`
 - `start()`: 保存済みのジョブを読み、`.running` を `.pending` に戻して `attempts -= 1` で保存し、ループを始める。ループは `runUntilIdle()` の後、最も早い `notBefore` まで `clock.sleep` するか、`enqueue`・`rerun`・`retry`・`resolveOverwrite`・録音状態の変化で起きる
 - 状態が変わるたびに `snapshots()` の全購読者へ流す。進捗の値は `JobProgress.progress` に入れる（保存はしない）
@@ -441,7 +441,7 @@ scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
 
 ```swift
 @Suite struct PostProcessingQueueTests {
-    // 共通: 一時 AppPaths、status .recorded の Samples.manifest を保存、ScriptedStage 4 つ（transcribe〜update_index）、NeverRecording、FakeQueueClock
+    // 共通: 一時 AppPaths、status .recorded の Samples.manifest を保存、ScriptedStage 4 つ（transcribe〜update_index）、NeverRecording、gate: BatchGate()、FakeQueueClock
     @Test func enqueueCreatesPersistedJobOnlyForRecordedMeetings() async throws {
         // enqueue → queue/jobs/<id>.json、stages == StageName.all、state .pending。もう一度 enqueue → 変化なし。status .recording の会議 → ジョブ無し
     }
@@ -491,7 +491,7 @@ scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
   - `public struct RecordingSessionActivity: RecordingActivity { public init(initial: @escaping @Sendable () async -> Bool, events: @escaping @Sendable () async -> AsyncStream<RecordingEvent>); public init(session: RecordingSession) }`。2 つ目は `initial: { await session.state != .idle }`、`events: { await session.events() }`。`.started` で `true`、`.stopped` で `false`。一時停止（`.paused`・`.resumed`）と猶予中（`.microphoneDetached` から `.stopped` まで）は `true` のまま。同じ値は続けて流さない。overview §8b のとおり、アダプタは本計画に置く
   - TestSupport: `public final class FakeRecordingActivity: RecordingActivity, @unchecked Sendable`（`set(_ recording: Bool)`）
 
-規則: `RecordingActivity` が `true` になったら `await gate?.pause()`、`false` になったら `await gate?.resume()` を呼ぶ（overview §8b。04 の `WhisperBatchTranscriber` がセグメント境界で止まる。タスクは取り消さない）。録音中は `nextStage == "transcribe"` のジョブを新しく始めない（他のジョブの `summarize` 以降は進む）。実行中の `transcribe` はそのまま続け、`gate` で止まる。`QueueSnapshot.pausedForRecording` は「録音中で、かつ次の段階が `transcribe` のジョブがある」とき `true`。
+規則: `RecordingActivity` が `true` になったら `await gate.pause()`、`false` になったら `await gate.resume()` を呼ぶ（overview §8b。04 の `WhisperBatchTranscriber` がセグメント境界で止まる。タスクは取り消さない）。録音中は `nextStage == "transcribe"` のジョブを新しく始めない（他のジョブの `summarize` 以降は進む）。実行中の `transcribe` はそのまま続け、`gate` で止まる。`QueueSnapshot.pausedForRecording` は「録音中で、かつ次の段階が `transcribe` のジョブがある」とき `true`。
 
 - [ ] **Step 1: 失敗するテストを書く**
 
@@ -659,8 +659,9 @@ scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
 - Produces:
   - `public struct UpdateIndexStage: QueueStage { public init(); public let name = "update_index" }`（`VaultWriter(...).rebuildIndex()` を呼ぶだけ。出力フォルダが nil・使えない・I/O エラーは `.retry(after: 300, reason:)`）
   - `public enum PostProcessingPipeline { public static func standardStages(runner: FinalTranscriptionRunner, summarizer: @escaping @Sendable (Settings, AppPaths) async throws -> any Summarizer = SummarizerFactory.make) -> [any QueueStage] }`（transcribe・summarize・write_vault・update_index の 4 つ。計画 06 はこれに `AutomationsStage`（`name == "automations"`）を足して `PostProcessingQueue(paths:stages:activity:gate:)` に渡すか、`register(_:)` で足す。Automations 段階は manifest の status できっかけを決め、二重実行防止キーは `"\(meeting.rawValue):\(generation)"`。失敗しても投げない。§14.5）
-  - `extension PostProcessingQueue { public func regenerate(_ id: MeetingID) async throws; public func acceptShortRecording(_ id: MeetingID) async throws }`
-    - `regenerate`: `final.json` が無ければ `QueueError.transcriptMissing`。ジョブが無ければ `completedStages: ["transcribe"]` のジョブを作る。続けて `rerun(id, from: "summarize")`（`generation` が上がる）。§8.4「何度でもでき」
+  - `extension PostProcessingQueue { public func regenerate(_ id: MeetingID) async; public func acceptShortRecording(_ id: MeetingID) async throws }`、および Task 7 の `public func retry(_ id: MeetingID) async`
+    - 違い: `retry` は**失敗したジョブ**を失敗した段階から（`generation` そのまま）、`regenerate` は**完了した会議**の議事録を `summarize` から（`generation` +1）。計画 06 の「再実行」はジョブが failed なら `retry`、それ以外は `regenerate` に振る（overview §8b）
+    - `regenerate`（`async`。投げない）: `final.json` が無ければログに `transcript_missing` を書いて何もしない。ジョブが無ければ `completedStages: ["transcribe"]` のジョブを作る。続けて `rerun(id, from: "summarize")`（`generation` が上がる）。§8.4「何度でもでき」
     - `acceptShortRecording`: manifest が `.tooShort` でなければ `QueueError.notTooShort(status)`。`.recorded` に更新してから `enqueue`（§5.9「文字起こしする」。「破棄」は Task 13 の `delete`）
 
 - [ ] **Step 1: 失敗するテストを書く（フェイクで端から端まで）**
@@ -683,7 +684,7 @@ scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
     }
     @Test func registeredAutomationsStageRunsLast() async throws { /* ScriptedStage(name: "automations") を register → 最後に 1 回 */ }
     @Test func acceptShortRecordingEnqueues() async throws { /* .tooShort → .recorded になり完走。.recorded の会議では notTooShort */ }
-    @Test func regenerateWithoutTranscriptThrows() async throws { /* final.json 無し → QueueError.transcriptMissing */ }
+    @Test func regenerateWithoutTranscriptDoesNothing() async throws { /* final.json 無し → ジョブが作られず、既存ジョブの generation も変わらない */ }
     @Test func vaultUnavailableKeepsJobAndResumes() async throws { /* outputFolder のパスが無い → write_vault で .waiting。フォルダを作り advance(300) → 完走 */ }
 }
 ```
@@ -751,7 +752,7 @@ scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
 - Consumes: `DevCommands.run(_:)`（計画 01 T14）、Task 12 の `PostProcessingPipeline.standardStages`、Task 7 の `PostProcessingQueue`・`NeverRecording`、`FakeBatchTranscriber`・`FakeSummarizer`（TestSupport）、`FinalTranscriptionRunner`・`BatchGate`・`PCMAudio.writeWAV`（計画 04）、Task 10 の `SummarizerFactory`
 - Produces:
   - `public struct DevSummarizeArguments: Equatable, Sendable { public var transcript: URL; public var out: URL; public var minutes: URL?; public var failSummary: Bool; public var useClaude: Bool; public static func parse(_ args: [String]) throws -> DevSummarizeArguments }`（`--fake <transcript.json> --out <dir> [--minutes <minutes.json>] [--fail-summary] [--claude]`。`--minutes` は `--fail-summary` と `--claude` のどちらも無いとき必須）
-  - `autonote dev summarize …`: `<dir>/app` を `AppPaths` の root にし、`<dir>/vault` を `outputFolder` にした `settings.json` を書く。`<transcript.json>`（`Transcript` の JSON）の発話を `FakeBatchTranscriber(results: ["mic-0.wav": …])` に入れる。`FinalTranscriptionRunner(gate: BatchGate())` の後に、`FakeSummarizer` を置く（`--minutes` の内容を返す。`--fail-summary` なら `.failure(FakeError(message: "dev"))`。`--claude` なら `SummarizerFactory.make`）。この並びの `standardStages` で `PostProcessingQueue(paths:stages:activity: NeverRecording())` を作る。開始 `2026-10-24T05:00:00Z`、`.recorded` の manifest と 1 秒の無音 `tracks/mic-000.wav` を書いて `enqueue` → `runUntilIdle()`。stdout に JSON 1 行 `{"meeting_id":…,"file":"<vault からの相対パス>","status":"minutes_generated|transcript_only"}` を出す。ジョブが `.done` でなければ終了コード 1、引数の誤りは使い方を標準エラーに出して 2
+  - `autonote dev summarize …`: `<dir>/app` を `AppPaths` の root にし、`<dir>/vault` を `outputFolder` にした `settings.json` を書く。`<transcript.json>`（`Transcript` の JSON）の発話を `FakeBatchTranscriber(results: ["mic-0.wav": …])` に入れる。`FinalTranscriptionRunner(…, gate: gate)`（`let gate = BatchGate()`）の後に、`FakeSummarizer` を置く（`--minutes` の内容を返す。`--fail-summary` なら `.failure(FakeError(message: "dev"))`。`--claude` なら `SummarizerFactory.make`）。この並びの `standardStages` で `PostProcessingQueue(paths:stages:activity: NeverRecording(), gate:)` を作る（`gate` は runner に渡したのと同じ `BatchGate`）。開始 `2026-10-24T05:00:00Z`、`.recorded` の manifest と 1 秒の無音 `tracks/mic-000.wav` を書いて `enqueue` → `runUntilIdle()`。stdout に JSON 1 行 `{"meeting_id":…,"file":"<vault からの相対パス>","status":"minutes_generated|transcript_only"}` を出す。ジョブが `.done` でなければ終了コード 1、引数の誤りは使い方を標準エラーに出して 2
 
 - [ ] **Step 1: 失敗するテストを書く**
 
