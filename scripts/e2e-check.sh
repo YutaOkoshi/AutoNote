@@ -1,0 +1,282 @@
+#!/usr/bin/env bash
+# AutoNote の E2E 動作確認。リポジトリの成果物が「実際に動く」ことを人の手なしで確かめる。
+#
+# 使い方: scripts/e2e-check.sh [--quick] [--verbose]
+#   --quick     時間のかかる項目（swift test / build-app / Spikes build）を飛ばす（SKIP と表示）
+#   --verbose   各コマンドの出力をそのまま見せる（既定は FAIL のときだけ末尾 20 行）
+# 環境変数（FAIL 検出の確認用。副作用なしで期待値だけを変える）:
+#   E2E_EXPECT_VERSION   autonote --version の期待値（既定: Sources/AutoNoteCore/AutoNoteVersion.swift の値）
+#
+# 各項目は PASS / FAIL / SKIP の 1 行を出す。最後に集計し、FAIL が 1 つでもあれば終了コード 1。
+# 機材・許可ダイアログ・ネットワーク・GUI に依存する項目は、条件がそろわなければ SKIP（失敗にしない）。
+#
+# ★ 新しい成果物（スクリプト、実行ターゲット、ビルド手順）を足したら、ここに確認項目を足す:
+#   1. check_xxx 関数を書く（中で pass / fail / skip のどれかを必ず 1 回呼ぶ）
+#   2. 末尾の CHECKS 配列に関数名を足す
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${ROOT}" || exit 2
+
+QUICK=0
+VERBOSE=0
+for arg in "$@"; do
+    case "${arg}" in
+        --quick) QUICK=1 ;;
+        --verbose) VERBOSE=1 ;;
+        -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+        *) echo "不明な引数: ${arg}（使えるのは --quick と --verbose）" >&2; exit 2 ;;
+    esac
+done
+
+APP="${ROOT}/build/AutoNote.app"
+CERT_NAME="AutoNote Dev"
+BUNDLE_ID="com.yutaokoshi.autonote"
+
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/autonote-e2e.XXXXXX")"
+APP_PID=""
+cleanup() {
+    if [[ -n "${APP_PID}" ]]; then kill "${APP_PID}" 2>/dev/null; wait "${APP_PID}" 2>/dev/null; fi
+    rm -rf "${WORK}"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+N_PASS=0; N_FAIL=0; N_SKIP=0
+CURRENT=""   # 実行中の項目名（pass/fail/skip が表示に使う）
+LAST_LOG=""  # 直近の run の出力ファイル（fail のとき末尾を見せる）
+
+pass() { N_PASS=$((N_PASS + 1)); printf 'PASS  %s%s\n' "${CURRENT}" "${1:+ — $1}"; }
+skip() { N_SKIP=$((N_SKIP + 1)); printf 'SKIP  %s — %s\n' "${CURRENT}" "$1"; }
+fail() {
+    N_FAIL=$((N_FAIL + 1)); printf 'FAIL  %s — %s\n' "${CURRENT}" "$1"
+    if [[ "${VERBOSE}" -eq 0 && -n "${LAST_LOG}" && -s "${LAST_LOG}" ]]; then
+        tail -n 20 "${LAST_LOG}" | sed 's/^/      | /'
+    fi
+}
+
+# run <コマンド...>: 出力を一時ファイル（LAST_LOG）に取り、終了コードを返す。--verbose なら出力も流す。
+new_log() { LAST_LOG="${WORK}/log.$((N_PASS + N_FAIL + N_SKIP)).${RANDOM}"; : >"${LAST_LOG}"; }
+exec_logged() {
+    if [[ "${VERBOSE}" -eq 1 ]]; then
+        "$@" 2>&1 | tee "${LAST_LOG}" | sed 's/^/      | /'
+        return "${PIPESTATUS[0]}"
+    fi
+    "$@" >"${LAST_LOG}" 2>&1
+}
+run() { new_log; exec_logged "$@"; }
+
+# run_timeout <秒> <コマンド...>: run と同じだが、時間切れなら kill して 124 を返す（coreutils の timeout に頼らない）。
+run_timeout() {
+    local secs="$1"; shift
+    new_log   # バックグラウンドのサブシェルでは LAST_LOG を親に返せないので、ここで決める
+    exec_logged "$@" &
+    local pid=$! waited=0
+    while kill -0 "${pid}" 2>/dev/null; do
+        if (( waited >= secs * 10 )); then
+            pkill -P "${pid}" 2>/dev/null; kill "${pid}" 2>/dev/null; wait "${pid}" 2>/dev/null
+            echo "（${secs} 秒で打ち切り）" >>"${LAST_LOG}"
+            return 124
+        fi
+        sleep 0.1; waited=$((waited + 1))
+    done
+    wait "${pid}"
+}
+
+have_cert() { security find-identity -v -p codesigning 2>/dev/null | grep -q "\"${CERT_NAME}\""; }
+have_gui() { [[ -z "${CI:-}" ]] && pgrep -x WindowServer >/dev/null 2>&1; }
+
+# ---------------------------------------------------------------- 確認項目
+
+check_swift_test() {
+    CURRENT="1. swift test"
+    [[ "${QUICK}" -eq 1 ]] && { skip "--quick"; return; }
+    if run swift test; then pass; else fail "swift test が失敗"; fi
+}
+
+check_build_app() {
+    CURRENT="2. scripts/build-app.sh で build/AutoNote.app を作る"
+    [[ "${QUICK}" -eq 1 ]] && { skip "--quick"; return; }
+    # 証明書が無ければ build-app.sh が自動で作ってしまうので、ここでは走らせない
+    have_cert || { skip "署名証明書「${CERT_NAME}」が無い（scripts/make-dev-cert.sh で作る）"; return; }
+    if ! run scripts/build-app.sh; then fail "build-app.sh が 0 以外で終了"; return; fi
+    if [[ -x "${APP}/Contents/MacOS/AutoNoteApp" && -x "${APP}/Contents/MacOS/autonote" ]]; then
+        pass
+    else
+        LAST_LOG=""; fail "build/AutoNote.app/Contents/MacOS に実行ファイルが無い"
+    fi
+}
+
+check_codesign_identity() {
+    CURRENT="3. 署名の Identifier と Authority"
+    have_cert || { skip "署名証明書「${CERT_NAME}」が無い"; return; }
+    [[ -d "${APP}" ]] || { skip "build/AutoNote.app が無い（scripts/build-app.sh を先に）"; return; }
+    if ! run codesign -dv --verbose=2 "${APP}"; then fail "codesign -dv が失敗"; return; fi
+    local missing=()
+    grep -qx "Identifier=${BUNDLE_ID}" "${LAST_LOG}" || missing+=("Identifier=${BUNDLE_ID}")
+    grep -qx "Authority=${CERT_NAME}" "${LAST_LOG}" || missing+=("Authority=${CERT_NAME}")
+    if [[ ${#missing[@]} -eq 0 ]]; then pass; else fail "見つからない: ${missing[*]}"; fi
+}
+
+check_codesign_verify() {
+    CURRENT="4. codesign --verify --strict"
+    [[ -d "${APP}" ]] || { skip "build/AutoNote.app が無い"; return; }
+    if run codesign --verify --strict "${APP}"; then pass; else fail "署名の検証に失敗"; fi
+}
+
+check_info_plist() {
+    CURRENT="5. Info.plist のキー"
+    local plist="${APP}/Contents/Info.plist"
+    [[ -f "${plist}" ]] || { skip "build/AutoNote.app が無い"; return; }
+    local pb=/usr/libexec/PlistBuddy problems=() v
+    for key in NSMicrophoneUsageDescription NSAudioCaptureUsageDescription; do
+        v="$("${pb}" -c "Print :${key}" "${plist}" 2>/dev/null)" || { problems+=("${key} が無い"); continue; }
+        [[ -n "${v}" ]] || problems+=("${key} が空")
+    done
+    v="$("${pb}" -c "Print :CFBundleIdentifier" "${plist}" 2>/dev/null)"
+    [[ "${v}" == "${BUNDLE_ID}" ]] || problems+=("CFBundleIdentifier=${v:-なし}")
+    v="$("${pb}" -c "Print :LSUIElement" "${plist}" 2>/dev/null)"
+    [[ "${v}" == "true" ]] || problems+=("LSUIElement=${v:-なし}")
+    LAST_LOG=""
+    if [[ ${#problems[@]} -eq 0 ]]; then pass; else fail "${problems[*]}"; fi
+}
+
+check_cli() {
+    CURRENT="6. autonote --version と使い方"
+    local cli="${APP}/Contents/MacOS/autonote"
+    [[ -x "${cli}" ]] || { skip "build/AutoNote.app が無い"; return; }
+    local expected
+    expected="${E2E_EXPECT_VERSION:-$(sed -n 's/.*static let current = "\([^"]*\)".*/\1/p' Sources/AutoNoteCore/AutoNoteVersion.swift)}"
+    [[ -n "${expected}" ]] || { LAST_LOG=""; fail "AutoNoteVersion.swift から版を読めない"; return; }
+    local out code
+    out="$("${cli}" --version 2>"${WORK}/cli.err")"; code=$?
+    if [[ ${code} -ne 0 || "${out}" != "${expected}" ]]; then
+        LAST_LOG="${WORK}/cli.err"; fail "--version: exit ${code}, 出力「${out}」, 期待「${expected}」"; return
+    fi
+    out="$("${cli}" 2>"${WORK}/cli.err" >/dev/null)"; code=$?
+    if [[ ${code} -ne 1 ]] || ! grep -q "usage:" "${WORK}/cli.err"; then
+        LAST_LOG="${WORK}/cli.err"; fail "引数なし: exit ${code}（期待 1）、stderr に usage: があるか要確認"; return
+    fi
+    pass "版 ${expected}"
+}
+
+check_app_launch() {
+    CURRENT="7. AutoNoteApp を起動してメニューバー項目を確認"
+    local bin="${APP}/Contents/MacOS/AutoNoteApp"
+    [[ -x "${bin}" ]] || { skip "build/AutoNote.app が無い"; return; }
+    have_gui || { skip "GUI が無い環境（CI か WindowServer なし）"; return; }
+    "${bin}" >"${WORK}/app.log" 2>&1 &
+    APP_PID=$!
+    local i alive=0
+    for i in $(seq 1 50); do
+        sleep 0.1
+        kill -0 "${APP_PID}" 2>/dev/null || break
+        if (( i >= 20 )) && pgrep -x AutoNoteApp | grep -qx "${APP_PID}"; then alive=1; break; fi
+    done
+    if [[ "${alive}" -ne 1 ]]; then
+        LAST_LOG="${WORK}/app.log"; fail "起動後 5 秒以内にプロセスが消えた"
+        APP_PID=""; return
+    fi
+    # メニューバー項目の名前を System Events で読む（アクセシビリティ権限が要る）
+    local names="" ok=0 n
+    for n in 1 2 3 4 5; do
+        if run_timeout 10 osascript -e 'tell application "System Events" to tell process "AutoNoteApp" to get name of every menu bar item of menu bar 2'; then
+            names="$(cat "${LAST_LOG}")"; ok=1
+            [[ "${names}" == *waveform* ]] && break
+        else
+            ok=0; break
+        fi
+        sleep 1   # 起動直後はメニューバー項目がまだ無いことがある
+    done
+    kill "${APP_PID}" 2>/dev/null; wait "${APP_PID}" 2>/dev/null; APP_PID=""
+    if [[ "${ok}" -ne 1 ]]; then
+        pass "生存確認のみ"
+        CURRENT="7b. メニューバー項目 waveform"
+        skip "osascript が失敗（ターミナルにアクセシビリティ権限が無い可能性）: $(tail -n 1 "${LAST_LOG}")"
+        return
+    fi
+    pass "生存確認"
+    CURRENT="7b. メニューバー項目 waveform"
+    if [[ "${names}" == *waveform* ]]; then pass "「${names}」"; else LAST_LOG=""; fail "メニューバー項目「${names}」に waveform が無い"; fi
+}
+
+check_spikes_build() {
+    CURRENT="8. Spikes を swift build"
+    [[ -d Spikes ]] || { skip "Spikes/ が無い"; return; }
+    [[ "${QUICK}" -eq 1 ]] && { skip "--quick"; return; }
+    if run swift build --package-path Spikes; then pass; else fail "Spikes のビルドが失敗"; fi
+}
+
+check_cer() {
+    CURRENT="9. scripts/cer.py の計算"
+    [[ -f scripts/cer.py ]] || { skip "scripts/cer.py が無い"; return; }
+    command -v python3 >/dev/null || { skip "python3 が無い"; return; }
+    printf 'あいうえお\n' >"${WORK}/ref.txt"
+    printf 'あいうえお\n' >"${WORK}/hyp-same.txt"
+    printf 'あいうえ\n' >"${WORK}/hyp-diff.txt"
+    # 引数順は <hyp> <ref>。出力は「<CER> (<距離>/<参照文字数>)」
+    if ! run python3 -I scripts/cer.py "${WORK}/hyp-same.txt" "${WORK}/ref.txt"; then fail "同一テキストで異常終了"; return; fi
+    local same diff
+    same="$(cut -d' ' -f1 "${LAST_LOG}")"
+    if ! run python3 -I scripts/cer.py "${WORK}/hyp-diff.txt" "${WORK}/ref.txt"; then fail "差のあるテキストで異常終了"; return; fi
+    diff="$(cut -d' ' -f1 "${LAST_LOG}")"
+    if [[ "${same}" == "0.0000" && "${diff}" == "0.2000" ]]; then
+        pass "同一 ${same} / 1 字欠落 ${diff}"
+    else
+        fail "同一 ${same}（期待 0.0000）/ 1 字欠落 ${diff}（期待 0.2000）"
+    fi
+}
+
+check_whisper() {
+    CURRENT="10. whisper-cli で先頭 5 秒を文字起こし"
+    local cli=tools/whisper.cpp/build/bin/whisper-cli model=tools/whisper.cpp/models/ggml-base.bin wav=tools/samples/ja-5min.wav
+    [[ -x "${cli}" ]] || { skip "${cli} が無い（scripts/setup-whisper.sh）"; return; }
+    [[ -f "${model}" ]] || { skip "${model} が無い"; return; }
+    [[ -f "${wav}" ]] || { skip "${wav} が無い（scripts/make-sample-audio.sh）"; return; }
+    local out="${WORK}/whisper.txt"
+    # stdout（文字起こし）だけを out に、ログは LAST_LOG に分ける
+    if ! run_timeout 30 sh -c '"$1" -m "$2" -l ja -t 4 -d 5000 -nt -np -f "$3" >"$4"' _ "${cli}" "${model}" "${wav}" "${out}"; then
+        fail "whisper-cli が失敗または時間切れ"; return
+    fi
+    local text
+    text="$(tr -d '[:space:]' <"${out}")"
+    if [[ -n "${text}" ]]; then pass "「$(head -c 60 <<<"${text}")」"; else fail "文字起こしが空"; fi
+}
+
+check_results_doc() {
+    CURRENT="11. スパイク結果表の 12 見出し"
+    local doc=docs/superpowers/research/2026-10-24-spike-results.md
+    LAST_LOG=""
+    [[ -f "${doc}" ]] || { fail "${doc} が無い"; return; }
+    local missing=() i
+    for i in $(seq 1 12); do
+        grep -q "^## 項目 ${i}:" "${doc}" || missing+=("${i}")
+    done
+    if [[ ${#missing[@]} -eq 0 ]]; then pass; else fail "見出しが無い項目: ${missing[*]}"; fi
+}
+
+# ---------------------------------------------------------------- 実行
+
+CHECKS=(
+    check_swift_test
+    check_build_app
+    check_codesign_identity
+    check_codesign_verify
+    check_info_plist
+    check_cli
+    check_app_launch
+    check_spikes_build
+    check_cer
+    check_whisper
+    check_results_doc
+)
+
+START=${SECONDS}
+for c in "${CHECKS[@]}"; do
+    LAST_LOG=""
+    "${c}"
+done
+
+echo "----"
+echo "${N_PASS} passed, ${N_FAIL} failed, ${N_SKIP} skipped（$((SECONDS - START)) 秒）"
+[[ "${N_FAIL}" -eq 0 ]]

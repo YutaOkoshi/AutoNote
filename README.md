@@ -7,3 +7,4 @@ macOS（26.0 以降）のメニューバーで会議を録音し、文字起こ�
 
 テスト: `swift test`
 アプリ（.app）のビルド: `scripts/build-app.sh`
+動作確認（E2E）: `scripts/e2e-check.sh`（速い確認だけなら `--quick`）
