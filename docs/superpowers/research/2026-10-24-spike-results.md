@@ -4,11 +4,29 @@
 
 ## 要件書に反映した変更
 
-Task 9 で記入。
+項目の番号は本書の節。Apple Silicon 側（項目 1 の一部、7、12 の一部）と項目 5・10 は未実施で、該当する既定は要件書に「仮」と書いてある。
+
+- §3.2: XCFramework は x86_64 を含み、`bNNNN` プレリリースの zip を使う（項目 8）
+- §3.3: Intel の実時間比を実測値に差し替え、Metal は Intel では使わないと確定（項目 1）
+- §3.4: 自己署名でマイク許可が再ビルド後も保たれることを確認済みに。システム音声の許可の持続は未確認。process tap は許可を拒否してもエラーにならず、拒否時の無音も再現できなかったので、許可なしは API エラーから検知できない前提で設計し、計画 02 の最初のタスクで自己署名 `.app` 単体・再起動後に再確認（項目 3・9）
+- §4.1: Intel の後処理時間の見込みを large-v3-turbo の実時間比 0.68 から計算した値に（項目 1）
+- §5.6: ボイスプロセッシングは「設定で選べる補助・既定オフ」のまま、スパイク未実施のため仮と注記（項目 5）
+- §5.7: システム音の無音検知を「最後のコールバックからの経過時間」に変え、無音区間は `AudioTimeStamp` から時間で埋める（項目 3）
+- §6.2: Intel の確定版を medium → large-v3-turbo、Intel で whisper をリアルタイムに使う場合は small、DictationTranscriber は目安表示用と明記、SFSpeechRecognizer を候補から外す、SpeechTranscriber の Intel 備考を `supportedLocales` が空に。Apple Silicon の行は仮（Task 8 未実施）（項目 1・2・12）
+- §6.3: DictationTranscriber は音声認識の許可なしで動く（AutoNote.app 単体では計画 02 で再確認）、確定のまとまり方、リアルタイム出力の崩れ方（項目 2）
+- §7.1: contextual strings の指定方法（`AnalysisContext.contextualStrings[.general]` ＋ `SpeechAnalyzer.setContext(_:)`）と、造語には効かず既知語には効いたこと（項目 2・12）
+- §8.1: 実際に動いたコマンドラインに差し替え（`--setting-sources project` に変更）、空の MCP 設定は必須、成功判定は `structured_output`・`is_error`・`subtype`、分割閾値は入力 200k トークン超（未検証の仮）、作業ディレクトリはリポジトリ外の空フォルダ（項目 6・11）
+- §8.2: `scripts/minutes-schema.json` が確定版（項目 6）
+- §11.1: 3.5mm は `BuiltInHeadphoneInputDevice` の追加・削除で検知、入力と出力は別デバイスで出力が先、`AudioDeviceID` は保存しない（項目 4）
+- §11.2: Bluetooth は入力側 `DeviceUID` の完全一致を既定、`ModelUID` は `0 0` で使えない、USB は未測定（項目 4）
+- §11.5: 組み直しの方式は仮と注記（項目 10）
+- §19: 各項目に状態（済／後回し／未）を付けた
+- §20: 「スパイクの結果による変更」として上の既定値の変更を追記
+- 付録 A: 項目 4 の機材表を追加
 
 ## 項目 1: Intel 機で `whisper-bench` を回し、base / small / medium / large-v3-turbo（量子化版を含む）の実時間比を測る
 
-- 結論: **Intel のリアルタイム候補は large-v3-turbo（無負荷 RTF 0.683）、Intel の確定版は large-v3-turbo（CER 最小 0.2153、負荷ありでも RTF 0.851）**。ただし負荷あり（会議アプリ動作中の近似）では large-v3-turbo 系はどちらも RTF 0.8 を超え、RTF < 0.8 の最大モデルは small（0.446）に下がる。medium は large-v3-turbo より遅く（RTF 1.1〜1.4）精度も下なので選ぶ理由が無い。量子化（q5_0 / q5_1）は速さ・精度とも元のモデルとほぼ同じ（差はぶれの範囲）。Metal ビルドは Intel（Iris Plus Graphics）では出力が壊れるため不採用（Task 5a で確認。base で出力 26 バイト、CER 0.99）
+- 結論: **Intel のリアルタイム候補は large-v3-turbo（無負荷 RTF 0.683）、Intel の確定版は large-v3-turbo（CER 最小 0.2153、負荷ありでも RTF 0.851）**。ただし負荷あり（会議アプリ動作中の近似）では large-v3-turbo 系はどちらも RTF 0.8 を超え、RTF < 0.8 の最大モデルは small（0.446）に下がる。medium は large-v3-turbo より遅く（RTF 1.1〜1.4）精度も下なので選ぶ理由が無い。量子化（q5_0 / q5_1）は whisper-cli の経過秒では元のモデルとの差がぶれの範囲で、CER の差も 0.003 以内。ただし bench の encode 時間には明確な差があり、無負荷では量子化版が短い（small 3.0 → 2.0 秒、medium 10.7 → 6.8 秒、large-v3-turbo 10.9 → 9.6 秒）一方、負荷ありでは small-q5_1 が逆に長い（3.0 → 4.0 秒）。Metal ビルドは Intel（Iris Plus Graphics）では出力が壊れるため不採用（Task 5a で確認。base で出力 26 バイト、CER 0.99）
 - 測定値（whisper.cpp v1.9.5、CPU ビルド `build/`＝Accelerate/BLAS、AVX2・AVX512 有効、`-t 4`、whisper-cli は既定の 5 beams + best of 5、音声 295.4 秒。Intel Core i7-1068NG7 4 コア 8 スレッド、32 GB。2026-10-25 計測）:
 
   無負荷（`BUILDS=build scripts/bench-whisper.sh`）
