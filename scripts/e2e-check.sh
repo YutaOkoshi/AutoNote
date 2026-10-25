@@ -287,6 +287,34 @@ check_claude_probe_files() {
     LAST_LOG=""; pass "（claude の実呼び出しは費用がかかるので E2E では行わない）"
 }
 
+check_device_probe() {
+    CURRENT="14. Spikes の DeviceProbe が起動時の一覧 JSON を出し SIGINT で終わる"
+    local bin=Spikes/.build/debug/DeviceProbe
+    [[ -x "${bin}" ]] || { skip "${bin} が無い（swift build --package-path Spikes を先に）"; return; }
+    new_log
+    "${bin}" >"${LAST_LOG}" 2>&1 &
+    local pid=$! i
+    # 起動時の present 行（入力のある機器。内蔵マイクがあれば必ず 1 行）を最大 5 秒待つ
+    for i in $(seq 1 50); do
+        grep -q '"event":"present"' "${LAST_LOG}" && break
+        kill -0 "${pid}" 2>/dev/null || break
+        sleep 0.1
+    done
+    local present
+    present=$(grep -c '"event":"present"' "${LAST_LOG}" || true)
+    kill -INT "${pid}" 2>/dev/null
+    local code waited=0
+    while kill -0 "${pid}" 2>/dev/null && (( waited < 30 )); do sleep 0.1; waited=$((waited + 1)); done
+    if kill -0 "${pid}" 2>/dev/null; then kill -9 "${pid}" 2>/dev/null; wait "${pid}" 2>/dev/null; fail "SIGINT から 3 秒で終わらない"; return; fi
+    wait "${pid}"; code=$?
+    if [[ "${present}" -lt 1 ]]; then fail "present の行が無い"; return; fi
+    if ! python3 -I -c 'import json,sys; [json.loads(l) for l in open(sys.argv[1]) if l.strip()]' "${LAST_LOG}" 2>/dev/null; then
+        fail "JSON として読めない行がある"; return
+    fi
+    if [[ ${code} -ne 0 ]]; then fail "SIGINT 後の終了コードが ${code}（期待 0）"; return; fi
+    pass "present ${present} 行、exit 0"
+}
+
 # ---------------------------------------------------------------- 実行
 
 CHECKS=(
@@ -303,6 +331,7 @@ CHECKS=(
     check_results_doc
     check_fake_transcript
     check_claude_probe_files
+    check_device_probe
 )
 
 START=${SECONDS}
