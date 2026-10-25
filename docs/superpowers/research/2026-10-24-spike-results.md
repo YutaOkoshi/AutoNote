@@ -26,7 +26,7 @@
 
 ## 項目 1: Intel 機で `whisper-bench` を回し、base / small / medium / large-v3-turbo（量子化版を含む）の実時間比を測る
 
-- 結論: **Intel のリアルタイム候補は large-v3-turbo（無負荷 RTF 0.683）、Intel の確定版は large-v3-turbo（CER 最小 0.2153、負荷ありでも RTF 0.851）**。ただし負荷あり（会議アプリ動作中の近似）では large-v3-turbo 系はどちらも RTF 0.8 を超え、RTF < 0.8 の最大モデルは small（0.446）に下がる。medium は large-v3-turbo より遅く（RTF 1.1〜1.4）精度も下なので選ぶ理由が無い。量子化（q5_0 / q5_1）は whisper-cli の経過秒では元のモデルとの差がぶれの範囲で、CER の差も 0.003 以内。ただし bench の encode 時間には明確な差があり、無負荷では量子化版が短い（small 3.0 → 2.0 秒、medium 10.7 → 6.8 秒、large-v3-turbo 10.9 → 9.6 秒）一方、負荷ありでは small-q5_1 が逆に長い（3.0 → 4.0 秒）。Metal ビルドは Intel（Iris Plus Graphics）では出力が壊れるため不採用（Task 5a で確認。base で出力 26 バイト、CER 0.99）
+- 結論: **Intel のリアルタイム候補は無負荷なら large-v3-turbo（RTF 0.683）、負荷ありでは small（RTF 0.446）。Intel の確定版は large-v3-turbo（CER 最小 0.2153、負荷ありでも RTF 0.851）**。ただし負荷あり（会議アプリ動作中の近似）では large-v3-turbo 系はどちらも RTF 0.8 を超え、RTF < 0.8 の最大モデルは small（0.446）に下がる。medium は large-v3-turbo より遅く（RTF 1.1〜1.4）精度も下なので選ぶ理由が無い。量子化（q5_0 / q5_1）は whisper-cli の経過秒では元のモデルとの差がぶれの範囲で、CER の差も 0.003 以内。ただし bench の encode 時間には明確な差があり、無負荷では量子化版が短い（small 3.0 → 2.0 秒、medium 10.7 → 6.8 秒、large-v3-turbo 10.9 → 9.6 秒）一方、負荷ありでは small-q5_1 が逆に長い（3.0 → 4.0 秒）。Metal ビルドは Intel（Iris Plus Graphics）では出力が壊れるため不採用（Task 5a で確認。base で出力 26 バイト、CER 0.99）
 - 測定値（whisper.cpp v1.9.5、CPU ビルド `build/`＝Accelerate/BLAS、AVX2・AVX512 有効、`-t 4`、whisper-cli は既定の 5 beams + best of 5、音声 295.4 秒。Intel Core i7-1068NG7 4 コア 8 スレッド、32 GB。2026-10-25 計測）:
 
   無負荷（`BUILDS=build scripts/bench-whisper.sh`）
@@ -88,6 +88,7 @@
   - §6.2 の Intel のリアルタイム既定「DictationTranscriber」はそのまま（部分結果の遅れ約 0.5 秒、確定まで約 5 秒は目安表示に十分）。確定版は whisper large-v3-turbo（項目 1）が前提で、リアルタイムの精度（固有名詞・英単語・数字・句読点なし）は確定版で補う
   - 用語辞書（contextual strings）は造語（AutoNote）には効かなかったので、造語の表記揺れは議事録生成側（Claude への用語指定）で直す前提にする
   - **権限: DictationTranscriber は音声認識の TCC 許可（`SFSpeechRecognizer.requestAuthorization`）なしで動く。SFSpeechRecognizer は起動元アプリの Info.plist に `NSSpeechRecognitionUsageDescription` が無いと TCC が SIGABRT で落とす**（ターミナル等から起動したときは、TCC が許可を確かめる「責任プロセス」である起動元アプリの Info.plist が見られる。実行ファイルに埋め込んでも効かない）。SF を予備に残すなら AutoNote.app の Info.plist にこのキーを足す
+  - 根拠: DictationTranscriber は、音声認識の許可が未決定（`SFSpeechRecognizer.authorizationStatus` が 0）の状態で認識結果を返した。責任プロセスは起動元の Orca.app。許可ダイアログは SF を実行したときに初めて出た（task-6 レポート）
   - §6.2 の SFSpeechRecognizer の「1 分制限」は「60 秒ごとに結果が区切られ、isFinal は最後の区間だけ」と書き換え、使うなら区間の連結が要ると明記する。DictationTranscriber と同じモデルなので、予備としての価値は「macOS 26 未満でも動く」ことだけ（最低 OS は 26.0 なので実質なし）
 
 ## 項目 3: Intel 機で process tap から実際に音声データが届くこと（作成・破棄は確認済み）
@@ -143,6 +144,7 @@
   - Bluetooth の切断→再接続の間隔: 6.4 s、23.5 s（利用者が待った時間を含む。電源投入から `added` までの遅れそのものは記録していない）。接続していた時間: 13.1 s、8.5 s、16.8 s。
   - 3.5mm のイヤホンにマイクがあるかは未確認。マイクがない場合も `外部マイク` が現れるかは見ていない。
 - 手順: `cd Spikes && swift build && .build/debug/DeviceProbe | tee /tmp/devices.jsonl` を動かしたまま、Shokz の接続→切断を 3 回、3.5mm イヤホンの抜き差しを 2 回 → Ctrl-C。解析はイベント列を時刻順に並べて機材ごとに集計した（全行はタスク 4 のレポート）。
+  - 再開用（Task 8）: Apple Silicon 機で同じく `cd Spikes && swift build && .build/debug/DeviceProbe | tee /tmp/devices.jsonl` を動かし、3.5mm イヤホンの抜き差し（`BuiltInHeadphoneInputDevice` の `added` / `removed` が出るか、`dataSourceChanged` が出るか）と、Shokz を接続して `DeviceUID` が Intel 機と同じ `A8-F5-E1-CC-28-4C:input` になるか（別の Mac とのペアリングで UID が変わるか）を記録する
 - 要件書への影響:
   - §11.2 の 3.5mm の行は「内蔵オーディオの入力ソースが外部マイクになったこと」ではなく、「`BuiltInHeadphoneInputDevice`（入力）の `added`」で検知する（少なくとも Intel 機）。UID は固定なので個体は区別できない（「何かが刺さった」まで、は変わらない）。Apple Silicon 機は未確認。
   - §11.2 の Bluetooth は `DeviceUID` に MAC アドレスが入り、再接続でも同じなので個体まで判定できる（「要確認」を外せる。ただし別マシンとのペアリングで変わるかは未確認）。`ModelUID` が `0 0` なので、「型番一致でも開始する」の型番には使えない。Bluetooth で UID が一致しないときの代わりの判定は名前で行う。

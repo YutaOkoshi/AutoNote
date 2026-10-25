@@ -93,7 +93,7 @@ Rust + TypeScript（Tauri）案も検討したが、macOS 26 の音声認識 API
 - Swift 6 / SwiftUI。メニューバー常駐（`MenuBarExtra`）＋通常ウィンドウ
 - システム音: Core Audio process tap（`CATapDescription` → `AudioHardwareCreateProcessTap` → aggregate device）。手元の Intel 機で tap の作成・破棄が成功することを確認済み
 - マイク: `AVAudioEngine`。スピーカー会議時の回り込み対策としてボイスプロセッシング（エコー除去）を使えるようにする
-- 文字起こし: エンジン差し替え層の下に Apple Speech（SpeechTranscriber / DictationTranscriber / SFSpeechRecognizer）と whisper.cpp を置く（第 6 章）
+- 文字起こし: エンジン差し替え層の下に Apple Speech（SpeechTranscriber / DictationTranscriber）と whisper.cpp を置く。SFSpeechRecognizer は予備としての価値がないので候補から外す（第 6.2 節）
 - 要約: `claude -p` の非対話呼び出し（第 8 章）
 - ログイン時起動: `SMAppService.mainApp`
 - 通知: `UNUserNotificationCenter` ＋ アクションボタン
@@ -103,9 +103,9 @@ Rust + TypeScript（Tauri）案も検討したが、macOS 26 の音声認識 API
 ### 3.3 Intel 機での性能上の制約（調査結果）
 
 - whisper.cpp は CPU 実行（AVX2、Accelerate）。Metal ビルドは Intel 内蔵 GPU（Iris Plus）で出力が壊れるので使わない（スパイク項目 1）。Core ML と WhisperKit は Apple Silicon 向け
-- 手元の Intel 機の実時間比（whisper-cli の既定 5 beams のバッチ処理、`-t 4`）は small 0.33、medium 1.1〜1.4、large-v3-turbo 0.68。会議アプリが動いている状態の近似（CPU 負荷 2 本）では small 0.45、large-v3-turbo 0.85 に下がる。medium はデコーダ層が多くビーム探索が重いため large-v3-turbo より遅い（スパイク項目 1）
+- 手元の Intel 機の実時間比（whisper-cli の既定 5 beams のバッチ処理、`-t 4`）は、無負荷で small 0.33、large-v3-turbo 0.68。会議アプリが動いている状態の近似（CPU 負荷 2 本）では small 0.45、large-v3-turbo 0.85 に上がる（遅くなる）。medium は無負荷・負荷ありの両方で 1.1〜1.4。medium はデコーダ層が多くビーム探索が重いため large-v3-turbo より遅い（スパイク項目 1）
 - small の日本語精度は粗い（Whisper 論文の日本語 CER: small 41.5%、medium 33.2%、large-v3 14.9%。難しいデータでの値）
-- macOS 26 の SpeechTranscriber は手元の Intel 機で `supportedLocales` が空で使えない。DictationTranscriber と SFSpeechRecognizer はオンデバイスで日本語・英語が動くことを確認済み
+- macOS 26 の SpeechTranscriber は手元の Intel 機で `supportedLocales` が空で使えない。DictationTranscriber はオンデバイスで日本語・英語が動くことを確認済み（SFSpeechRecognizer も動くが、予備としての価値がないので候補から外す。第 6.2 節）
 
 この制約から、文字起こしは「リアルタイム用（速さ優先）」と「確定版（精度優先、会議後）」の二段構えにし、機種ごとにエンジンを選ぶ。
 
@@ -191,7 +191,7 @@ Claude Code の設定（`CLAUDE.md` など）に「会議の記録は `<Vault>/M
 
 ### 5.7 無音検知
 
-- トラックごとに判定する ［私の判断。システム音声の許可だけが欠けている典型例を見逃さないため］
+- トラックごとに判定する ［私の判断。片方のトラックだけ音が届かない状態（システム音声の許可が欠けている場合を含む）に気付けるようにするため。ただし許可なしを確実に検知できるとは限らない（第 3.4 節、スパイク項目 3）］
   - マイク: 録音開始から 15 秒 ［私の判断］ の間、入力レベルがほぼゼロなら「マイクが無音です。機材と許可を確認してください」
   - システム音: 入力レベルではなく、最後に tap の IOProc（音声コールバック）が呼ばれてからの経過時間で判定する。macOS は音を出しているプロセスが無い間 IOProc を呼ばない（ゼロのサンプルが届くのではない。スパイク項目 3）。最後のコールバック（一度も無ければ録音開始）から 60 秒 ［私の判断。会議開始直後は相手が話していないことがあるため長めにする］ 経ったら「システム音声が届いていません。システム音声の録音許可と、会議アプリの音が出ているかを確認してください」と、設定アプリの該当画面への導線。相手が黙っている・会議アプリが音を出していないだけでもコールバックは止まるので、許可なしと断定する文言にしない
 - 通知は一度だけ出し、録音は止めない。manifest に「無音警告あり」を記録し、会議一覧にも印を出す
@@ -249,10 +249,10 @@ Claude Code の設定（`CLAUDE.md` など）に「会議の記録は `<Vault>/M
 | 機種 | リアルタイム | 確定版 |
 |---|---|---|
 | Apple Silicon（仮。Task 8 未実施） | SpeechTranscriber | whisper.cpp large-v3-turbo |
-| Intel | DictationTranscriber（会議中の目安表示用。CER 0.35 なので議事録の元には使わない） | whisper.cpp large-v3-turbo（実時間比 0.68、負荷ありで 0.85。CER 0.215） |
+| Intel | DictationTranscriber（会議中の目安表示用。CER 0.35 なので、通常は議事録の元に使わない。第 6.4 節の確定版失敗時の代替経路を除く） | whisper.cpp large-v3-turbo（実時間比 0.68、負荷ありで 0.85。CER 0.215） |
 
 - Intel の確定版は large-v3-turbo。medium は large-v3-turbo より遅く（実時間比 1.1〜1.4）CER も高い（0.232）ので選ばない。量子化版 large-v3-turbo-q5_0 は経過時間の差がぶれの範囲で CER がわずかに高い（0.218）。ダウンロード量とメモリを抑えたいときの代替にできる（スパイク項目 1）
-- Intel で whisper.cpp をリアルタイムに選ぶ場合の既定モデルは small（会議アプリ相当の負荷で実時間比 0.45。large-v3-turbo は負荷ありで 0.85 になり余裕が無い）。この実時間比は 5 beams のバッチ処理の値で、ストリーミング（greedy・短いチャンク）の速さは別に測る
+- Intel で whisper.cpp をリアルタイムに選ぶ場合の既定モデルは small（会議アプリ相当の負荷で実時間比 0.45。large-v3-turbo は負荷ありで 0.85 になり余裕が無い）。0.45 は 1 本だけ流した値で、マイクとシステム音の 2 本を同時に回す（第 6.3 節）ときの負荷は未測定。この実時間比は 5 beams のバッチ処理の値で、ストリーミング（greedy・短いチャンク）の速さは別に測る
 - CER は `say` の合成音声 5 分での参考値で、会議の実音声ではこれより悪くなる
 
 設定画面で役割ごとに実装とモデルを上書きできる。利用可能性は実行時に判定し（SpeechTranscriber は `isAvailable` と `supportedLocales`、DictationTranscriber は `supportedLocales`）、使えない実装は選べないようにする。
@@ -262,7 +262,7 @@ Claude Code の設定（`CLAUDE.md` など）に「会議の記録は `<Vault>/M
 - マイクとシステム音の二本を別々のセッションで同時に認識する
 - 結果は発話単位で「時刻・話者（自分 / 相手）・本文」として積み上げ、確定前の部分は薄い色で表示する
 - ウィンドウは自動で最下部に追従するが、利用者がスクロールして上を読んでいる間は追従を止め、「最新へ」ボタンを出す
-- DictationTranscriber は音声認識の TCC 許可（`SFSpeechRecognizer.requestAuthorization`）なしで動く（スパイク項目 2。起動元が未許可の状態で確認。AutoNote.app 単体では計画 02 で再確認する）。SFSpeechRecognizer を候補から外したので、`NSSpeechRecognitionUsageDescription` は再確認で要ると分かった場合だけ足す
+- DictationTranscriber は音声認識の TCC 許可（`SFSpeechRecognizer.requestAuthorization`）なしで動く（スパイク項目 2。起動元 Orca.app の音声認識許可が未決定の状態で確認。AutoNote.app 単体では計画 02 で再確認する）。SFSpeechRecognizer を候補から外したので、`NSSpeechRecognitionUsageDescription` は再確認で要ると分かった場合だけ足す
 - DictationTranscriber（`.progressiveLongDictation`）は約 70 秒の連続発話を確定 1 件にまとめ、それまで部分結果が伸び続けた（スパイク項目 2）。発話単位の区切りを沈黙での確定、`finalize(through:)`、`.frequentFinalization` のどれで作るかは計画 02 で決める
 - リアルタイムの出力は固有名詞・英単語の読み・数字が崩れ、句読点が付かない（スパイク項目 2）。目安表示と割り切り、議事録には確定版を使う
 
@@ -327,7 +327,7 @@ Claude Code の設定（`CLAUDE.md` など）に「会議の記録は `<Vault>/M
 
 - 録音停止と確定版文字起こしの完了後、`claude -p` を非対話で呼ぶ
 - 入力は標準入力に「指示文 ＋ 辞書の用語一覧 ＋ ブックマーク一覧 ＋ 時刻・話者付きの文字起こし」を流す。stdin の上限は 10MB で、2 時間の会議でも収まる
-- `--output-format json --json-schema <スキーマ>` で構造化出力を受け取る。1 ターンで終える。コマンドラインは次のとおり（スパイク項目 6・11 で動作確認。項目 6 は `--setting-sources user` で測り、`project` は項目 11 で同じく成功した）:
+- `--output-format json --json-schema <スキーマ>` で構造化出力を受け取る。1 ターンで終える。コマンドラインは次のとおり（スパイク項目 6・11 で動作確認。60 分・120 分の文字起こしは `--setting-sources user` でだけ測った。`project` は項目 11 の 1 分の文字起こしで成功しただけで、`project` での長い会議は未測定。計画 05 の最初に確認する）:
 
 ```bash
 claude -p --output-format json --json-schema "$(cat <スキーマ>)" --tools "" \
@@ -336,7 +336,7 @@ claude -p --output-format json --json-schema "$(cat <スキーマ>)" --tools "" 
 ```
 
 - 実行環境を固定する ［私の判断。文字起こしに含まれる発言が指示として解釈され、利用者環境の MCP ツール（メール送信など）が動く事故を防ぐため］:
-  - 作業ディレクトリはアプリのデータ領域内（リポジトリの外）の空のフォルダにし、利用者の `CLAUDE.md`、プロジェクト設定、git の情報を拾わせない
+  - 作業ディレクトリはアプリのデータ領域内（リポジトリの外）の空のフォルダにし、利用者の `CLAUDE.md` やプロジェクト設定を拾わせない ［私の判断。git の情報も拾わせない意図でリポジトリの外に置く。git 情報の影響はスパイクで確かめていない］
   - `--tools ""` で組み込みツールを無効にする。`--max-turns 1`
   - `--strict-mcp-config --mcp-config '{"mcpServers":{}}'` は必須。外すと利用者の MCP サーバーが 15 件つながり、`--tools ""` で ToolSearch も無いため全ツール定義がそのままコンテキストに入って、入力が約 37 万トークンになった（スパイク項目 11）
   - `--setting-sources project` にする。作業ディレクトリが空なので実質どの設定も読まない。`user` だと利用者のプラグインとフック（SessionStart の追加文脈など）が動いて注入文が議事録生成に混ざり、入力も約 6k トークン増える。認証（サブスクリプション）と既定モデルは `project` でも変わらない（スパイク項目 11）
@@ -419,7 +419,7 @@ end: "15:02"
 duration_min: 62
 tags: [meeting]
 device: "Jabra Evolve2 65"
-transcript_engine: "whisper.cpp medium"
+transcript_engine: "whisper.cpp large-v3-turbo"
 status: minutes_generated
 autonote_id: 20261024-1400-a1b2
 autonote: "0.1.0"
@@ -505,7 +505,7 @@ autonote: "0.1.0"
 ### 11.1 検知
 
 - Core Audio のデバイス一覧変更通知（`kAudioHardwarePropertyDevices` のリスナー）で入力デバイスの追加・削除を監視する
-- 3.5mm ジャックは内蔵オーディオの入力ソース切替（`kAudioDevicePropertyDataSource` の変化）ではなく、固定 UID の別デバイスとして現れる。差すと出力 `BuiltInHeadphoneOutputDevice` が先に、入力 `BuiltInHeadphoneInputDevice` が数 ms〜0.8 秒後に追加され、抜くと削除される。入力側の追加・削除を接続・切断として扱う（Intel 機で確認。`dataSourceChanged` は一度も出なかった。スパイク項目 4、付録 A）。Apple Silicon 機で同じかは未確認で、2 台目の Mac で確かめる
+- 3.5mm ジャックは内蔵オーディオの入力ソース切替（`kAudioDevicePropertyDataSource` の変化）ではなく、固定 UID の別デバイスとして現れる。差すと出力 `BuiltInHeadphoneOutputDevice` が先に、入力 `BuiltInHeadphoneInputDevice` が数 ms〜0.8 秒後に追加され、抜くと削除される。入力側の追加・削除を接続・切断として扱う（Intel 機で確認。`dataSourceChanged` は一度も出なかった。スパイク項目 4、付録 A）。Apple Silicon 機で同じかは未確認で、Task 8 で確かめる（Apple Silicon 機で DeviceProbe を回す。結果表の項目 4 に再開手順）
 - どの機材も入力と出力が別デバイスとして現れ、出力が先に出る。自動録音の判定は入力デバイスだけで行う
 - `AudioDeviceID` は再接続のたびに変わるので保存しない。macOS は接続した機材の入力に既定入力を自動で切り替え、切断で内蔵マイクに戻す。自動開始の録音は既定入力に頼らず、UID で選んだ機材をマイクトラックに明示的に設定する（スパイク項目 4）
 - 自動開始のきっかけは「監視中に起きた接続イベント」だけ ［私の判断］。アプリ起動時やスリープ復帰時にすでにつながっている登録機材では自動開始せず、代わりに「○○が接続されています。録音を始めますか？［開始］」という押すまで残る通知を出す。これで、ドックにつなぎっぱなしの機材で勝手に始まることも、永遠に始まらないことも避ける。スリープ復帰直後の再列挙で一度消えて現れる機材は、復帰から 10 秒以内の再出現なら接続イベントとして扱わない
@@ -519,7 +519,7 @@ autonote: "0.1.0"
 | 3.5mm | 固定 UID `BuiltInHeadphoneInputDevice` の追加 | 「何かが刺さった」まで（UID が固定で個体を区別できない） |
 
 - 一致判定の既定は、入力側の `DeviceUID` の完全一致。登録も入力側の UID で行う（スパイク項目 4、付録 A）
-- `DeviceUID` が一致しないが `ModelUID` と名前が一致する場合は「同じ型番の別個体」として扱い、設定で「型番一致でも開始する」を選べる（USB 向け）。Bluetooth は `ModelUID` が `0 0` で型番の手がかりにならないので、代わりの判定は名前の一致で行う ［私の判断。別の Mac とのペアリングで Bluetooth の UID が変わる場合に備える。変わるかは未確認で、2 台目の Mac で確かめる］
+- `DeviceUID` が一致しないが `ModelUID` と名前が一致する場合は「同じ型番の別個体」として扱い、設定で「型番一致でも開始する」を選べる（USB 向け）。Bluetooth は `ModelUID` が `0 0` で型番の手がかりにならないので、代わりの判定は名前の一致で行う ［私の判断。別の Mac とのペアリングで Bluetooth の UID が変わる場合に備える。変わるかは未確認で、Task 8 で確かめる（Apple Silicon 機で DeviceProbe を回す。結果表の項目 4 に再開手順）］
 - シリアル番号を持たない USB 機材は `DeviceUID` に接続位置（ポート）が入るため、差すポートを変えると不一致になる。登録時に `DeviceUID` にシリアルが含まれないと判定できた機材は、「型番一致でも開始する」を既定でオンにする ［私の判断］
 
 ### 11.3 登録
@@ -765,7 +765,7 @@ autonote: "0.1.0"
 - Intel で whisper.cpp をリアルタイムに使う場合のモデル（第 6.2 節）: 指定なし → small。会議アプリ相当の負荷で実時間比 0.8 未満に収まる最大のモデル（項目 1）
 - Intel のリアルタイム（第 6.2 節）: DictationTranscriber → DictationTranscriber のまま、会議中の目安表示用と明記（CER 0.35。項目 2）
 - SFSpeechRecognizer（第 6.2 節）: リアルタイムの予備 → 候補から外す。同じモデル・60 秒区切り・許可が余計に要る（項目 2）
-- SpeechTranscriber の Intel での判定（第 6.2 節）: `isAvailable` が false → `supportedLocales` が空（`supportedLocale(equivalentTo:)` は判定に使わない）（項目 12）
+- SpeechTranscriber の Intel での判定（第 6.2 節）: `isAvailable` だけで判定 → 判定に `supportedLocales` を加える（Intel では `isAvailable` が false で `supportedLocales` も空。`supportedLocale(equivalentTo:)` は判定に使わない）（項目 12）
 - Metal（第 3.3 節）: Intel 内蔵 GPU で未確認 → Intel では使わない（出力が壊れる。項目 1）
 - XCFramework（第 3.2 節）: x86_64 スライスの有無は実装初期に確認 → 含まれる。`bNNNN` プレリリースの zip を使う（項目 8）
 - 自己署名（第 3.4 節）: 未検証 → マイク許可が再ビルド後も保たれることを確認済み。システム音声の許可は計画 02 で確認（項目 9）

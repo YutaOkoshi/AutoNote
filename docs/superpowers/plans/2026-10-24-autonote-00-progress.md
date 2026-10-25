@@ -22,12 +22,12 @@
 - Task 5 前半（ff601f4、レビュー承認）。whisper.cpp v1.9.5 ビルド・7 モデル取得・サンプル音声・XCFramework x86_64+arm64 確認（項目 8 済）
 
 ## 進行中
-- Task 9 要件書の既定値を事実で書き換える
+- Task 9 要件書の既定値を事実で書き換える: コミット dd7502b、レビュー中
 
 ## 利用者待ち（後回し扱い。再開手順は結果表の該当項目に記載）
 - Task 4 Step 4（Shokz を使ったマイク復帰、項目 10）と Step 5（VPIO の副作用、項目 5）
 - Task 4 の USB 機材の識別子（項目 4 の USB 行）
-- Task 8（Apple Silicon 機でのスパイク、項目 7・12 の Apple Silicon 側、項目 1 の Metal）
+- Task 8（Apple Silicon 機でのスパイク、項目 7・12 の Apple Silicon 側、項目 1 の Metal）。あわせて Apple Silicon 機で `DeviceProbe` を回し、3.5mm の見え方と Bluetooth UID が別の Mac でも同じかを確認する（Task 9 で判明した追加確認）
 
 ## 次にやること
 - Task 9 → plan-00 ブランチ全体のレビュー（opus）→ 指摘処理 → 利用者に「次は計画 01」と報告
