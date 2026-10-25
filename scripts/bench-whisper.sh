@@ -43,7 +43,12 @@ done
 mkdir -p "$OUT_DIR" "$LOG_DIR"
 
 now() { "$PYTHON" -I -c 'import time; print(f"{time.time():.3f}")'; }
-audio_sec="$(afinfo "$SAMPLE_WAV" | awk '/estimated duration/ {print $3}')"
+audio_sec="$(afinfo "$SAMPLE_WAV" | awk '/estimated duration/ {print $3}' || true)"
+# 空や 0 のまま進むと RTF の awk がゼロ除算で止まり、表が途中で切れる。先に止める。
+if ! awk -v a="$audio_sec" 'BEGIN { exit !(a + 0 > 0) }'; then
+    echo "音声の長さを afinfo から取れない（得た値: '${audio_sec}'）: $SAMPLE_WAV" >&2
+    exit 1
+fi
 
 # 負荷あり: yes を 2 本。どの終わり方でも必ず止める。
 # 計測中の子プロセスもバックグラウンドで起動して wait する。フォアグラウンドで動かすと
@@ -119,9 +124,17 @@ bench_build() {
             elapsed="$(awk -v s="$start" -v e="$end" 'BEGIN { printf "%.1f", e - s }')"
             # (c) RTF
             rtf="$(awk -v e="$elapsed" -v a="$audio_sec" 'BEGIN { printf "%.3f", e / a }')"
-            # (d) CER
-            cer="$("$PYTHON" -I "$REPO_ROOT/scripts/cer.py" "$out.txt" "$SAMPLE_REF")"
-            cer_np="$("$PYTHON" -I "$REPO_ROOT/scripts/cer.py" --no-punct "$out.txt" "$SAMPLE_REF")"
+            # (d) CER。出力 txt が無い・cer.py が失敗したときは、その行を "-" にして次のモデルへ進む
+            #     （set -e で長時間ベンチ全体が止まらないように）
+            cer="-"; cer_np="-"
+            if [ -f "$out.txt" ]; then
+                cer="$("$PYTHON" -I "$REPO_ROOT/scripts/cer.py" "$out.txt" "$SAMPLE_REF" 2>>"$cli_log")" || cer="-"
+                cer_np="$("$PYTHON" -I "$REPO_ROOT/scripts/cer.py" --no-punct "$out.txt" "$SAMPLE_REF" 2>>"$cli_log")" || cer_np="-"
+                [ -n "$cer" ] || cer="-"
+                [ -n "$cer_np" ] || cer_np="-"
+            else
+                echo "出力テキストが無い: $out.txt" >> "$cli_log"
+            fi
         else
             elapsed="失敗"; rtf="-"; cer="-"; cer_np="-"
         fi
