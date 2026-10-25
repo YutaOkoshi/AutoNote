@@ -8,17 +8,69 @@ Task 9 で記入。
 
 ## 項目 1: Intel 機で `whisper-bench` を回し、base / small / medium / large-v3-turbo（量子化版を含む）の実時間比を測る
 
-- 結論: 未実施（Task 5）
-- 測定値:
-- 手順:
-- 要件書への影響:
+- 結論: **Intel のリアルタイム候補は large-v3-turbo（無負荷 RTF 0.683）、Intel の確定版は large-v3-turbo（CER 最小 0.2153、負荷ありでも RTF 0.851）**。ただし負荷あり（会議アプリ動作中の近似）では large-v3-turbo 系はどちらも RTF 0.8 を超え、RTF < 0.8 の最大モデルは small（0.446）に下がる。medium は large-v3-turbo より遅く（RTF 1.1〜1.4）精度も下なので選ぶ理由が無い。量子化（q5_0 / q5_1）は速さ・精度とも元のモデルとほぼ同じ（差はぶれの範囲）。Metal ビルドは Intel（Iris Plus Graphics）では出力が壊れるため不採用（Task 5a で確認。base で出力 26 バイト、CER 0.99）
+- 測定値（whisper.cpp v1.9.5、CPU ビルド `build/`＝Accelerate/BLAS、AVX2・AVX512 有効、`-t 4`、whisper-cli は既定の 5 beams + best of 5、音声 295.4 秒。Intel Core i7-1068NG7 4 コア 8 スレッド、32 GB。2026-10-25 計測）:
+
+  無負荷（`BUILDS=build scripts/bench-whisper.sh`）
+
+  | モデル | bench encode (ms) | 経過秒 | RTF | CER | CER(記号除く) |
+  |---|---|---|---|---|---|
+  | base | 546.81 | 36.6 | 0.124 | 0.3718 | 0.3353 |
+  | small | 3041.71 | 97.3 | 0.329 | 0.2782 | 0.2353 |
+  | small-q5_1 | 1997.34 | 97.7 | 0.331 | 0.2765 | 0.2327 |
+  | medium | 10724.18 | 403.1 | 1.364 | 0.2324 | 0.1821 |
+  | medium-q5_0 | 6810.28 | 337.1 | 1.141 | 0.2312 | 0.1853 |
+  | large-v3-turbo | 10881.52 | 201.9 | 0.683 | 0.2153 | 0.1673 |
+  | large-v3-turbo-q5_0 | 9583.26 | 192.1 | 0.650 | 0.2176 | 0.1673 |
+
+  負荷あり（`BUILDS=build scripts/bench-whisper.sh --load`、`yes > /dev/null` ×2。Review Focus 3: 会議アプリが動いている実環境の近似）
+
+  | モデル | bench encode (ms) | 経過秒 | RTF | CER | CER(記号除く) |
+  |---|---|---|---|---|---|
+  | base | 704.34 | 45.3 | 0.153 | 0.3718 | 0.3353 |
+  | small | 2996.94 | 131.9 | 0.446 | 0.2782 | 0.2353 |
+  | small-q5_1 | 3999.43 | 150.9 | 0.511 | 0.2765 | 0.2327 |
+  | medium | 7447.53 | 327.9 | 1.110 | 0.2324 | 0.1821 |
+  | medium-q5_0 | 7276.44 | 414.7 | 1.404 | 0.2312 | 0.1853 |
+  | large-v3-turbo | 12516.56 | 251.3 | 0.851 | 0.2153 | 0.1673 |
+  | large-v3-turbo-q5_0 | 12342.53 | 244.9 | 0.829 | 0.2176 | 0.1673 |
+
+  - 列: bench encode＝`whisper-bench` の encode time、経過秒＝`whisper-cli` で 5 分音声を文字起こしした壁時計秒（モデル読み込み込み）、RTF＝経過秒 ÷ 295.4 秒、CER＝`scripts/cer.py`（NFKC・空白除去後、分母 1,700 字。記号除きは 1,560 字）
+  - **CER は参考値**: 音声は `say -v Kyoko` の合成音声で、人の声より楽。会議の実音声では CER はこれより悪くなる。CER は無負荷・負荷ありで完全に同じ（出力テキストが同一）
+  - medium が large-v3-turbo より遅いのは、デコーダ層が 24 層（turbo は 4 層）で、5 beams のビーム探索（batchd time: medium 271 秒、turbo 43 秒）が経過時間の大半を占めるため
+  - ぶれ: 計測中は他のエージェントの処理が並行しており load average は 4.6〜23（多くは 6〜8）。無負荷 medium（403 秒）が負荷あり medium（328 秒）より遅いのは、無負荷の medium 計測中に load average が 12〜16 に上がっていたためと見られる。順位と判断は変わらないが、RTF は ±20% 程度ぶれると見ておく
+  - 判断基準（ブリーフ）: RTF < 0.8 の最大モデル＝リアルタイム候補 → 無負荷 large-v3-turbo / 負荷あり small。RTF < 2.0 で CER 最小＝確定版 → 無負荷・負荷ありとも large-v3-turbo（q5_0 は CER 0.2176 でわずかに上、記号除きは同値。メモリ・ダウンロード量を抑えたいなら代替になる）
+- 手順: `scripts/setup-whisper.sh`（v1.9.5 を clone、`build/` を `-DGGML_METAL=OFF` でビルド、7 モデル取得）→ `scripts/make-sample-audio.sh`（295.4 秒の日本語合成音声と参照テキスト）→ `BUILDS=build scripts/bench-whisper.sh` → `BUILDS=build scripts/bench-whisper.sh --load`（終了後 `pgrep -x yes` が 0 本であることを確認）。所要: 無負荷 28 分、負荷あり 33 分。ログは `tools/bench-logs/{bench,cli}-<モデル>-build[-load].log`
+- 要件書への影響（§6.2 の起動時の既定、Intel 列）:
+  - 確定版: 「whisper.cpp medium（ベンチ次第で large-v3-turbo）」→ **whisper.cpp large-v3-turbo**（medium より速く、CER も低い）
+  - リアルタイム: **DictationTranscriber のまま**（比較は項目 2）。whisper.cpp をリアルタイムに選ぶ場合の既定モデルは、会議アプリが動いている状態で RTF < 0.8 に収まる **small**（large-v3-turbo は無負荷なら収まるが負荷ありで 0.85 になり余裕が無い）。なお今回の RTF は 5 beams のバッチ処理の値で、ストリーミング（greedy・短いチャンク）では別に測る必要がある
 
 ## 項目 2: Intel 機で DictationTranscriber の日本語リアルタイム認識の遅延と精度を、whisper small と比べる
 
-- 結論: 未実施（Task 6）
-- 測定値:
-- 手順:
+- 結論: **Intel のリアルタイム用は DictationTranscriber を採る（目安表示用。議事録の元は whisper large-v3-turbo）**。マイクでの実測で、部分結果は音声から約 0.5 秒遅れで出続け、最後の発話から確定まで約 5 秒だった。ファイル入力の RTF は 0.307 で whisper small（無負荷 0.329 / 負荷あり 0.446）と同等以上に速く、認識は OS の別プロセスで走るのでアプリ側の CPU をほぼ使わない。部分結果（volatile）と確定を API がそのまま返すので、ストリーミングのためのチャンク分割も要らない。精度は CER 0.3494 で whisper small（0.2782）・large-v3-turbo（0.2153）より明らかに悪い。そのため、リアルタイムは会議中の目安として表示するだけにとどめ、議事録の元になる確定版は whisper.cpp large-v3-turbo（項目 1）で作る。SFSpeechRecognizer は DictationTranscriber と同じモデルで（5 分の出力を区間ごとに連結すると、一字一句同じ）、精度も速さも同じ。ただし on-device でもちょうど 60 秒ごとに結果が区切られ、確定結果（isFinal）は最後の区間しか持たない（下記）。音声認識の許可も要るので、予備としても DictationTranscriber に劣る
+- 測定値（Intel x86_64 / macOS 26.6.2、`tools/samples/ja-5min.wav` 295.4 秒の合成音声、`--ref tools/samples/ja-5min.txt`、2026-10-25。whisper ベンチ終了後で CPU は空き）:
+
+  | エンジン | RTF | CER | CER(記号除く) | 備考 |
+  |---|---|---|---|---|
+  | DictationTranscriber（`.longDictation`、ja_JP） | 0.307（90.7 秒） | 0.3494 | 0.3045 | 確定 5 件で全区間をカバー。資産は取得済み（`downloadAndInstall` 0.02 秒） |
+  | SFSpeechRecognizer（on-device、`addsPunctuation`） | 0.342（100.9 秒）※ | 0.3494 | 0.3045 | 60 秒ごとの 5 区間を連結した値。出力は DictationTranscriber と完全に同じ。isFinal の本文だけだと 277 字で CER 0.8912 |
+  | whisper.cpp small（項目 1） | 0.329 / 負荷あり 0.446 | 0.2782 | 0.2353 | 5 beams のバッチ処理 |
+  | whisper.cpp large-v3-turbo（項目 1） | 0.683 / 負荷あり 0.851 | 0.2153 | 0.1673 | 同上 |
+
+  - DictationTranscriber の誤りは固有名詞と英語の読み（「Claude」→「蔵人」、「Zoom」が欠落、「Intel Core i7」→「インテル強アイ7」、「Obsidian」→「オブシリアン」）が多い
+  - SFSpeechRecognizer は `shouldReportPartialResults = false` でも区間ごとにコールバックが来る: 0.0〜59.8 / 60.0〜120.0 / 120.0〜180.0 / 180.0〜239.6 秒の 4 回は非確定、240.0〜295.3 秒の 5 回目が isFinal。音声全体は最後まで処理されるが、本文は区間ごとに届くので、アプリ側で連結する必要がある（「1 分で打ち切られる」のではなく「60 秒ごとに区切られる」）。区間の境目で語が切れる可能性がある
+  - ※ SF の RTF は 1 回目（確定のみを集めた版）が 0.302、連結版が 0.342。同じ処理なので差はぶれ
+  - 資産（AssetInventory）: ja-JP は既にディスクにあり、初回の `downloadAndInstall()` は 0.16 秒（割り当てだけと推定）。en-US は初回 6.02 秒。呼ぶ前の status は installedLocales に載っていても `supported` で、呼んだ後に `installed` になる
+  - マイクでのリアルタイム（👤 利用者、Intel MacBook Pro 内蔵マイク、約 70 秒、`--engine dictation --live --locale ja-JP --contextual "AutoNote,所沢,Kubernetes"`、preset `.progressiveLongDictation`、入力 16 kHz Int16 に変換。ログは `.superpowers/sdd/2026-10-24-autonote-00-spikes-and-skeleton/task-6-step3-user-log.txt`）:
+    - **体感遅延**: 部分結果は音声に対して約 0.4〜0.6 秒遅れで出続ける（`[+秒]` と結果が覆う音声の末尾時刻の差）。**最後の発話（音声 ~69.5 秒）から確定まで約 5 秒**（[+74.9]）。話し終えて Ctrl-C を押す前に確定が出た。約 70 秒の発話全体が確定 1 件にまとまり、それまでは部分結果が伸び続けた（発話単位で区切るには沈黙での確定を待つか、`finalize(through:)` や `.frequentFinalization` を試す必要がある。計画 02）
+    - **英単語の混在**: Kubernetes は英字で出た。Slack は「スラック」とカタカナになった。「Night and Day」は英字と「ナイト&デイ」の両方で出た。数字は崩れる（「205 200人」など、言い直しの途中経過がそのまま残る）。句読点は付かなかった
+    - **contextual strings の効き**: 所沢 ○、Kubernetes ○、**AutoNote ×**（「音ノート」）。ただし contextual なしとの比較はしていないので、所沢・Kubernetes が contextual のおかげで出たのかは切り分けていない
+- 手順: `cd Spikes && swift run AppleSpeechProbe --engine dictation --file ../tools/samples/ja-5min.wav --ref ../tools/samples/ja-5min.txt`、同じく `--engine sf`。RTF＝解析開始〜全確定の壁時計秒 ÷ 295.4 秒（資産確認・初期化の 0.1〜0.3 秒は含めない）。CER は `scripts/cer.py`。生出力は `.superpowers/sdd/2026-10-24-autonote-00-spikes-and-skeleton/task-6-report.md`
 - 要件書への影響:
+  - §6.2 の Intel のリアルタイム既定「DictationTranscriber」はそのまま（部分結果の遅れ約 0.5 秒、確定まで約 5 秒は目安表示に十分）。確定版は whisper large-v3-turbo（項目 1）が前提で、リアルタイムの精度（固有名詞・英単語・数字・句読点なし）は確定版で補う
+  - 用語辞書（contextual strings）は造語（AutoNote）には効かなかったので、造語の表記揺れは議事録生成側（Claude への用語指定）で直す前提にする
+  - **権限: DictationTranscriber は音声認識の TCC 許可（`SFSpeechRecognizer.requestAuthorization`）なしで動く。SFSpeechRecognizer は起動元アプリの Info.plist に `NSSpeechRecognitionUsageDescription` が無いと TCC が SIGABRT で落とす**（ターミナル等から起動したときは、TCC が許可を確かめる「責任プロセス」である起動元アプリの Info.plist が見られる。実行ファイルに埋め込んでも効かない）。SF を予備に残すなら AutoNote.app の Info.plist にこのキーを足す
+  - §6.2 の SFSpeechRecognizer の「1 分制限」は「60 秒ごとに結果が区切られ、isFinal は最後の区間だけ」と書き換え、使うなら区間の連結が要ると明記する。DictationTranscriber と同じモデルなので、予備としての価値は「macOS 26 未満でも動く」ことだけ（最低 OS は 26.0 なので実質なし）
 
 ## 項目 3: Intel 機で process tap から実際に音声データが届くこと（作成・破棄は確認済み）
 
@@ -179,7 +231,9 @@ Task 9 で記入。
 
 ## 項目 12: SpeechTranscriber に contextual strings 相当の機能があるか
 
-- 結論: 未実施（Task 6 と 8）
+- 結論（Intel 側、Task 6。コンパイルでの確認）: **contextual strings は transcriber モジュールではなく SpeechAnalyzer 側の API**。`let ctx = AnalysisContext(); ctx.contextualStrings[.general] = ["語1", "語2"]; try await analyzer.setContext(ctx)`（`SpeechAnalyzer.init(inputSequence:modules:options:analysisContext:volatileRangeChangedHandler:)` でも渡せる）。modules が `[DictationTranscriber]` でも `[SpeechTranscriber]` でもコンパイルが通る（Swift 6.3.2 / macOS 26.5 SDK）ので、SpeechTranscriber にも同じ指定方法はある。効くかどうかは Apple Silicon で確かめる（Task 8）。`DictationTranscriber` / `SpeechTranscriber` に `.contextualStrings` メンバーは無い（コンパイルエラー）。`ContextualStringsTag` の定義済み値は `.general` だけ。DictationTranscriber には `isAvailable` が無く、使えるかは `supportedLocales`（Intel で 20 件、ja_JP を含む）で判定する。SpeechTranscriber は `isAvailable == false`・`supportedLocales` 0 件だが、`supportedLocale(equivalentTo: ja-JP)` は `ja_JP` を返すので判定に使えない。SFSpeechRecognizer は従来どおり `SFSpeechRecognitionRequest.contextualStrings`
+  - 効き（Intel、DictationTranscriber、マイクでの実測。項目 2）: `["AutoNote", "所沢", "Kubernetes"]` を入れて話すと、所沢と Kubernetes は正しく出たが、**AutoNote のような造語は効かなかった**（「音ノート」）。contextual なしとの比較はしていない
+- 結論（Apple Silicon 側）: 未実施（Task 8）
 - 測定値:
 - 手順:
 - 要件書への影響:
