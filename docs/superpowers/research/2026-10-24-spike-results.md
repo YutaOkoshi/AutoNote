@@ -8,7 +8,7 @@
 
 - §3.2: XCFramework は x86_64 を含み、`bNNNN` プレリリースの zip を使う（項目 8）
 - §3.3: Intel の実時間比を実測値に差し替え、Metal は Intel では使わないと確定（項目 1）
-- §3.4: 自己署名でマイク許可が再ビルド後も保たれるかは未確認（designated requirement が識別子と証明書ハッシュだけで決まることは確認済み。実機での持続は計画 02 の最初の TCC まとめ確認タスクで `open` 起動と TCC.db の行で確かめる）。システム音声の許可の持続も未確認。process tap は許可を拒否してもエラーにならず、拒否時の無音も再現できなかったので、許可なしは API エラーから検知できない前提で設計し、計画 02 の最初のタスクで自己署名 `.app` 単体・再起動後に再確認（項目 3・9）
+- §3.4: 自己署名でマイク許可が再ビルド後も保たれることを確認済みに（スパイク項目 9、`open` 起動と TCC.db の行で再測定）。システム音声の許可の持続も未確認。process tap は許可を拒否してもエラーにならず、拒否時の無音も再現できなかったので、許可なしは API エラーから検知できない前提で設計し、計画 02 の最初のタスクで自己署名 `.app` 単体・再起動後に再確認（項目 3・9）
 - §4.1: Intel の後処理時間の見込みを large-v3-turbo の実時間比 0.68 から計算した値に（項目 1）
 - §5.6: ボイスプロセッシングは「設定で選べる補助・既定オフ」のまま、スパイク未実施のため仮と注記（項目 5）
 - §5.7: システム音の無音検知を「最後のコールバックからの経過時間」に変え、無音区間は `AudioTimeStamp` から時間で埋める（項目 3）
@@ -209,15 +209,15 @@
 
 ## 項目 9: 自己署名証明書で署名し直したビルドで、マイクとシステム音声の TCC 許可が保たれるか
 
-- 結論: **未確認**。designated requirement が識別子と証明書ハッシュだけで決まることは codesign 出力で確認済み。実機での持続は未確認（Task 2 Step 6 の測定は実行ファイルを直接起動したため TCC の責任プロセスが Terminal.app になっていた疑いが強い。TCC.db に com.yutaokoshi.autonote のマイク行が無い）。計画 02 の最初の TCC まとめ確認タスクで `open` 起動 + TCC.db の行で確かめる。システム音声録音（`NSAudioCaptureUsageDescription`）の許可の持続も未確認で、同じタスクで確かめる。
+- 結論: **マイク許可は確認済み（2026-10-25 再測定）**。自己署名（`AutoNote Dev`、Bundle ID 固定）で `CFBundleVersion` を 2 → 3 にして再ビルドしても、`open` で起動した AutoNote.app のマイク許可は保たれた（許可ダイアログが出ず、TCC.db の行も更新されなかった）。システム音声録音（`NSAudioCaptureUsageDescription`）の許可の持続は未確認で、計画 02 の最初の TCC まとめ確認タスクで確かめる。
 - 測定値:
-  - 署名（codesign の出力。これは確かめてある）: `Identifier=com.yutaokoshi.autonote` / `Authority=AutoNote Dev` / `TeamIdentifier=not set`。designated requirement は `identifier "com.yutaokoshi.autonote" and certificate leaf = H"c7f68fcb3afa065151260b113948ac6485837825"` で、cdhash などビルドごとに変わる値を含まない。
-  - Task 2 Step 6 で記録した値（AutoNote の許可を測った値とは言えない。下記）: 1 回目の起動で `マイク許可の状態: notDetermined` → ダイアログで許可 → `マイク許可の要求結果: authorized`。`CFBundleVersion` を `1` → `2` にして `scripts/build-app.sh` で再ビルド・再起動すると、ダイアログは出ず `マイク許可の状態: authorized`。
-  - 最終レビューで利用者のユーザー TCC.db を読み取り専用で調べた結果: `kTCCServiceMicrophone` に `com.yutaokoshi.autonote` の行は無く、`com.apple.Terminal` の行が 2026-10-24 20:12:44（Task 2 Step 6 の作業時間帯）に作られていた。メニュー項目の結果は `print` で標準出力に出すだけで、`open` で起動したアプリの標準出力は見えないので、上の記録は直接起動で取ったものと見られる。
-  - 計画の Task 2 Step 6 の Expected（ターミナルから `build/AutoNote.app/Contents/MacOS/AutoNoteApp` を直接起動して見る）は、測り方として誤りだった。直接起動すると TCC の責任プロセスが起動元の Terminal.app になり、AutoNote の署名に付いた許可を測れない（項目 2・3 で見た「責任プロセス」と同じ仕組み）。
-- 手順（記録上の手順。上のとおり、実際の起動は直接起動だった疑いが強い）: `scripts/make-dev-cert.sh` で自己署名のコード署名証明書 `AutoNote Dev` を作り、ログインキーチェーンに入れてコード署名用に信頼する → `scripts/build-app.sh` で `build/AutoNote.app` を組み立てて `codesign --force --sign "AutoNote Dev" --identifier com.yutaokoshi.autonote --timestamp=none` で署名 → `open build/AutoNote.app` でメニュー「マイク許可を確認」→ 許可 → 終了 → `Resources/Info.plist` の `CFBundleVersion` を `2` にして再ビルド → 再起動して「マイク許可を確認」。
-  - 再測定の手順（計画 02 の TCC まとめ確認タスク、または先に任意で）: `open build/AutoNote.app` → メニュー「マイク許可を確認」→ ダイアログのアプリ名が「AutoNote」であることを確かめて許可 → `sqlite3 -readonly ~/Library/Application\ Support/com.apple.TCC/TCC.db "select service,client,auth_value,datetime(last_modified,'unixepoch','localtime') from access where service='kTCCServiceMicrophone'"` で `com.yutaokoshi.autonote|…|2` の行ができたことを確かめる → `Resources/Info.plist` の `CFBundleVersion` を上げて（今は `3`）`scripts/build-app.sh` → `open` でもう一度開き、ダイアログが出ないことと行が残っていることを確かめる。判定は標準出力ではなく sqlite3 の出力で行う。
-- 要件書への影響: §3.4・§19 の項目 9・§20 の「自己署名」を「未確認」にした（最終レビュー後。Task 9 の時点では「確認済み」と書いていた）。
+  - 署名（codesign の出力）: `Identifier=com.yutaokoshi.autonote` / `Authority=AutoNote Dev` / `TeamIdentifier=not set`。designated requirement は `identifier "com.yutaokoshi.autonote" and certificate leaf = H"c7f68fcb3afa065151260b113948ac6485837825"` で、cdhash などビルドごとに変わる値を含まない。
+  - 再測定 1（利用者、2026-10-25）: `open build/AutoNote.app`（`CFBundleVersion` 2）→ メニュー「マイク許可を確認」→ 許可。TCC.db の行は `com.yutaokoshi.autonote|2|2|2026-10-25 23:40:04`（auth_value 2 = allowed、auth_reason 2 = user consent）。この時点まで AutoNote の行は存在しなかった（下の注意の裏付け）。
+  - 再測定 2（Lead、2026-10-25）: `pkill AutoNoteApp` → `scripts/build-app.sh`（`CFBundleVersion` 3、`Identifier=com.yutaokoshi.autonote`）→ `open build/AutoNote.app` → osascript で menu bar 2 の item 1 →「マイク許可を確認」をクリック → 3 秒待ち。許可ダイアログのウィンドウは無し（UserNotificationCenter / CoreServicesUIAgent にウィンドウ無し）。TCC.db の行は `com.yutaokoshi.autonote|2|2|2026-10-25 23:40:04` のまま（更新されず。確認時刻 2026-10-25 23:44:59）。ログは [2026-10-24-spike-raw/task-2-item9-remeasure.log](2026-10-24-spike-raw/task-2-item9-remeasure.log)
+  - 注意（最初の測定）: Task 2 Step 6 の最初の測定（`マイク許可の状態: notDetermined` → 許可 → 再ビルド後 `authorized`）は、実行ファイルを直接起動したため TCC の責任プロセスが Terminal.app になり、Terminal.app の許可を見ていた（最終レビューで TCC.db に `com.yutaokoshi.autonote` の行が無く、`com.apple.Terminal` の行が 2026-10-24 20:12:44 に作られていたことから判明し、再測定 1 で AutoNote の行がそれまで無かったことで裏付けられた）。計画の Task 2 Step 6 の Expected（ターミナルから `build/AutoNote.app/Contents/MacOS/AutoNoteApp` を直接起動して見る）は測り方として誤りだった（項目 2・3 で見た「責任プロセス」と同じ仕組み）。
+  - 教訓: TCC の持続は `open` で起動して確かめ、判定は標準出力ではなく TCC.db の行で行う。
+- 手順: `scripts/make-dev-cert.sh` で自己署名のコード署名証明書 `AutoNote Dev` を作り、ログインキーチェーンに入れてコード署名用に信頼する → `scripts/build-app.sh` で `build/AutoNote.app` を組み立てて `codesign --force --sign "AutoNote Dev" --identifier com.yutaokoshi.autonote --timestamp=none` で署名 → `open build/AutoNote.app` → メニュー「マイク許可を確認」→ 許可 → `sqlite3 -readonly ~/Library/Application\ Support/com.apple.TCC/TCC.db "select service,client,auth_value,datetime(last_modified,'unixepoch','localtime') from access where service='kTCCServiceMicrophone'"` で `com.yutaokoshi.autonote` の行を見る → `Resources/Info.plist` の `CFBundleVersion` を上げて `scripts/build-app.sh` → `open` でもう一度開いて「マイク許可を確認」→ ダイアログが出ないことと、TCC.db の行が変わらないことを確かめる。
+- 要件書への影響: §3.4・§19 の項目 9・§20 の「自己署名」を「確認済み（スパイク項目 9、再測定）」にした（最終レビューでいったん「未確認」に下げ、再測定で戻した）。システム音声の許可の持続は計画 02 で確認。
 
 ## 項目 10: 録音中にマイク機材を抜き、戻したときに `AVAudioEngine` を組み直して同じ録音を続けられるか（第 11.5 節）
 

@@ -113,7 +113,7 @@ Rust + TypeScript（Tauri）案も検討したが、macOS 26 の音声認識 API
 
 - macOS のマイクとシステム音声録音の許可（TCC）はアプリの署名識別子に結び付く。アドホック署名のままビルドし直すと識別子が変わり、許可が外れて「録ったつもりで無音」になり得る
 - 対策として、キーチェーンに自己署名のコード署名証明書 `AutoNote Dev` を一度作り、ビルドのたびに同じ証明書と同じ Bundle ID（`com.yutaokoshi.autonote`）で署名する。ビルド手順（`scripts/make-dev-cert.sh`、`scripts/build-app.sh`）にこれを組み込む
-  - マイクの許可が再ビルド後も保たれるかは未確認（スパイク項目 9）。designated requirement が識別子と証明書ハッシュだけで決まる（cdhash などビルドごとに変わる値を含まない）ことは codesign 出力で確認済み。実機での持続は未確認（Task 2 Step 6 の測定は実行ファイルを直接起動したため TCC の責任プロセスが Terminal.app になっていた疑いが強い。TCC.db に com.yutaokoshi.autonote のマイク行が無い）。計画 02 の最初の TCC まとめ確認タスクで `open` 起動 + TCC.db の行で確かめる
+  - マイクの許可が再ビルド後も保たれることは確認済み（スパイク項目 9、再測定）。designated requirement が識別子と証明書ハッシュだけで決まり、cdhash などビルドごとに変わる値を含まないため。`open` で起動した AutoNote.app で許可した後、`CFBundleVersion` を上げて再ビルドしても許可ダイアログが出ず、TCC.db の行も変わらなかった（最初の測定は実行ファイルの直接起動で Terminal.app の許可を見ていたので、`open` 起動と TCC.db の行で測り直した）
   - システム音声録音の許可が再ビルド後も保たれるかは未確認。計画 02 の最初のタスクで確かめる
 - アプリは起動時と録音開始前に、マイクとシステム音声録音の許可状態を確かめ、足りなければ録音を始める前に設定アプリへの導線を出す
   - マイクは許可状態を照会できる。許可が未決定のまま `AVAudioEngine` を組むと、ダイアログへの応答待ちで十数分止まり、エラーも返らない（スパイク項目 10 の自己確認）。エンジンを組む前に許可を確かめる
@@ -725,7 +725,7 @@ autonote: "0.1.0"
 6. `claude -p --output-format json --json-schema` に 1 時間分の文字起こしを流し、`structured_output` が期待どおり返ること — 済（結果表参照）
 7. Apple Silicon 機で SpeechTranscriber の日本語が使えること（`supportedLocales`） — 未（Apple Silicon 機）
 8. whisper.cpp の公式 XCFramework に x86_64 スライスが含まれるか — 済（結果表参照）
-9. 自己署名証明書で署名し直したビルドで、マイクとシステム音声の TCC 許可が保たれるか — 未確認（結果表参照）。designated requirement が識別子と証明書ハッシュだけで決まることは確認済み。実機での持続はマイク・システム音声とも計画 02 の最初の TCC まとめ確認タスクで `open` 起動 + TCC.db の行で確認
+9. 自己署名証明書で署名し直したビルドで、マイクとシステム音声の TCC 許可が保たれるか — 済（結果表参照、再測定）。マイクのみ。システム音声の許可の持続は計画 02 の最初の TCC まとめ確認タスクで確認
 10. 録音中にマイク機材を抜き、戻したときに `AVAudioEngine` を組み直して同じ録音を続けられるか（第 11.5 節） — 後回し（結果表に再開手順）
 11. `claude -p` で会話履歴を残さない方法（オプションの有無）と、`--strict-mcp-config` で MCP が読み込まれないこと — 済（結果表参照）
 12. SpeechTranscriber に contextual strings 相当の機能があるか — Intel 側は済（結果表参照）。効きの確認は未（Apple Silicon 機）
@@ -768,7 +768,7 @@ autonote: "0.1.0"
 - SpeechTranscriber の Intel での判定（第 6.2 節）: `isAvailable` だけで判定 → 判定に `supportedLocales` を加える（Intel では `isAvailable` が false で `supportedLocales` も空。`supportedLocale(equivalentTo:)` は判定に使わない）（項目 12）
 - Metal（第 3.3 節）: Intel 内蔵 GPU で未確認 → Intel では使わない（出力が壊れる。項目 1）
 - XCFramework（第 3.2 節）: x86_64 スライスの有無は実装初期に確認 → 含まれる。`bNNNN` プレリリースの zip を使う（項目 8）
-- 自己署名（第 3.4 節）: 未検証 → 未確認のまま。designated requirement が識別子と証明書ハッシュだけで決まることは確認したが、実機での持続は測り方の誤り（実行ファイルの直接起動で TCC の責任プロセスが Terminal.app になっていた疑いが強い）で確認できていない。マイク・システム音声とも計画 02 の最初の TCC まとめ確認タスクで `open` 起動 + TCC.db の行で確認（項目 9）
+- 自己署名（第 3.4 節）: 未検証 → マイク許可が再ビルド後も保たれることを確認済み（再測定。`open` 起動と TCC.db の行で判定）。システム音声の許可は計画 02 で確認（項目 9）
 - システム音声の許可の確認（第 3.4 節）: 短いテスト録音で無音かを見る → 許可なしは API エラーから検知できない前提にし、コールバックの途絶で許可または音源の確認を案内する（項目 3）
 - システム音の無音検知（第 5.7 節）: 入力レベルが 60 秒ほぼゼロ → 最後のコールバックから 60 秒。無音区間は `AudioTimeStamp` から時間で埋める（項目 3）
 - 3.5mm の検知（第 11.1・11.2 節）: 内蔵オーディオの入力ソース（DataSource）の変化 → 固定 UID `BuiltInHeadphoneInputDevice` の追加・削除（項目 4）

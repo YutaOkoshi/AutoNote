@@ -1,0 +1,16 @@
+## before
+com.yutaokoshi.autonote|2|2|2026-10-25 23:40:04
+## rebuild
+build exit 0
+3
+Identifier=com.yutaokoshi.autonote
+TeamIdentifier=not set
+## open
+running
+## click menubar item then menu entry
+menu item マイク許可を確認 of menu 1 of menu bar item waveform of menu bar 2 of application process AutoNoteApp
+## dialog present?
+,
+## after
+com.yutaokoshi.autonote|2|2|2026-10-25 23:40:04
+now 2026-10-25 23:44:59
