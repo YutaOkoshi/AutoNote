@@ -113,7 +113,7 @@ Rust + TypeScript（Tauri）案も検討したが、macOS 26 の音声認識 API
 
 - macOS のマイクとシステム音声録音の許可（TCC）はアプリの署名識別子に結び付く。アドホック署名のままビルドし直すと識別子が変わり、許可が外れて「録ったつもりで無音」になり得る
 - 対策として、キーチェーンに自己署名のコード署名証明書 `AutoNote Dev` を一度作り、ビルドのたびに同じ証明書と同じ Bundle ID（`com.yutaokoshi.autonote`）で署名する。ビルド手順（`scripts/make-dev-cert.sh`、`scripts/build-app.sh`）にこれを組み込む
-  - マイクの許可が再ビルド後も保たれることは確認済み（スパイク項目 9）。designated requirement が Bundle ID と証明書だけで決まり、cdhash などビルドごとに変わる値を含まないため
+  - マイクの許可が再ビルド後も保たれるかは未確認（スパイク項目 9）。designated requirement が識別子と証明書ハッシュだけで決まる（cdhash などビルドごとに変わる値を含まない）ことは codesign 出力で確認済み。実機での持続は未確認（Task 2 Step 6 の測定は実行ファイルを直接起動したため TCC の責任プロセスが Terminal.app になっていた疑いが強い。TCC.db に com.yutaokoshi.autonote のマイク行が無い）。計画 02 の最初の TCC まとめ確認タスクで `open` 起動 + TCC.db の行で確かめる
   - システム音声録音の許可が再ビルド後も保たれるかは未確認。計画 02 の最初のタスクで確かめる
 - アプリは起動時と録音開始前に、マイクとシステム音声録音の許可状態を確かめ、足りなければ録音を始める前に設定アプリへの導線を出す
   - マイクは許可状態を照会できる。許可が未決定のまま `AVAudioEngine` を組むと、ダイアログへの応答待ちで十数分止まり、エラーも返らない（スパイク項目 10 の自己確認）。エンジンを組む前に許可を確かめる
@@ -240,8 +240,8 @@ Claude Code の設定（`CLAUDE.md` など）に「会議の記録は `<Vault>/M
 | 実装 | 役割 | 備考 |
 |---|---|---|
 | Apple SpeechTranscriber（macOS 26） | リアルタイム | Apple Silicon 向け。Intel では `supportedLocales` が空で使えない（`isAvailable` も false。`supportedLocale(equivalentTo:)` は空の一覧と矛盾して `ja_JP` を返すので判定に使わない。スパイク項目 12） |
-| Apple DictationTranscriber（macOS 26） | リアルタイム | Intel で日本語が動く。部分結果は音声から約 0.5 秒遅れで出続け、最後の発話から確定まで約 5 秒。認識は OS の別プロセスで走りアプリの CPU をほぼ使わない。合成音声での CER 0.35（スパイク項目 2）。`isAvailable` は無く、`supportedLocales` で判定する |
-| Apple SFSpeechRecognizer（オンデバイス） | なし（候補から外す） | 予備としての価値なし（スパイク項目 2）。DictationTranscriber と同じモデルで出力も同じ。on-device でも 60 秒ごとに結果が区切られ、isFinal は最後の区間だけなので連結が要る。音声認識の許可と Info.plist の `NSSpeechRecognitionUsageDescription` も余計に要る |
+| Apple DictationTranscriber（macOS 26） | リアルタイム | Intel で日本語が動く。部分結果は音声から約 0.5 秒遅れで出続け、最後の発話から確定まで約 5 秒。認識は OS の別プロセスで走る（アプリ自身のプロセスは CPU 6%。システムプロセス側は未測定）。合成音声での CER 0.35（スパイク項目 2）。`isAvailable` は無く、`supportedLocales` で判定する |
+| Apple SFSpeechRecognizer（オンデバイス） | なし（候補から外す） | 予備としての価値なし（スパイク項目 2）。DictationTranscriber と同じモデルと見られ、出力も同じ。on-device でも 60 秒ごとに結果が区切られ、isFinal は最後の区間だけなので連結が要る。音声認識の許可と Info.plist の `NSSpeechRecognitionUsageDescription` も余計に要る |
 | whisper.cpp | 確定版（と、リアルタイムの選択肢） | ggml モデルをアプリが管理・ダウンロードする。Intel では CPU ビルドを使う（第 3.3 節） |
 
 起動時の既定の組み合わせ。Intel の行はスパイク（項目 1・2）で決めた。Apple Silicon の行は仮（Task 8 未実施。Apple Silicon 機で項目 7・12 と whisper のベンチを済ませて見直す）:
@@ -262,8 +262,8 @@ Claude Code の設定（`CLAUDE.md` など）に「会議の記録は `<Vault>/M
 - マイクとシステム音の二本を別々のセッションで同時に認識する
 - 結果は発話単位で「時刻・話者（自分 / 相手）・本文」として積み上げ、確定前の部分は薄い色で表示する
 - ウィンドウは自動で最下部に追従するが、利用者がスクロールして上を読んでいる間は追従を止め、「最新へ」ボタンを出す
-- DictationTranscriber は音声認識の TCC 許可（`SFSpeechRecognizer.requestAuthorization`）なしで動く（スパイク項目 2。起動元 Orca.app の音声認識許可が未決定の状態で確認。AutoNote.app 単体では計画 02 で再確認する）。SFSpeechRecognizer を候補から外したので、`NSSpeechRecognitionUsageDescription` は再確認で要ると分かった場合だけ足す
-- DictationTranscriber（`.progressiveLongDictation`）は約 70 秒の連続発話を確定 1 件にまとめ、それまで部分結果が伸び続けた（スパイク項目 2）。発話単位の区切りを沈黙での確定、`finalize(through:)`、`.frequentFinalization` のどれで作るかは計画 02 で決める
+- DictationTranscriber は音声認識の TCC 許可（`SFSpeechRecognizer.requestAuthorization`）なしで動く（スパイク項目 2。起動元 Orca.app の音声認識許可が未決定の状態で確認。AutoNote.app 単体では計画 02 の最初の TCC まとめ確認タスクで、`open` 起動で再確認する）。SFSpeechRecognizer を候補から外したので、`NSSpeechRecognitionUsageDescription` は再確認で要ると分かった場合だけ足す
+- DictationTranscriber（`.progressiveLongDictation`）は約 70 秒の連続発話を確定 1 件にまとめ、それまで部分結果が伸び続けた（スパイク項目 2）。発話単位の区切りを沈黙での確定、`finalize(through:)`、`.frequentFinalization` のどれで作るかは計画 04 で決める
 - リアルタイムの出力は固有名詞・英単語の読み・数字が崩れ、句読点が付かない（スパイク項目 2）。目安表示と割り切り、議事録には確定版を使う
 
 ### 6.4 確定版の動作
@@ -725,7 +725,7 @@ autonote: "0.1.0"
 6. `claude -p --output-format json --json-schema` に 1 時間分の文字起こしを流し、`structured_output` が期待どおり返ること — 済（結果表参照）
 7. Apple Silicon 機で SpeechTranscriber の日本語が使えること（`supportedLocales`） — 未（Apple Silicon 機）
 8. whisper.cpp の公式 XCFramework に x86_64 スライスが含まれるか — 済（結果表参照）
-9. 自己署名証明書で署名し直したビルドで、マイクとシステム音声の TCC 許可が保たれるか — 済（結果表参照）。マイクのみ。システム音声の許可の持続は計画 02 で確認
+9. 自己署名証明書で署名し直したビルドで、マイクとシステム音声の TCC 許可が保たれるか — 未確認（結果表参照）。designated requirement が識別子と証明書ハッシュだけで決まることは確認済み。実機での持続はマイク・システム音声とも計画 02 の最初の TCC まとめ確認タスクで `open` 起動 + TCC.db の行で確認
 10. 録音中にマイク機材を抜き、戻したときに `AVAudioEngine` を組み直して同じ録音を続けられるか（第 11.5 節） — 後回し（結果表に再開手順）
 11. `claude -p` で会話履歴を残さない方法（オプションの有無）と、`--strict-mcp-config` で MCP が読み込まれないこと — 済（結果表参照）
 12. SpeechTranscriber に contextual strings 相当の機能があるか — Intel 側は済（結果表参照）。効きの確認は未（Apple Silicon 機）
@@ -764,11 +764,11 @@ autonote: "0.1.0"
 - Intel の確定版（第 6.2 節）: whisper.cpp medium（ベンチ次第で large-v3-turbo）→ whisper.cpp large-v3-turbo。medium より速く CER も低い（項目 1）
 - Intel で whisper.cpp をリアルタイムに使う場合のモデル（第 6.2 節）: 指定なし → small。会議アプリ相当の負荷で実時間比 0.8 未満に収まる最大のモデル（項目 1）
 - Intel のリアルタイム（第 6.2 節）: DictationTranscriber → DictationTranscriber のまま、会議中の目安表示用と明記（CER 0.35。項目 2）
-- SFSpeechRecognizer（第 6.2 節）: リアルタイムの予備 → 候補から外す。同じモデル・60 秒区切り・許可が余計に要る（項目 2）
+- SFSpeechRecognizer（第 6.2 節）: リアルタイムの予備 → 候補から外す。同じモデルと見られる・60 秒区切り・許可が余計に要る（項目 2）
 - SpeechTranscriber の Intel での判定（第 6.2 節）: `isAvailable` だけで判定 → 判定に `supportedLocales` を加える（Intel では `isAvailable` が false で `supportedLocales` も空。`supportedLocale(equivalentTo:)` は判定に使わない）（項目 12）
 - Metal（第 3.3 節）: Intel 内蔵 GPU で未確認 → Intel では使わない（出力が壊れる。項目 1）
 - XCFramework（第 3.2 節）: x86_64 スライスの有無は実装初期に確認 → 含まれる。`bNNNN` プレリリースの zip を使う（項目 8）
-- 自己署名（第 3.4 節）: 未検証 → マイク許可が再ビルド後も保たれることを確認済み。システム音声の許可は計画 02 で確認（項目 9）
+- 自己署名（第 3.4 節）: 未検証 → 未確認のまま。designated requirement が識別子と証明書ハッシュだけで決まることは確認したが、実機での持続は測り方の誤り（実行ファイルの直接起動で TCC の責任プロセスが Terminal.app になっていた疑いが強い）で確認できていない。マイク・システム音声とも計画 02 の最初の TCC まとめ確認タスクで `open` 起動 + TCC.db の行で確認（項目 9）
 - システム音声の許可の確認（第 3.4 節）: 短いテスト録音で無音かを見る → 許可なしは API エラーから検知できない前提にし、コールバックの途絶で許可または音源の確認を案内する（項目 3）
 - システム音の無音検知（第 5.7 節）: 入力レベルが 60 秒ほぼゼロ → 最後のコールバックから 60 秒。無音区間は `AudioTimeStamp` から時間で埋める（項目 3）
 - 3.5mm の検知（第 11.1・11.2 節）: 内蔵オーディオの入力ソース（DataSource）の変化 → 固定 UID `BuiltInHeadphoneInputDevice` の追加・削除（項目 4）
@@ -800,8 +800,8 @@ Intel MacBook Pro / macOS 26.6.2 で、利用者の機材をつないで Core Au
 | 機材 | 名前 | `DeviceUID` | `ModelUID` | `TransportType` | ch | UID の安定性 |
 |---|---|---|---|---|---|---|
 | 内蔵マイク | MacBook Proのマイク | `BuiltInMicrophoneDevice` | `Digital Mic` | BuiltIn | in 1 | 固定（DataSource `imic`） |
-| Shokz 入力 | OpenRun Pro 2 by Shokz | `A8-F5-E1-CC-28-4C:input` | `0 0` | Bluetooth | in 1 | 3 回の接続（再接続 2 回）で同一 |
-| Shokz 出力 | OpenRun Pro 2 by Shokz | `A8-F5-E1-CC-28-4C:output` | `0 0` | Bluetooth | out 2 | 3 回の接続（再接続 2 回）で同一 |
+| Shokz 入力 | OpenRun Pro 2 by Shokz | `A8-F5-E1-xx-xx-xx:input` | `0 0` | Bluetooth | in 1 | 3 回の接続（再接続 2 回）で同一 |
+| Shokz 出力 | OpenRun Pro 2 by Shokz | `A8-F5-E1-xx-xx-xx:output` | `0 0` | Bluetooth | out 2 | 3 回の接続（再接続 2 回）で同一 |
 | 3.5mm 入力 | 外部マイク | `BuiltInHeadphoneInputDevice` | `Codec Input` | BuiltIn | in 1 | 2 回とも同一（DataSource `emic`） |
 | 3.5mm 出力 | 外部ヘッドフォン | `BuiltInHeadphoneOutputDevice` | `Codec Output` | BuiltIn | out 2 | 2 回とも同一（出力 DataSource `hdpn`） |
 
