@@ -14,7 +14,8 @@
 
 ## Global Constraints
 
-- 最低 OS: macOS 26.0。`Package.swift` の platforms は `.macOS("26.0")`、`swiftLanguageModes: [.v6]`
+- 最低 OS: macOS 26.0。`Package.swift` の platforms は `.macOS("26.0")`、`swift-tools-version: 6.2`、`swiftLanguageModes: [.v6]`。ツールチェーンは Swift 6.3（計画 00 と同じ）
+- `autonote` CLI や `AutoNoteApp` から使う `AutoNoteCore` の型・関数は `public` にする（同じパッケージでも別ターゲットからは見えない）
 - Intel（x86_64）と Apple Silicon（arm64）の両方でビルド・動作すること。機種依存の分岐は実行時判定（`isAvailable` など）で行い、`#if arch` で機能を落とさない
 - 署名: 自己署名証明書 `AutoNote Dev`、Bundle ID `com.yutaokoshi.autonote`。`scripts/build-app.sh` を使う。App Sandbox なし、Hardened Runtime なし
 - 音声・文字起こし・議事録・個人の機材識別子（MAC アドレス）をリポジトリにコミットしない。テストのフィクスチャは架空の内容にする
@@ -37,12 +38,14 @@
 | 01 Transcription | `protocol LiveTranscriber` / `BatchTranscriber`（`Transcription/Protocols.swift`）。本計画はこのファイルを変えない |
 | 01 Dictionary | `DictionaryFile { terms; replacements: [Replacement]; fillers }`、`Replacer(_ rules: [Replacement]).apply(_ text: String)`、`HintBudget.fit(_ terms: [String], limit: Int = HintBudget.whisperLimit) -> (included: [String], dropped: [String])`（224 トークン） |
 | 01 Transcript | `TrackTranscription(file: TrackFile, utterances: [Utterance])`（ファイル内相対時刻）、`TranscriptFinalizer(dictionary:fillerRemoval:).finalize(_ parts: [TrackTranscription], source: MeetingSource, engine: String, language: Language) -> (raw: Transcript, final: Transcript)`（startOffset の加算、話者付け、重複除去、置換、フィラー除去までを行う） |
-| 01 Storage | `AppPaths(root:)`、`.root`、`.meetingDirectory(_:)`、`.transcriptFile(_: MeetingID, _: TranscriptKind) -> URL`（`.live` `.raw` `.final`） |
+| 01 Storage | `AppPaths(root:)`、`.root`、`.modelsDirectory`（`models/`）、`.meetingDirectory(_:)`、`.transcriptFile(_: MeetingID, _: TranscriptKind) -> URL`（`.live` `.raw` `.final`） |
 | 01 Settings | `defaultLanguage`、`liveEngine` / `liveModel`、`finalEngine` / `finalModel`（`String?`。nil は機種別の既定）、`fillerRemoval` |
 | 01 TestSupport | `TemporaryDirectory.make()`、`u(_ seconds:_ speaker:_ text:end:)`（`isFinal: true`）、`FakeLiveTranscriber(script: [Utterance])`（`start` で台本を流す、`fedChunks`、`startedWith`）、`FakeBatchTranscriber(results: [String: [Utterance]], failure: FakeError?)`（キーはファイル名、`calls`） |
-| 01 CLI | `enum DevCommands { static func run(_ args: [String]) async -> Int32 }`（`Sources/autonote/DevCommands.swift`）と E2E の `autonote_bin()` |
-| 02 Audio | `AudioChunk(track:samples:start:hostTime:)`（16 kHz mono Int16、`start` は会議タイムライン）、`WAVFile.header(sampleRate:channels:bitsPerSample:dataBytes:)`・`.info(_:)`・`.readSamples(_:)`、`SegmentMerger.merge(_ manifest: Manifest, track: Track, meetingDirectory: URL) throws -> [TrackFile]`（連続する分割を `merged/<track>-<n>.wav` につなぎ、一時停止で分ける） |
-| 03 CLI | `autonote dev devices`（Task 13 で機材の見え方を見るのに使う） |
+| 01 CLI | `enum DevCommands { static func run(_ args: [String]) async -> Int32 }`（`Sources/autonote/DevCommands.swift`）と E2E の `AUTONOTE_CLI`（`swift build` 済みの `autonote` のパス） |
+| 02 Audio | `AudioChunk(track:samples:start:hostTime:)`（16 kHz mono Int16、`start` は会議タイムライン）、`WAVFile.header(sampleRate:channels:bitsPerSample:dataBytes:)`・`.info(_:)`・`.readSamples(_:)`、`SegmentMerger.merge(_ manifest: Manifest, track: Track, meetingDirectory: URL) throws -> [TrackFile]`（連続する分割を `merged/<track>-<n>.wav` につなぎ、一時停止で分ける）。取り込み音声は `TrackFile(track: .mic, relativePath: "tracks/import-000.wav", …)` の 1 トラック（overview §3） |
+| 03 CLI | `autonote dev devices`（Task 12 で機材の見え方を見るのに使う） |
+
+公開範囲: `autonote` CLI（Task 8）と計画 05・06 から使う型・関数は `public` にする。対象は `MachineKind`、`TranscriptionError`、`PCMAudio`、`WhisperModel` / `WhisperModelCatalog` / `ModelManager`、`EngineKind` / `EngineRole` / `EngineChoice` / `EngineEntry` / `EngineCatalog` / `AppleSpeechCapabilities`、`TranscriberFactory`、`BatchGate`、`WhisperBatchTranscriber` / `WhisperLiveTranscriber` / `AppleLiveTranscriber`（と 2 つの typealias）、`SegmentationStrategy`、`LiveFeed`、`FinalTranscriptionRunner` / `FinalTranscriptResult`。下の Interfaces では `public` を省いて書く。`WhisperCore` まわりと `ChunkPlanner` などの内部部品は internal のまま（テストは `@testable import`）
 
 ## Review Focus
 
@@ -194,12 +197,12 @@ git commit -m "feat(transcription): add PCM helpers, timeline mapper and silence
 - Test: `Tests/AutoNoteCoreTests/Transcription/ModelManagerTests.swift`
 
 **Interfaces:**
-- Consumes: `AppPaths`（計画 01）
+- Consumes: `AppPaths.modelsDirectory`（計画 01。アプリでは `ModelManager(directory: paths.modelsDirectory)` で作る）
 - Produces:
   - `struct WhisperModel: Codable, Equatable, Sendable { var name: String; var url: URL; var sizeBytes: Int64; var sha256: String; var fileName: String { "ggml-\(name).bin" } }`、`enum WhisperModelCatalog { static let all: [WhisperModel] }`（base、small、large-v3-turbo、large-v3-turbo-q5_0）
   - `protocol ModelDownloading: Sendable { func download(_ url: URL, to destination: URL, progress: @Sendable @escaping (Int64, Int64) -> Void) async throws }`、実装 `struct URLSessionModelDownloader: ModelDownloading`（`URLSession.download(from:delegate:)`、`didWriteData` で進捗）
   - `enum ModelError: Error, Equatable { case unknownModel(String), sizeMismatch(expected: Int64, actual: Int64), checksumMismatch }`
-  - `actor ModelManager { init(directory: URL, catalog: [WhisperModel] = WhisperModelCatalog.all, downloader: any ModelDownloading = URLSessionModelDownloader()); static func defaultDirectory(_ paths: AppPaths) -> URL /* <root>/models */; func installed() -> [WhisperModel]; func fileURL(for name: String) -> URL?; func download(_ name: String, progress: @Sendable @escaping (Double) -> Void) async throws -> URL; func delete(_ name: String) throws; func verify(_ name: String) async throws -> Bool }`
+  - `actor ModelManager { init(directory: URL, catalog: [WhisperModel] = WhisperModelCatalog.all, downloader: any ModelDownloading = URLSessionModelDownloader()); func installed() -> [WhisperModel]; func fileURL(for name: String) -> URL?; func download(_ name: String, progress: @Sendable @escaping (Double) -> Void) async throws -> URL; func delete(_ name: String) throws; func verify(_ name: String) async throws -> Bool }`
   - 規律: 取得は `<fileName>.partial` に書き、サイズと SHA-256 が一致したら原子的に改名。失敗・不一致・キャンセルでは `.partial` を消す。`installed()` はサイズ一致だけで判定する（1.6 GB の SHA を起動のたびに計算しない［私の判断］）。同じモデルの同時取得は 1 本にまとめる
 
 - [ ] **Step 1: カタログの値を集める**
@@ -260,7 +263,7 @@ git commit -m "feat(transcription): add whisper model manager with checksum veri
   - `enum LocaleMapping { static func locale(for: Language) -> Locale /* ja→ja-JP, en→en-US, auto→ja-JP */; static func contains(_ list: [Locale], _ target: Locale) -> Bool /* 言語コードと地域で比較 */ }`。Apple のエンジンは言語固定なので `auto` は日本語にする［私の判断。要件書 §3.1 の日本語メイン］
   - `struct EngineCatalog: Sendable { init(machine: MachineKind, speech: any SpeechCapabilityProbing, installedModels: @Sendable @escaping () async -> [String]); static func defaults(for: MachineKind) -> (live: EngineChoice, batch: EngineChoice, whisperLiveModel: String); func entries(role: EngineRole, language: Language) async -> [EngineEntry]; func resolve(role: EngineRole, language: Language, override: EngineChoice?) async -> EngineChoice? }`
 
-既定（要件書 §6.2）: Intel はリアルタイム `dictation`、確定版 `whisper("large-v3-turbo")`、whisper をリアルタイムに選んだときのモデル `small`。Apple Silicon は**仮**でリアルタイム `speech`、確定版 `whisper("large-v3-turbo")`、whisper リアルタイム `small`（Task 13 で見直す）。
+既定（要件書 §6.2）: Intel はリアルタイム `dictation`、確定版 `whisper("large-v3-turbo")`、whisper をリアルタイムに選んだときのモデル `small`。Apple Silicon は**仮**でリアルタイム `speech`、確定版 `whisper("large-v3-turbo")`、whisper リアルタイム `small`（Task 12 で見直す）。
 
 判定: dictation は `dictationLocales` に言語の Locale がある。speech は `isAvailable && !locales.isEmpty` かつ Locale がある。whisper は `installedModels()` にモデル名がある。entries の live は dictation、speech、カタログの各モデルの whisper。batch は whisper だけ（Apple の確定版は持たない。確定版失敗時のリアルタイム版での代替は計画 05）。
 `resolve` の順: 使える override → 使える既定 → live なら dictation、speech、whisper(既定の whisperLiveModel)、取得済み whisper の順 / batch なら取得済みの large-v3-turbo、large-v3-turbo-q5_0、small、base の順 → どれも無ければ nil。
@@ -320,11 +323,11 @@ git commit -m "feat(transcription): add engine catalog with runtime availability
   - `struct WhisperRunRequest: Sendable { var samples: [Float]; var offsetSeconds: Double; var language: Language; var prompt: String?; var mode: WhisperDecodeMode }`、`enum WhisperRunOutcome: Equatable, Sendable { case completed, aborted }`
   - `protocol WhisperCore: Sendable { func run(_ r: WhisperRunRequest, onSegment: @Sendable @escaping (WhisperSegment, [TimedToken]) -> Void, onProgress: @Sendable @escaping (Double) -> Void, shouldAbort: @Sendable @escaping () -> Bool) async throws -> WhisperRunOutcome }`
   - `final class WhisperContext: WhisperCore, @unchecked Sendable { init(modelURL: URL, machine: MachineKind, threads: Int) throws }`。モデル（`whisper_context`）は URL ごとに 1 つを共有し、インスタンスごとに `whisper_init_state` で state を持って `whisper_full_with_state` を呼ぶ（2 トラックで同じモデルを 2 回読まない）。`whisper_full` は専用の `DispatchQueue`（qos `.utility`）で回し、協調スレッドを塞がない。`use_gpu` は `machine == .appleSilicon` のときだけ true（Intel の Metal は出力が壊れる。要件書 §3.3）
-  - `final class BatchGate: Sendable { init(); func pause(); func resume(); var isPaused: Bool { get }; func waitWhilePaused() async }`（`Mutex` で状態と待ち手を持つ）。計画 05 の待ち行列が録音開始で `pause()`、終了で `resume()` を呼ぶ（要件書 §13）
+  - `actor BatchGate { init(); func pause(); func resume(); func waitIfPaused() async; nonisolated var isPaused: Bool { get } }`（overview §8b。`isPaused` は whisper の中断判定が同期で読むための追加で、状態は `Mutex` に持つ。計画 05 は使わない）。計画 05 の待ち行列は録音中 `pause()`、録音が終わったら `resume()` を呼ぶだけで、取り消しは使わない（要件書 §13）
   - `enum RepetitionFilter { static let hallucinations: [String]; static func clean(_ s: [WhisperSegment]) -> [WhisperSegment] }`
   - `enum WhisperPrompt { static func make(hints: [String]) -> String? }`（`HintBudget.fit(hints).included.joined(separator: "、")`、空なら nil）
-  - `actor WhisperBatchTranscriber: BatchTranscriber { init(core: any WhisperCore, gate: BatchGate? = nil) }`
-  - `final class FakeWhisperCore: WhisperCore`（TestSupport）: `init(segments: [WhisperSegment], afterFirstSegment: (@Sendable () -> Void)? = nil, delay: Duration = .zero)` と `init(fixedText: String)`（live 用。どの窓にも本文 1 つと窓の先頭からのトークン 1 つを返す）。各 run で `offsetSeconds` 以降に始まるセグメントを順に出し、1 つ出すごとに `shouldAbort` を見て true なら `.aborted` を返す。`requests: [WhisperRunRequest]`、`runCount: Int` を記録する。返す `Utterance` は `speaker: .unknown`、`isFinal: true`、ファイル内相対時刻（話者と startOffset は Task 11 が付ける）
+  - `actor WhisperBatchTranscriber: BatchTranscriber { init(core: any WhisperCore, gate: BatchGate) }`
+  - `final class FakeWhisperCore: WhisperCore`（TestSupport）: `init(segments: [WhisperSegment], delay: Duration = .zero)`（セグメントを 1 つ出すごとに delay 待つ） と `init(fixedText: String)`（live 用。どの窓にも本文 1 つと窓の先頭からのトークン 1 つを返す）。各 run で `offsetSeconds` 以降に始まるセグメントを順に出し、1 つ出すごとに `shouldAbort` を見て true なら `.aborted` を返す。`requests: [WhisperRunRequest]`、`runCount: Int`、`emittedCount: Int` を記録する。返す `Utterance` は `speaker: .unknown`、`isFinal: true`、ファイル内相対時刻（話者と startOffset は Task 11 が付ける）
 
 パラメータ（`WhisperContext` が `WhisperRunRequest` から組む）: batch は `WHISPER_SAMPLING_BEAM_SEARCH`・beam 5・best_of 5（項目 1 のベンチと同じ）、スレッド `min(4, max(1, activeProcessorCount / 2))`、`language` は `"ja"` / `"en"` / `"auto"`、`no_context = true`、`suppress_blank`・`suppress_nst = true`、`print_*` はすべて false、`offset_ms` は `offsetSeconds`、`abort_callback`・`progress_callback`・`new_segment_callback` を結ぶ。
 
@@ -335,10 +338,12 @@ git commit -m "feat(transcription): add engine catalog with runtime availability
 ```
 offset = 0; kept = []
 loop {
-  try Task.checkCancellation(); await gate?.waitWhilePaused()
-  outcome = core.run(request(offset), onSegment: kept に追加,
+  try Task.checkCancellation(); await gate.waitIfPaused()
+  stop = false
+  outcome = core.run(request(offset),
+                     onSegment: { kept に追加; if gate.isPaused { stop = true } },   // セグメント境界で一時停止を見る
                      onProgress: p → progress((offset + p * (total - offset)) / total),
-                     shouldAbort: Task.isCancelled || gate?.isPaused == true)
+                     shouldAbort: Task.isCancelled || stop)
   if outcome == .completed { break }
   if Task.isCancelled { throw CancellationError() }
   offset = kept.last?.end ?? offset        // 一時停止: 最後に完了したセグメントの終わりから再開
@@ -356,19 +361,21 @@ Run: `grep -n 'carry_initial_prompt\|n_max_text_ctx\|no_context' tools/whisper.c
 ```swift
 @Test func segmentsBecomeFinalUtterances() async throws {
     let core = FakeWhisperCore(segments: [.init(start: 0, end: 2, text: "こんにちは"), .init(start: 2, end: 4, text: "よろしく")])
-    let u = try await WhisperBatchTranscriber(core: core).transcribe(file: try wavFile(seconds: 4), language: .ja, hints: [], progress: { _ in })
+    let u = try await WhisperBatchTranscriber(core: core, gate: BatchGate()).transcribe(file: try wavFile(seconds: 4), language: .ja, hints: [], progress: { _ in })
     #expect(u.map(\.start.seconds) == [0, 2]); #expect(u.allSatisfy { $0.isFinal && $0.speaker == .unknown })
 }
 @Test func progressIsMonotonicAndEndsAtOne() async throws
-@Test func cancellationStopsAndThrows() async throws       // 遅い fake を Task で走らせ cancel → CancellationError、core.runCount == 1
+@Test func cancellationStopsAndThrows() async throws       // 遅い fake を Task で走らせ cancel → CancellationError、core.runCount == 1（計画 05 は使わないが protocol の async throws として守る）
 @Test func pauseAbortsAndResumesFromLastSegmentEnd() async throws {
-    // 1 本目は seg(0–3) を出した直後に一時停止され .aborted。再開後の 2 本目は offset 3 から seg(3–6) だけを出す
+    // 1 つ目が出た後に pause → 2 つ目（2–4）の境界で .aborted。resume 後の 2 本目は offset 4 から 3 つ目だけを出す
     let gate = BatchGate()
-    let core = FakeWhisperCore(segments: [.init(start: 0, end: 3, text: "前半"), .init(start: 3, end: 6, text: "後半")], afterFirstSegment: { gate.pause() })
+    let core = FakeWhisperCore(segments: [.init(start: 0, end: 2, text: "一"), .init(start: 2, end: 4, text: "二"), .init(start: 4, end: 6, text: "三")], delay: .milliseconds(200))
     let t = Task { try await WhisperBatchTranscriber(core: core, gate: gate).transcribe(file: try wavFile(seconds: 6), language: .ja, hints: [], progress: { _ in }) }
-    try await waitUntil { gate.isPaused }; try await Task.sleep(for: .milliseconds(50)); gate.resume()
-    let u = try await t.value
-    #expect(core.requests.map(\.offsetSeconds) == [0, 3]); #expect(u.map(\.text) == ["前半", "後半"])
+    try await waitUntil { core.emittedCount >= 1 }; await gate.pause()
+    try await waitUntil { core.emittedCount >= 2 }; try await Task.sleep(for: .milliseconds(300))
+    #expect(core.runCount == 1)                           // 一時停止中は 2 本目を始めない
+    await gate.resume(); let u = try await t.value
+    #expect(core.requests.map(\.offsetSeconds) == [0, 4]); #expect(u.map(\.text) == ["一", "二", "三"])
 }
 @Test func hintsBecomePrompt() async throws        // hints ["所沢", "Kubernetes"] → core.requests[0].prompt == "所沢、Kubernetes"
 @Test func noHintsNoPrompt() async throws          // prompt == nil
@@ -501,7 +508,7 @@ git commit -m "feat(transcription): add chunked whisper live transcriber"
 
 - [ ] **Step 2: 失敗を確認** — `swift test --filter 'UtteranceAssemblerTests|AppleAudioBuffersTests|SegmentationStrategyTests'` で FAIL
 - [ ] **Step 3: 実装**。`DictationTranscriber.ReportingOption.frequentFinalization` と `SpeechTranscriber` の preset 名は SDK でコンパイルして確かめ、名前が違えば SDK の名前を使って Adapter の冒頭コメントに残す
-- [ ] **Step 4: 通過を確認** — 同じコマンドで PASS。実際の認識は Task 8 の E2E `check_dev_transcribe_dictation` で確かめる（認識結果の中身はテストで固定しない）
+- [ ] **Step 4: 通過を確認** — 同じコマンドで PASS。実際の認識は Task 8 の E2E `04.2` で確かめる（認識結果の中身はテストで固定しない）
 - [ ] **Step 5: コミット**
 
 ```bash
@@ -522,19 +529,19 @@ git commit -m "feat(transcription): add SpeechAnalyzer-based dictation and speec
 **Interfaces:**
 - Consumes: Task 3〜7 のすべて
 - Produces:
-  - `struct TranscriberFactory: Sendable { init(models: ModelManager, machine: MachineKind); func makeLive(_ c: EngineChoice) async throws -> any LiveTranscriber; func makeBatch(_ c: EngineChoice, gate: BatchGate?) async throws -> any BatchTranscriber }`。モデル未取得は `TranscriptionError.modelMissing`、Apple を batch に求めたら `.engineUnavailable`
+  - `struct TranscriberFactory: Sendable { init(models: ModelManager, machine: MachineKind); func makeLive(_ c: EngineChoice) async throws -> any LiveTranscriber; func makeBatch(_ c: EngineChoice, gate: BatchGate) async throws -> any BatchTranscriber }`。モデル未取得は `TranscriptionError.modelMissing`、Apple を batch に求めたら `.engineUnavailable`
   - CLI（利用者向けの使い方には出さない。overview §7）:
     - `autonote dev engines` → 標準出力に JSON 1 つ: `machine`、`speech_transcriber: {is_available, supported_locales}`、`dictation: {supported_locales}`（件数）、`live` / `batch`（`EngineEntry` の配列）、`defaults`、`resolved`（`Settings` の上書きを反映した結果）
     - `autonote dev transcribe <音声> --engine dictation|speech|whisper|whisper-live [--model <名前> | --model-path <ggml.bin>] [--lang ja|en|auto] [--hints "語1,語2"] [--realtime] [--segmentation default|frequent|silence] [--max-seconds N] [--gpu on|off] [--text-out <path>]`、`autonote dev transcribe --mic --engine … --seconds N`。発話ごとに JSON 1 行 `{"wall":秒,"start":秒,"end":秒|null,"final":bool,"text":"…"}`（`wall` は入力開始からの壁時計秒）、最後に `{"summary":{"engine":…,"audio_seconds":…,"elapsed":…,"rtf":…,"finals":n}}`。`--text-out` は確定文を改行なしで連結して書く（`scripts/cer.py` 用）。live のエンジンはファイルを 0.1 秒の `AudioChunk` にして渡し、`--realtime` なら 0.1 秒ずつ待つ。終了コード: 成功 0、エラー 1、エンジンが使えない 3（stderr に `unavailable: <理由>`）
     - `autonote dev models list|download <名前>|delete <名前>`（`list` は JSON、`download` は進捗を stderr に）
-  - `--mic` は `DevMicCapture`（スパイクの `MicCapture` と同じく既定入力を `AVAudioEngine` で取り 16 kHz mono Int16 に変換。開発用なので計画 02 に依存しない）。これが Task 13 の「SpeechTranscriber の live/file 経路」になる（AppleSpeechProbe に足す代わりに本体の `SpeechLiveTranscriber` を使う）
+  - `--mic` は `DevMicCapture`（スパイクの `MicCapture` と同じく既定入力を `AVAudioEngine` で取り 16 kHz mono Int16 に変換。開発用なので計画 02 に依存しない）。これが Task 12 の「SpeechTranscriber の live/file 経路」になる（AppleSpeechProbe に足す代わりに本体の `SpeechLiveTranscriber` を使う）
 
 - [ ] **Step 1: 失敗するテストを書く**
 
 ```swift
 @Test func batchRejectsAppleEngines() async {
     let f = TranscriberFactory(models: ModelManager(directory: try TemporaryDirectory.make(), catalog: []), machine: .intel)
-    await #expect(throws: TranscriptionError.self) { _ = try await f.makeBatch(.dictation, gate: nil) }
+    await #expect(throws: TranscriptionError.self) { _ = try await f.makeBatch(.dictation, gate: BatchGate()) }
 }
 @Test func missingModelIsReported() async   // makeBatch(.whisper("small")) → TranscriptionError.modelMissing("small")
 @Test func liveDictationIsConstructible() async throws   // makeLive(.dictation) が DictationLiveTranscriber を返す（start は呼ばない）
@@ -543,23 +550,23 @@ git commit -m "feat(transcription): add SpeechAnalyzer-based dictation and speec
 - [ ] **Step 2: 失敗を確認** — `swift test --filter TranscriberFactoryTests` で FAIL
 - [ ] **Step 3: `TranscriberFactory` と 4 つの CLI ファイルを実装**し、`DevCommands.run` に `engines` `transcribe` `models` を足す
 - [ ] **Step 4: 通過を確認** — `swift test --filter TranscriberFactoryTests` で PASS
-- [ ] **Step 5: 手で動かす**
-Run: `swift build && .build/debug/autonote dev engines | jq .`
+- [ ] **Step 5: 手で動かす**（以下の手動コマンドは `export AUTONOTE_CLI=.build/debug/autonote` してから打つ。E2E では計画 01 の補助が同じ変数を用意する）
+Run: `swift build && "$AUTONOTE_CLI" dev engines | jq .`
 Expected: Intel 機では `machine: "intel"`、`speech_transcriber.is_available: false`、`resolved.live.kind: "dictation"`
 
-Run: `.build/debug/autonote dev transcribe tools/samples/ja-5min.wav --engine whisper --model-path tools/whisper.cpp/models/ggml-small.bin --text-out /tmp/autonote-small.txt | tail -1 && python3 -I scripts/cer.py /tmp/autonote-small.txt scripts/samples/ja-5min.txt`
+Run: `"$AUTONOTE_CLI" dev transcribe tools/samples/ja-5min.wav --engine whisper --model-path tools/whisper.cpp/models/ggml-small.bin --text-out /tmp/autonote-small.txt | tail -1 && python3 -I scripts/cer.py /tmp/autonote-small.txt scripts/samples/ja-5min.txt`
 Expected: CER ≤ 0.30（項目 1 のソースビルドは 0.2782）。`--hints "AutoNote,所沢,Kubernetes"` を付けても ≤ 0.30。`--lang auto` でも回し、`ja` との CER の差を記録する（要件書 §6.4「`language=ja` と `auto` の差はベンチで確かめる」）。RTF と CER を結果表の項目 8 の末尾に「XCFramework（x86_64 スライス）の small: RTF x、CER y」と 1 行で足す（項目 8 で未測定だった点）
 
-Run（ネットワークがあれば）: `.build/debug/autonote dev models download base && .build/debug/autonote dev models list | jq '.[] | select(.name=="base")'`
+Run（ネットワークがあれば）: `"$AUTONOTE_CLI" dev models download base && "$AUTONOTE_CLI" dev models list | jq '.[] | select(.name=="base")'`
 Expected: `installed: true`
-- [ ] **Step 6: E2E に 4 項目を足す**（計画 01〜03 が番号 16 以降を使うので番号は付けず、計画 03 と同じく名前で書く。実行ファイルは計画 01 の `autonote_bin()`。CHECKS の末尾に追加）
-  - `check_dev_engines`（`CURRENT="dev engines: 機種・エンジン一覧の JSON"`）: `jq -e '(.machine == "intel" or .machine == "appleSilicon") and (.live | length > 0) and .defaults.batch.model == "large-v3-turbo"'`
-  - `check_dev_transcribe_dictation`（`"dev transcribe dictation: say の短い WAV"`）: `say -v Kyoko --file-format=WAVE --data-format=LEI16@16000 -o "${WORK}/short.wav" "本日の定例を始めます。議題は三つです。"`。Kyoko が無い・終了コード 3 なら SKIP。確定が 1 件以上で本文が空でなければ PASS（内容は見ない）。60 秒で打ち切り
-  - `check_dev_transcribe_whisper`（`"dev transcribe whisper: base で先頭 10 秒"`）: `--model-path tools/whisper.cpp/models/ggml-base.bin --max-seconds 10`、入力 `tools/samples/ja-5min.wav`（無ければ「scripts/make-sample-audio.sh」と出して SKIP）。確定 1 件以上・全 `start < 10.5` で PASS
-  - `check_dev_transcribe_whisper_live`（`"dev transcribe whisper-live: base で先頭 10 秒"`）: 同じ条件で final が 1 件以上
+- [ ] **Step 6: E2E に 4 項目を足す**（項目名は overview §7 の「計画番号.連番 名前」。CLI は計画 01 の `AUTONOTE_CLI` で呼ぶ。CHECKS の末尾に追加）
+  - `check_dev_engines`（`CURRENT="04.1 dev engines が機種とエンジン一覧の JSON を出す"`）。`"${AUTONOTE_CLI}" dev engines` の出力に: `jq -e '(.machine == "intel" or .machine == "appleSilicon") and (.live | length > 0) and .defaults.batch.model == "large-v3-turbo"'`
+  - `check_dev_transcribe_dictation`（`CURRENT="04.2 dev transcribe dictation が say の短い WAV を文字にする"`）: `say -v Kyoko --file-format=WAVE --data-format=LEI16@16000 -o "${WORK}/short.wav" "本日の定例を始めます。議題は三つです。"`。Kyoko が無い・終了コード 3 なら SKIP。確定が 1 件以上で本文が空でなければ PASS（内容は見ない）。60 秒で打ち切り
+  - `check_dev_transcribe_whisper`（`CURRENT="04.3 dev transcribe whisper が base で先頭 10 秒を文字にする"`）: `--model-path tools/whisper.cpp/models/ggml-base.bin --max-seconds 10`、入力 `tools/samples/ja-5min.wav`（無ければ「scripts/make-sample-audio.sh」と出して SKIP）。確定 1 件以上・全 `start < 10.5` で PASS
+  - `check_dev_transcribe_whisper_live`（`CURRENT="04.4 dev transcribe whisper-live が base で先頭 10 秒を文字にする"`）: 同じ条件で final が 1 件以上
 
 Run: `scripts/e2e-check.sh`
-Expected: FAIL 0（新しい 4 件は PASS か条件付き SKIP）
+Expected: FAIL 0（`04.1`〜`04.4` は PASS か条件付き SKIP）
 - [ ] **Step 7: コミット**
 
 ```bash
@@ -587,13 +594,13 @@ git commit -m "feat(cli): add dev engines, dev transcribe and dev models"
 Run: `scripts/make-sample-audio.sh && afinfo tools/samples/ja-segments.wav | grep duration`
 Expected: 50〜90 秒
 - [ ] **Step 2: 3 案を同じ音声で回す**（実時間で流すので 1 案 1〜1.5 分）
-Run: `for s in default frequent silence; do .build/debug/autonote dev transcribe tools/samples/ja-segments.wav --engine dictation --realtime --segmentation $s > tools/seg-$s.jsonl; done`
+Run: `for s in default frequent silence; do "$AUTONOTE_CLI" dev transcribe tools/samples/ja-segments.wav --engine dictation --realtime --segmentation $s > tools/seg-$s.jsonl; done`
 - [ ] **Step 3: 集計する**
 Run: `for s in default frequent silence; do jq -s --arg s $s '[.[] | select(.final == true)] | {s: $s, finals: length, max_len: (map(.end - .start) | max), median_latency: (map(.wall - .end) | sort | .[length/2|floor])}' tools/seg-$s.jsonl; done`
 
 判定基準: (1) 確定件数 8〜13（理想 10。文の区切りにおおむね合う） (2) 最長の発話 ≤ 15 秒（スパイクでは 70 秒が 1 件にまとまった） (3) 確定遅延の中央値 ≤ 3.0 秒（`wall − end`。要件書 §17 の体感 5 秒以内に余裕を残す）。3 つとも満たす案のうち `default` → `frequent` → `silence` の順に採る（自前の処理が少ない順）。どれも満たさなければ最長の発話が最も短い案を採り、満たさなかった基準を記録する。
 - [ ] **Step 4: 👤 利用者（任意）: マイクで自然な話し方を 1 回**
-Run: `.build/debug/autonote dev transcribe --mic --engine dictation --segmentation <採った案> --seconds 60`
+Run: `"$AUTONOTE_CLI" dev transcribe --mic --engine dictation --segmentation <採った案> --seconds 60`
 Expected: 60 秒話して、15 秒を超える発話が無い。利用者がいなければ飛ばし、結果表に「マイク確認は未」と書く
 - [ ] **Step 5: 失敗するテストを書く**
 
@@ -605,7 +612,7 @@ Expected: 60 秒話して、15 秒を超える発話が無い。利用者がい�
 - [ ] **Step 7: `current` を採った案にする**
 - [ ] **Step 8: 通過を確認** — 同じコマンドで PASS
 - [ ] **Step 9: 結果表の項目 2 に追記する**
-項目 2 の末尾に「- 発話の区切り（計画 04 Task 9、<日付>、Intel、DictationTranscriber、`tools/samples/ja-segments.wav`）」として 3 案の表（確定件数・最長・遅延中央値）、採った案と理由、マイク確認の有無を書く。SpeechTranscriber 側は Task 13。
+項目 2 の末尾に「- 発話の区切り（計画 04 Task 9、<日付>、Intel、DictationTranscriber、`tools/samples/ja-segments.wav`）」として 3 案の表（確定件数・最長・遅延中央値）、採った案と理由、マイク確認の有無を書く。SpeechTranscriber 側は Task 12。
 - [ ] **Step 10: コミット**
 
 ```bash
@@ -623,10 +630,11 @@ git commit -m "feat(transcription): choose utterance segmentation from measured 
 - Test: `Tests/AutoNoteCoreTests/Transcription/LiveFeedTests.swift`
 
 **Interfaces:**
-- Consumes: `LiveTranscriber`、`FakeLiveTranscriber`、`Replacer`、`Transcript`・`Bookmark`・`AudioChunk`、`AutoNoteJSON.encoder()`（計画 01・02）
+- Consumes: `LiveTranscriber`、`FakeLiveTranscriber`、`Replacer`、`Settings`（`defaultLanguage` `liveEngine` `liveModel`）、`Transcript`・`Bookmark`・`AudioChunk`、`AutoNoteJSON.encoder()`（計画 01・02）、`EngineCatalog`・`EngineChoice`（Task 4）、`TranscriberFactory`（Task 8）
 - Produces: `actor LiveFeed`
-  - `static let pauseMarkerText = "── 一時停止 ──"`（要件書 §5.4）、`static func bookmarkMarkerText(_ note: String?) -> String`（`"── ブックマーク ──"` / `"── ブックマーク: <note> ──"`［私の判断］）、`static func isMarker(_ u: Utterance) -> Bool`
-  - `init(transcribers: [Track: any LiveTranscriber], replacer: Replacer, liveJSON: URL, engineName: String, saveInterval: Duration = .seconds(5))`（`liveJSON` は呼び手が `paths.transcriptFile(id, .live)` を渡す）
+  - `static let pauseMarkerText = "── 一時停止 ──"`（要件書 §5.4）、`static func bookmarkMarkerText(_ note: String?) -> String`（`"── ブックマーク ──"` / `"── ブックマーク: <note> ──"`［私の判断］）、`static func isMarker(_ u: Utterance) -> Bool`（静的関数。計画 06 は印をこれで見分ける。計画 01 の `Utterance` は変えない。overview §8b）
+  - `init(transcribers: [Track: any LiveTranscriber], replacer: Replacer, liveJSON: URL, engineName: String, saveInterval: Duration = .seconds(5))`（`liveJSON` は呼び手が `paths.transcriptFile(id, .live)` を渡す）、`nonisolated let engineName: String`
+  - 組み立て関数（overview §8b。計画 06 の `AppEnvironment.make` が呼ぶ）: `static func make(settings: Settings, catalog: EngineCatalog, factory: TranscriberFactory, dictionary: DictionaryFile, liveJSON: URL) async throws -> LiveFeed`。`catalog.resolve(role: .live, language: settings.defaultLanguage, override: EngineChoice.fromSettings(kind: settings.liveEngine, model: settings.liveModel, role: .live, machine:))` の結果で mic・system それぞれに `factory.makeLive` を呼び、`Replacer(dictionary.replacements)`、`engineName = choice.displayName` で作る。使えるエンジンが無ければ `TranscriptionError.engineUnavailable`。overview の `make(settings:catalog:)` の後ろに、どうしても要る 3 引数（生成口・辞書・保存先）を足した形
   - `func start(language: Language, hints: [String]) async throws -> AsyncStream<[Utterance]>`（片方の start が失敗しても続け、両方失敗したときだけ throw）
   - `var failures: [Track: String] { get }`、`func feed(_ chunk: AudioChunk) async`（`chunk.track` で振り分ける）、`func pause(at: TimelineTime)`、`func resume(at: TimelineTime)`、`func bookmark(_ b: Bookmark)`、`func snapshot() -> [Utterance]`、`func finish() async throws -> Transcript`
 
@@ -650,6 +658,8 @@ git commit -m "feat(transcription): choose utterance segmentation from measured 
 @Test func liveJSONWrittenOnFinish() async throws                 // AutoNoteJSON.decoder() で読んだ Transcript: 確定のみ、engine "Apple DictationTranscriber"、language .ja
 @Test func oneTrackFailingKeepsOther() async throws               // sysError あり → start は成功、failures[.system] != nil、mic の発話は流れる
 @Test func bothTracksFailingThrows() async
+@Test func makeResolvesLiveEngineFromSettings() async throws  // Intel の FakeSpeechCapabilities、settings.liveEngine nil → engineName "Apple DictationTranscriber"。liveEngine "speech"（Intel では不可）でも dictation に落ちる
+@Test func makeThrowsWhenNoLiveEngine() async                     // dictation も speech も不可・モデル無し → TranscriptionError.engineUnavailable
 @Test func feedRoutesByTrack() async throws                       // feed(chunk(silence(0.1), at: 0, track: .mic)) → mic.fedChunks.count == 1、sys.fedChunks.isEmpty
 ```
 
@@ -668,16 +678,16 @@ git commit -m "feat(transcription): add LiveFeed merging both tracks with marker
 ### Task 11: 確定版（結合済みファイルごとの文字起こし → raw / final）
 
 **Files:**
-- Create: `Sources/AutoNoteCore/Transcription/Batch/FinalTranscription.swift`
-- Test: `Tests/AutoNoteCoreTests/Transcription/FinalTranscriptionTests.swift`
+- Create: `Sources/AutoNoteCore/Transcription/Batch/FinalTranscriptionRunner.swift`
+- Test: `Tests/AutoNoteCoreTests/Transcription/FinalTranscriptionRunnerTests.swift`
 
 **Interfaces:**
-- Consumes: `BatchTranscriber`・`FakeBatchTranscriber`、`TrackTranscription`・`TranscriptFinalizer`、`DictionaryFile`、`Manifest`、`AppPaths.meetingDirectory(_:)`・`.transcriptFile(_:_:)`（計画 01）、`SegmentMerger.merge(_:track:meetingDirectory:)`・`WAVFile.info`（計画 02）
+- Consumes: `BatchGate`（Task 5）、`BatchTranscriber`・`FakeBatchTranscriber`、`TrackTranscription`・`TranscriptFinalizer`、`DictionaryFile`、`Manifest`、`AppPaths.meetingDirectory(_:)`・`.transcriptFile(_:_:)`（計画 01）、`SegmentMerger.merge(_:track:meetingDirectory:)`・`WAVFile.info`（計画 02）
 - Produces:
   - `struct FinalTranscriptResult: Sendable { var raw: Transcript; var final: Transcript; var rawURL: URL; var finalURL: URL }`
-  - `struct FinalTranscription: Sendable { init(transcriber: any BatchTranscriber, engineName: String, paths: AppPaths); func run(manifest: Manifest, dictionary: DictionaryFile, fillerRemoval: Bool, progress: @Sendable @escaping (Double) -> Void) async throws -> FinalTranscriptResult }`
+  - `struct FinalTranscriptionRunner: Sendable { init(transcriber: any BatchTranscriber, engineName: String, paths: AppPaths, gate: BatchGate); func run(manifest: Manifest, dictionary: DictionaryFile, fillerRemoval: Bool, progress: @Sendable @escaping (Double) -> Void) async throws -> FinalTranscriptResult }`
 
-手順: `SegmentMerger.merge(manifest, track: .mic, …)` と `.system` で結合済みの `TrackFile` を得る（どちらも空なら `TranscriptionError.noTracks`）→ mic の分を先、system を後に**直列で**（CPU を取り合わない。要件書 §13）`transcribe(file: meetingDirectory/relativePath, language: manifest.language, hints: dictionary.terms, progress:)` → `TrackTranscription(file:utterances:)` を集める → `TranscriptFinalizer(dictionary:fillerRemoval:).finalize(parts, source: manifest.source, engine: engineName, language: manifest.language)`（startOffset の加算・話者・重複除去・置換・フィラー除去は計画 01 の担当）→ raw を `transcriptFile(id, .raw)`、final を `.final` に `AutoNoteJSON.encoder()` で原子的に書く。進捗はファイルの長さ（`durationSeconds`）で重み付けして 0〜1。失敗はそのトラックを `TranscriptionError.trackFailed(track, String(describing: error))` で返し、ファイルは書かない。キャンセルはそのまま投げる。リアルタイム版での代替と `transcript_engine` の記録は計画 05 の段階が行う。
+手順: `SegmentMerger.merge(manifest, track: .mic, …)` と `.system` で結合済みの `TrackFile` を得る（どちらも空なら `TranscriptionError.noTracks`。取り込みは mic の 1 トラックだけになる）→ mic の分を先、system を後に**直列で**（CPU を取り合わない。要件書 §13）`transcribe(file: meetingDirectory/relativePath, language: manifest.language, hints: dictionary.terms, progress:)` → `TrackTranscription(file:utterances:)` を集める → `TranscriptFinalizer(dictionary:fillerRemoval:).finalize(parts, source: manifest.source, engine: engineName, language: manifest.language)`（startOffset の加算・話者・重複除去・置換・フィラー除去は計画 01 の担当）。`gate` は init で受け、`WhisperBatchTranscriber` に渡したものと同じものを計画 05 が pause / resume する（Runner 自身はファイルの切れ目で `await gate.waitIfPaused()` を呼ぶ）→ raw を `transcriptFile(id, .raw)`、final を `.final` に `AutoNoteJSON.encoder()` で原子的に書く。進捗はファイルの長さ（`durationSeconds`）で重み付けして 0〜1。失敗はそのトラックを `TranscriptionError.trackFailed(track, String(describing: error))` で返し、ファイルは書かない。キャンセルはそのまま投げる。リアルタイム版での代替と `transcript_engine` の記録は計画 05 の段階が行う。
 
 - [ ] **Step 1: 失敗するテストを書く**（音声は `PCMAudio.writeWAV` で `tracks/mic-000.wav` などに数秒の無音を書き、manifest の `tracks` に並べる。結合後の名前は `merged/mic-0.wav` / `merged/system-0.wav` で、`FakeBatchTranscriber` のキーにする）
 
@@ -685,13 +695,13 @@ git commit -m "feat(transcription): add LiveFeed merging both tracks with marker
 @Test func offsetsAddedAndSpeakersAssigned() async throws {
     // mic: tracks/mic-000.wav（0–2 秒）、system: tracks/system-000.wav（startOffset 420）
     let fake = FakeBatchTranscriber(results: ["mic-0.wav": [u(1.0, .unknown, "おはようございます")], "system-0.wav": [u(1.0, .unknown, "よろしくお願いします")]])
-    let r = try await FinalTranscription(transcriber: fake, engineName: "whisper.cpp large-v3-turbo", paths: paths)
+    let r = try await FinalTranscriptionRunner(transcriber: fake, engineName: "whisper.cpp large-v3-turbo", paths: paths, gate: BatchGate())
         .run(manifest: m, dictionary: DictionaryFile.default, fillerRemoval: false, progress: { _ in })
     #expect(r.raw.utterances.map(\.start.seconds) == [1.0, 421.0]); #expect(r.raw.utterances.map(\.speaker) == [.me, .other])
     #expect(r.raw.engine == "whisper.cpp large-v3-turbo")
 }
 @Test func pauseSplitFilesKeepTheirOffsets() async throws   // mic 0–2 と 60–62 の 2 分割 → fake に mic-0.wav と mic-1.wav、start [1, 61]
-@Test func importedMeetingIsUnknownSpeaker() async throws   // source .imported、tracks/import.wav（.system）→ speaker .unknown
+@Test func importedMeetingIsUnknownSpeaker() async throws   // source .imported、tracks/import-000.wav（`Track.mic` の 1 トラック。overview §3）→ fake のキー mic-0.wav、speaker .unknown
 @Test func rawKeepsFillersFinalRemovesThem() async throws   // fake が "えー" と "本題です" → raw 2 件、final 1 件。rawURL / finalURL を AutoNoteJSON.decoder() で読める
 @Test func emptyTrackStillCompletes() async throws          // system の結果が [] → final は mic の発話だけで成功
 @Test func failureNamesTrackAndWritesNothing() async throws // FakeBatchTranscriber(failure:) → TranscriptionError.trackFailed(.mic, _)、raw.json は無い
@@ -699,53 +709,21 @@ git commit -m "feat(transcription): add LiveFeed merging both tracks with marker
 @Test func progressWeightedByDuration() async throws        // mic 1 秒、system 3 秒 → 進捗に 0.25±0.01 が現れ、最後は 1.0
 ```
 
-- [ ] **Step 2: 失敗を確認** — `swift test --filter FinalTranscriptionTests` で FAIL
+- [ ] **Step 2: 失敗を確認** — `swift test --filter FinalTranscriptionRunnerTests` で FAIL
 - [ ] **Step 3: 実装**
 - [ ] **Step 4: 通過を確認** — 同じコマンドで PASS。続けて `swift test` 全体も PASS
 - [ ] **Step 5: コミット**
 
 ```bash
-git add Sources/AutoNoteCore/Transcription/Batch Tests/AutoNoteCoreTests/Transcription/FinalTranscriptionTests.swift
+git add Sources/AutoNoteCore/Transcription/Batch Tests/AutoNoteCoreTests/Transcription/FinalTranscriptionRunnerTests.swift
 git commit -m "feat(transcription): add final transcription pipeline writing raw and final json"
 ```
 
 ---
 
-### Task 12: Spikes の削除、E2E と README の更新
+### Task 12: 👤 利用者: Apple Silicon 確認（後回し可。計画 00 Task 8 の引き継ぎ）
 
-**Files:**
-- Delete: `Spikes/`
-- Modify: `scripts/e2e-check.sh`、`README.md`、`docs/superpowers/research/2026-10-24-spike-results.md`（項目 7・12 の「手順」）
-
-**Interfaces:**
-- Consumes: Task 8 の E2E 4 件（`check_dev_engines` ほか）
-- Produces: Spikes に依存しない E2E。Task 13 の手順は本体の `autonote dev …` だけで完結する
-
-- [ ] **Step 1: 参照を洗い出す**
-Run: `grep -rn 'Spikes\|AppleSpeechProbe\|DeviceProbe\|TapCapture\|MicHotSwap' --exclude-dir=.build --exclude-dir=tools . | grep -v '^./docs/superpowers/plans/2026-10-24' `
-Expected: `scripts/e2e-check.sh`、`README.md`、結果表の手順欄だけ（計画 00 の文書と生データは歴史の記録として残す）
-- [ ] **Step 2: 削除前のコミットを控える**
-Run: `git rev-parse HEAD`
-この値を結果表の項目 4 の手順欄に「DeviceProbe はこのコミットにある」として書く（Task 13 Step 7 が使う）
-- [ ] **Step 3: 削除と E2E の更新**
-`git rm -r Spikes`。`scripts/e2e-check.sh` から `check_spikes_build`（項目 8）、`check_device_probe`（14）、`check_apple_speech_probe`（15）、`check_apple_speech_probe_guard`（15b）の関数と CHECKS の行を消し、冒頭の `--quick` の説明から「Spikes build」を消す。項目 10（whisper-cli）は残す（`tools/whisper.cpp` のソースビルドはベンチ `bench-whisper.sh` と Task 13 で今後も使う）。
-- [ ] **Step 4: README と結果表を直す**
-README の `Spikes/` の行を「whisper.cpp のベンチ用スクリプト（`scripts/setup-whisper.sh` ほか。取得物は `tools/`）と、文字起こしの開発用コマンド `autonote dev engines` / `autonote dev transcribe`」に書き換える。結果表の項目 7・12 の「手順」を「計画 04 Task 13: `autonote dev engines` と `autonote dev transcribe --engine speech --file/--mic`（Spikes は計画 04 で削除。AppleSpeechProbe の transcriber 経路の代わり）」に直す。
-- [ ] **Step 5: 全体の確認**
-Run: `swift build && swift test && scripts/e2e-check.sh`
-Expected: FAIL 0。項目 8・14・15・15b が出力に無く、Task 8 の 4 件が PASS か条件付き SKIP
-- [ ] **Step 6: コミット**
-
-```bash
-git add -A Spikes scripts/e2e-check.sh README.md docs/superpowers/research/2026-10-24-spike-results.md
-git commit -m "chore: remove plan 00 spikes and switch e2e to dev transcribe"
-```
-
----
-
-### Task 13: 👤 利用者: Apple Silicon 確認（計画 00 Task 8 の引き継ぎ）
-
-Apple Silicon 機が手元にあるときに行う。無い間は後回しにしてよく、他のタスクはこれを待たない（Apple Silicon の既定は「仮」のまま。要件書 §6.2）。前提は Task 8（本体の `SpeechLiveTranscriber` を `dev transcribe` から動かせること）。
+Apple Silicon 機が手元にあるときに行う。無い間は後回しにしてよく、最後の Task 13（Spikes 削除と E2E）はこれを待たない（Apple Silicon の既定は「仮」のまま。要件書 §6.2）。前提は Task 8（本体の `SpeechLiveTranscriber` を `dev transcribe` から動かせること）。
 
 **Files:**
 - Modify: `docs/superpowers/research/2026-10-24-spike-results.md`（項目 1 の Apple Silicon 側、4、7、12 の Apple Silicon 側、2 の区切りの SpeechTranscriber 側）
@@ -759,28 +737,28 @@ Apple Silicon 機が手元にあるときに行う。無い間は後回しにし
 Run: `scripts/make-dev-cert.sh && scripts/build-app.sh && swift test && scripts/make-sample-audio.sh`
 Expected: 署名成功、テスト PASS（Intel と同じ手順で動く）
 - [ ] **Step 2: SpeechTranscriber が使えるか（項目 7）**
-Run: `.build/debug/autonote dev engines | jq '{machine, speech_transcriber, resolved}'`
+Run: `"$AUTONOTE_CLI" dev engines | jq '{machine, speech_transcriber, resolved}'`
 Expected を記録: `machine: "appleSilicon"`、`is_available`、`supported_locales` の件数と ja-JP の有無（`entries` の speech の `available`）
 - [ ] **Step 3: ファイル入力の速さと精度**
-Run: `for e in speech dictation; do .build/debug/autonote dev transcribe tools/samples/ja-5min.wav --engine $e --text-out /tmp/as-$e.txt | tail -1; python3 -I scripts/cer.py /tmp/as-$e.txt scripts/samples/ja-5min.txt; done`
+Run: `for e in speech dictation; do "$AUTONOTE_CLI" dev transcribe tools/samples/ja-5min.wav --engine $e --text-out /tmp/as-$e.txt | tail -1; python3 -I scripts/cer.py /tmp/as-$e.txt scripts/samples/ja-5min.txt; done`
 Expected を記録: 各 RTF と CER（Intel の DictationTranscriber は RTF 0.307、CER 0.3494）
 - [ ] **Step 4: 👤 contextual strings の効き（項目 12）**
 利用者が同じ原稿（「AutoNote で所沢の Kubernetes 勉強会の議事録を作る」を含む 30 秒ほど）を 2 回読む。
-Run: `.build/debug/autonote dev transcribe --mic --engine speech --seconds 40` と `… --hints "AutoNote,所沢,Kubernetes"`
+Run: `"$AUTONOTE_CLI" dev transcribe --mic --engine speech --seconds 40` と `… --hints "AutoNote,所沢,Kubernetes"`
 Expected を記録: 3 語それぞれの正誤をヒントなし／ありで比べる（Intel では比較していなかった点）
 - [ ] **Step 5: 発話の区切り（SpeechTranscriber 側）**
 Task 9 の Step 2〜3 を `--engine speech` で回し、同じ基準で判定。Dictation と違う案が良ければ `SegmentationStrategy.current` をエンジン別にする（`static func current(for: EngineKind)`）。その場合は Task 9 のテストを両エンジン分に直す（TDD の順で）
 - [ ] **Step 6: whisper（項目 1 の Apple Silicon 側、Metal）**
-Run: `scripts/setup-whisper.sh && scripts/bench-whisper.sh`（`build` と `build-metal` の両方の表が出る）と、XCFramework 経由で `for g in on off; do .build/debug/autonote dev transcribe tools/samples/ja-5min.wav --engine whisper --model large-v3-turbo --gpu $g --text-out /tmp/as-turbo-$g.txt | tail -1; done`（モデルは `dev models download large-v3-turbo`）
+Run: `scripts/setup-whisper.sh && scripts/bench-whisper.sh`（`build` と `build-metal` の両方の表が出る）と、XCFramework 経由で `for g in on off; do "$AUTONOTE_CLI" dev transcribe tools/samples/ja-5min.wav --engine whisper --model large-v3-turbo --gpu $g --text-out /tmp/as-turbo-$g.txt | tail -1; done`（モデルは `dev models download large-v3-turbo`）
 Expected を記録: 各 RTF・CER。Metal（`--gpu on`）の CER が CPU と同程度なら Apple Silicon の `use_gpu = true` を確定、壊れていれば `MachineKind` に関係なく false にする（Task 5 の `WhisperContext` を TDD で直す）
 - [ ] **Step 7: 👤 機材の見え方（項目 4）**
-`autonote dev devices --watch`（計画 03。plan-04 は plan-03 から切るのであるはず）を使う。無ければ結果表の項目 4 に控えた削除前のコミットから `git worktree add ../autonote-spikes <その値> && swift run --package-path ../autonote-spikes/Spikes DeviceProbe` を使う。3.5mm のイヤホンマイクと Shokz を抜き差しする。
-Expected を記録: 3.5mm が `BuiltInHeadphoneInputDevice` の追加・削除で見えるか、Shokz の入力 `DeviceUID` が Intel 機と同じか（MAC アドレスの下 3 バイトは伏せて書く。Global Constraints）。終わったら `git worktree remove ../autonote-spikes`
+計画 03 の `autonote dev devices --watch` を使い、3.5mm のイヤホンマイクと Shokz を抜き差しする（Spikes の DeviceProbe は使わない）。
+Expected を記録: 3.5mm が `BuiltInHeadphoneInputDevice` の追加・削除で見えるか、Shokz の入力 `DeviceUID` が Intel 機と同じか（MAC アドレスの下 3 バイトは伏せて書く。Global Constraints）
 - [ ] **Step 8: 既定を見直す**
 結果から Apple Silicon の既定（リアルタイム speech / 確定版 large-v3-turbo / whisper リアルタイム small）を確定または変更する。変えるときは先に `EngineCatalogTests.appleSiliconProvisionalDefaults` を新しい値に直して失敗を確認してから `EngineCatalog.defaults` を直す。要件書 §6.2 の表の「仮」と §19 の項目 1・7・12 の状態を更新する。
 - [ ] **Step 9: E2E とコミット**
 Run: `scripts/e2e-check.sh`
-Expected: FAIL 0（Apple Silicon 機で Task 8 の 4 件が PASS）
+Expected: FAIL 0（Apple Silicon 機で `04.1`〜`04.4` が PASS）
 
 ```bash
 git add docs Sources Tests
@@ -789,8 +767,37 @@ git commit -m "docs: record Apple Silicon speech and whisper results"
 
 ---
 
+### Task 13: Spikes の削除、E2E と README の更新（最後のタスク）
+
+**Files:**
+- Delete: `Spikes/`
+- Modify: `scripts/e2e-check.sh`、`README.md`、`docs/superpowers/research/2026-10-24-spike-results.md`（項目 7・12 の「手順」）
+
+**Interfaces:**
+- Consumes: Task 8 の E2E 4 件（`04.1`〜`04.4`）
+- Produces: Spikes に依存しない E2E。Task 12 は本体の `autonote dev …` と計画 03 の `dev devices` だけで完結するので、Task 12 が済んでいなくても削除してよい
+
+- [ ] **Step 1: 参照を洗い出す**
+Run: `grep -rn 'Spikes\|AppleSpeechProbe\|DeviceProbe\|TapCapture\|MicHotSwap' --exclude-dir=.build --exclude-dir=tools . | grep -v '^./docs/superpowers/plans/2026-10-24' `
+Expected: `scripts/e2e-check.sh`、`README.md`、結果表の手順欄だけ（計画 00 の文書と生データは歴史の記録として残す）
+- [ ] **Step 2: 削除と E2E の更新**
+`git rm -r Spikes`。`scripts/e2e-check.sh` から `check_spikes_build`（項目 8）、`check_device_probe`（14）、`check_apple_speech_probe`（15）、`check_apple_speech_probe_guard`（15b）の関数と CHECKS の行を消し、冒頭の `--quick` の説明から「Spikes build」を消す。項目 10（whisper-cli）は残す（`tools/whisper.cpp` のソースビルドはベンチ `bench-whisper.sh` と Task 12 で今後も使う。overview §7）。
+- [ ] **Step 3: README と結果表を直す**
+README の `Spikes/` の行を「whisper.cpp のベンチ用スクリプト（`scripts/setup-whisper.sh` ほか。取得物は `tools/`）と、文字起こしの開発用コマンド `autonote dev engines` / `autonote dev transcribe`」に書き換える。結果表の項目 7・12 の「手順」を「計画 04 Task 12: `autonote dev engines` と `autonote dev transcribe --engine speech --file/--mic`（Spikes は計画 04 で削除。AppleSpeechProbe の transcriber 経路の代わり）」に直す。
+- [ ] **Step 4: 全体の確認**
+Run: `swift build && swift test && scripts/e2e-check.sh`
+Expected: FAIL 0。項目 8・14・15・15b が出力に無く、`04.1`〜`04.4` が PASS か条件付き SKIP
+- [ ] **Step 5: コミット**
+
+```bash
+git add -A Spikes scripts/e2e-check.sh README.md docs/superpowers/research/2026-10-24-spike-results.md
+git commit -m "chore: remove plan 00 spikes and switch e2e to dev transcribe"
+```
+
+---
+
 ## 自己点検の記録（Self-Review）
 
-- 要件書との対応: §3.2 XCFramework → Task 1／§3.3 Metal は Intel で使わない → Task 5（`use_gpu`）・Task 13 Step 6／§6.1 二段構え → Task 6・7（リアルタイム）、Task 5・11（確定版）／§6.2 差し替え層・既定・実行時判定・設定で上書き → Task 4・8／§6.3 2 本を別セッション・部分結果・区切り → Task 7・9・10／§6.4 トラックごと・タイムラインで結合・言語・`max-context 0`・繰り返し除去・話者 → Task 5・11（失敗時の代替は計画 05）／§6.5 フィラー除去の適用位置 → Task 11（除去と raw / final の組み立ては計画 01 の `TranscriptFinalizer`）／§7.1 initial prompt と contextual strings・置換は表示時 → Task 5・7・10／§7.2 224 トークン → Task 5（`HintBudget`）／§12 `live.json`・raw → Task 10・11／§13 録音中は確定版を止める → Task 5 `BatchGate`（待ち行列は計画 05）／§17 遅延 5 秒・CPU → Task 6 の数値・Task 9 の基準／§18 WhisperKit は作らない（差し替え層で後から足せる）
-- overview との対応: §2 の `Transcription/` の 8 つの名前はすべてある（`DictationLiveTranscriber` / `SpeechLiveTranscriber` は typealias）。`Package.swift` の変更は Task 1 だけ。§7 の `dev transcribe` / `dev engines` → Task 8。§2 の Spikes 削除と E2E 8・14・15・15b → Task 12。§8 の 04 の申し送り（区切り、判定、Apple Silicon、`max-context 0`、Intel の既定）→ Task 9・4・13・5・4
-- 型の一貫性: `EngineChoice` / `EngineKind` / `EngineRole`（Task 4）を Task 8・13 で同じ名前で使う。`WhisperCore.run` の引数（Task 5）を Task 6 も使う。`SegmentationStrategy` の rawValue（Task 7）と CLI の `--segmentation` の値（Task 8・9）が同じ。`TranscriptionError` の case（Task 2）を Task 7・8・11 が使う。計画 01・02 の名前（`HintBudget.fit`、`TranscriptFinalizer`、`SegmentMerger`、`AudioChunk(track:…)`、`finalEngine`）は冒頭の表と各タスクで一致させた
+- 要件書との対応: §3.2 XCFramework → Task 1／§3.3 Metal は Intel で使わない → Task 5（`use_gpu`）・Task 12 Step 6／§6.1 二段構え → Task 6・7（リアルタイム）、Task 5・11（確定版）／§6.2 差し替え層・既定・実行時判定・設定で上書き → Task 4・8／§6.3 2 本を別セッション・部分結果・区切り → Task 7・9・10／§6.4 トラックごと・タイムラインで結合・言語・`max-context 0`・繰り返し除去・話者 → Task 5・11（失敗時の代替は計画 05）／§6.5 フィラー除去の適用位置 → Task 11（除去と raw / final の組み立ては計画 01 の `TranscriptFinalizer`）／§7.1 initial prompt と contextual strings・置換は表示時 → Task 5・7・10／§7.2 224 トークン → Task 5（`HintBudget`）／§12 `live.json`・raw → Task 10・11／§13 録音中は確定版を止める → Task 5 `BatchGate`（待ち行列は計画 05）／§17 遅延 5 秒・CPU → Task 6 の数値・Task 9 の基準／§18 WhisperKit は作らない（差し替え層で後から足せる）
+- overview との対応: §2 の `Transcription/` の 8 つの名前はすべてある（`DictationLiveTranscriber` / `SpeechLiveTranscriber` は typealias）。`Package.swift` の変更は Task 1 だけ。§7 の `dev transcribe` / `dev engines` → Task 8。§2 の Spikes 削除と E2E 8・14・15・15b → 最後の Task 13。§7 の「最後は E2E、後回し可の 👤 はその前」→ Task 12・13。§8 の 04 の申し送り（区切り、判定、Apple Silicon、`max-context 0`、Intel の既定）→ Task 9・4・12・5・4
+- 型の一貫性: `EngineChoice` / `EngineKind` / `EngineRole`（Task 4）を Task 8・13 で同じ名前で使う。`WhisperCore.run` の引数（Task 5）を Task 6 も使う。`SegmentationStrategy` の rawValue（Task 7）と CLI の `--segmentation` の値（Task 8・9）が同じ。`TranscriptionError` の case（Task 2）を Task 7・8・11 が使う。計画 01・02 の名前（`HintBudget.fit`、`TranscriptFinalizer`、`SegmentMerger`、`AudioChunk(track:…)`、`finalEngine`、`AppPaths.modelsDirectory`）は冒頭の表と各タスクで一致させた。overview §8b の `FinalTranscriptionRunner`（init に `gate`）、`actor BatchGate` の 3 関数、`LiveFeed.isMarker(_:)` は Task 5・10・11 と同じ形。`makeBatch(_:gate:)` と `WhisperBatchTranscriber(core:gate:)` も gate を必須にそろえた

@@ -6,13 +6,14 @@
 
 **Architecture:** すべて `AutoNoteCore` の中にフォルダで区切って置く（`Model/ Storage/ Dictionary/ Transcript/ Vault/`。録音・文字起こし・要約は protocol 宣言だけを `Audio/ Transcription/ Minutes/` に置く）。モデルは `Sendable` な値型、ファイルを持つサービスは `actor`。Markdown の生成は純粋関数（入力 → 文字列）にし、ファイル I/O は `VaultWriter` と各 Store に閉じ込める。新ターゲット `AutoNoteTestSupport` にフェイク・サンプル・フィクスチャ読み込みを置き、テストと `autonote dev render-fixture` の両方が使う。
 
-**Tech Stack:** Swift 6.2（swift-tools-version 6.2、言語モード v6）/ Foundation / CryptoKit（SHA-256）/ Swift Testing / bash（E2E）
+**Tech Stack:** Swift 6.3 ツールチェーン（swift-tools-version 6.2、言語モード v6）/ Foundation / CryptoKit（SHA-256）/ Swift Testing / bash（E2E）
 
 **Spec:** `docs/superpowers/specs/2026-10-24-autonote-design.md`（要件書。§5.2・§5.4〜5.6・§6.4・§6.5・§7・§8.2・§8.4・§9・§12・§21）と `docs/superpowers/plans/2026-10-25-autonote-plans-overview.md`（全計画の共通契約。型とプロトコルの名前と形は overview §3・§4 に従う）
 
 ## Global Constraints
 
-- 最低 OS: macOS 26.0。`Package.swift` の platforms は `.macOS("26.0")`、`swiftLanguageModes: [.v6]`
+- 最低 OS: macOS 26.0。`Package.swift` の platforms は `.macOS("26.0")`、`swift-tools-version: 6.2`、`swiftLanguageModes: [.v6]`。ツールチェーンは Swift 6.3（計画 00 と同じ）
+- `autonote` CLI や `AutoNoteApp` から使う `AutoNoteCore` の型・関数は `public` にする（同じパッケージでも別ターゲットからは見えない）
 - Intel（x86_64）と Apple Silicon（arm64）の両方でビルド・動作すること。機種依存の分岐は実行時判定（`isAvailable` など）で行い、`#if arch` で機能を落とさない
 - 署名: 自己署名証明書 `AutoNote Dev`、Bundle ID `com.yutaokoshi.autonote`。`scripts/build-app.sh` を使う。App Sandbox なし、Hardened Runtime なし
 - 音声・文字起こし・議事録・個人の機材識別子（MAC アドレス）をリポジトリにコミットしない。テストのフィクスチャは架空の内容にする
@@ -25,7 +26,7 @@
 
 （上の「本書」は overview を指す。）本計画の追加規約:
 
-- `AutoNoteCore` の型・関数は TestSupport と CLI から使うので `public`。public な struct には public な `init` を明示する（メンバーワイズ init は internal にしかならない）
+- 上の `public` の規約は本計画のすべての型・関数に当てはまる（TestSupport・CLI・後の計画の App から使う）。public な struct には public な `init` を明示する（メンバーワイズ init は internal にしかならない）
 - JSON は必ず `AutoNoteJSON.encoder()` / `decoder()` を通す。`convertFromSnakeCase` は `meeting_id` を `meetingId` に戻し `meetingID` と一致しないので、頭字語を含むプロパティ名は使わないか `CodingKeys` を明示する
 - 日付・時刻の文字列化は呼び手が渡す `TimeZone` で行う。テストとフィクスチャは `Asia/Tokyo` 固定
 - 書き出す Markdown の改行は `\n`、ファイル末尾は改行 1 つ。差し込む文の中の改行は空白 1 つに置き換える
@@ -129,9 +130,9 @@
 **Interfaces:**
 - Consumes: `Manifest` `MeetingID` `Language`、`AutoNoteJSON`
 - Produces:
-  - `public struct AppPaths: Sendable, Equatable { let root: URL; init(root: URL); static var standard: AppPaths }`（root は `~/Library/Application Support/AutoNote`）。プロパティ `settingsFile` `automationsFile` `recordingsDirectory` `queueJobsDirectory`（`queue/jobs`）`logsDirectory` `logFile`（`logs/autonote.log`）`portableMirrorDirectory`（`portable-mirror`）`vaultStateDirectory`（`vault-state`）`socketFile`（`autonote.sock`）。関数 `meetingDirectory(_:)`（`recordings/<id>`）`manifestFile(_:)` `tracksDirectory(_:)` `transcriptsDirectory(_:)`（`transcripts/<id>`）`transcriptFile(_: MeetingID, _: TranscriptKind) -> URL` `minutesFile(_:)`（`transcripts/<id>/minutes.json`。要件書 §14.4 の `AUTONOTE_JSON` の実体）`vaultStateFile(_:)`（`vault-state/<id>.json`）`createBaseDirectories() throws`
+  - `public struct AppPaths: Sendable, Equatable { let root: URL; init(root: URL); static var standard: AppPaths }`（root は `~/Library/Application Support/AutoNote`）、`static func resolve(environment: [String: String] = ProcessInfo.processInfo.environment) -> AppPaths`（`AUTONOTE_DATA_DIR` があればそれを root に、無ければ `standard`。overview §5）。プロパティ `settingsFile` `automationsFile` `recordingsDirectory` `queueJobsDirectory`（`queue/jobs`）`logsDirectory` `logFile`（`logs/autonote.log`）`portableMirrorDirectory`（`portable-mirror`）`vaultStateDirectory`（`vault-state`）`modelsDirectory`（`models`。計画 04 の ggml モデル）`socketFile`（`autonote.sock`）。関数 `meetingDirectory(_:)`（`recordings/<id>`）`manifestFile(_:)` `tracksDirectory(_:)` `transcriptsDirectory(_:)`（`transcripts/<id>`）`transcriptFile(_: MeetingID, _: TranscriptKind) -> URL` `minutesFile(_:)`（`transcripts/<id>/minutes.json`。要件書 §14.4 の `AUTONOTE_JSON` の実体）`vaultStateFile(_:)`（`vault-state/<id>.json`）`createBaseDirectories() throws`
   - `public enum TranscriptKind: String { case live, raw, final }`（ファイル名 `<kind>.json`）
-  - `public struct Settings: Codable, Equatable, Sendable`（下表。`init()` が既定値、`init(from:)` は全キー `decodeIfPresent`、`countdownSeconds` は 0〜30 に丸める）、`public struct Shortcuts`（同じく欠けたキーは既定）、`public enum SummarizerKind: String, Codable { case claudeCode = "claude_code" }`
+  - `public struct Settings: Codable, Equatable, Sendable`（下表。`init()` が既定値、`init(from:)` は全キー `decodeIfPresent`、`countdownSeconds` は 0〜30、`disconnectGraceSeconds` は 5〜300 に丸める。項目は overview §3 の確定一覧と同じ。後の計画は書き換えない）、`public struct Shortcuts`（同じく欠けたキーは既定）、`public enum SummarizerKind: String, Codable { case claudeCode = "claude_code" }`
   - `public actor SettingsStore { init(paths: AppPaths); func load() throws -> Settings; func save(_: Settings) throws; func update(_ body: @Sendable (inout Settings) -> Void) throws -> Settings; private(set) var lastSetAside: URL? }`。ファイルが無ければ既定値。JSON として読めなければ `settings.json.corrupt-<yyyyMMdd-HHmmss>` に改名し、`lastSetAside` に入れて既定値を返す
   - `public actor ManifestStore { init(paths: AppPaths); func save(_: Manifest) throws; func load(_: MeetingID) throws -> Manifest; func update(_: MeetingID, _ body: @Sendable (inout Manifest) -> Void) throws -> Manifest; func all() -> [Manifest]; func unfinishedRecordings() -> [Manifest]; func delete(_: MeetingID) throws }`。書き込みは会議フォルダを作って原子的に（`Data.write(options: .atomic)`）。`all()` は `startedAt` の新しい順で、読めない manifest は飛ばす。`unfinishedRecordings()` は status `recording`（計画 02 のクラッシュ復旧用）。`delete` は `recordings/<id>`・`transcripts/<id>`・`vault-state/<id>.json` を消す（要件書 §12 の会議単位削除のアプリ領域分）
 
@@ -139,15 +140,15 @@
 |---|---|---|---|
 | `outputFolder` | `String?`（絶対パス） | nil | §9.5 |
 | `claudePath` / `claudeModel` | `String?` | nil（パスは計画 05 が起動時に探して埋める。モデル nil は Claude Code の既定） | §8.1 |
-| `summarizer` | `SummarizerKind` | `.claudeCode` | §8.5 |
+| `summarizerKind` | `SummarizerKind` | `.claudeCode` | §8.5 |
 | `launchAtLogin` | `Bool` | true | §4.1・§15.3 |
 | `defaultLanguage` | `Language` | `.ja` | §6.4 |
 | `liveEngine` `liveModel` `finalEngine` `finalModel` | `String?` | nil（機種ごとの既定。計画 04 の EngineCatalog） | §6.2 |
 | `voiceProcessing` / `fillerRemoval` | `Bool` | false / true | §5.6 / §6.5 |
-| `countdownSeconds` / `disconnectGraceSeconds` | `Int` | 5（0〜30）/ 30 | §11.4 / §11.5 |
+| `countdownSeconds` / `disconnectGraceSeconds` | `Int` | 5（0〜30）/ 30（5〜300） | §11.4 / §11.5 |
 | `startOnModelMatch` | `Bool` | false（機材ごとの上書きは計画 03 の devices.json） | §11.2 |
 | `audioRetentionDays` | `Int` | 30（0 は「削除しない」。null と欠落を区別しないため数値） | §12 |
-| `shortcuts` | `Shortcuts { bookmark; toggleRecording; togglePause: String? }` | `"ctrl+option+b"` / nil / nil | §5.5・§15.3 |
+| `shortcuts` | `Shortcuts { bookmark; toggleRecording; togglePause: String }`（文字列で保存。解釈は計画 06） | `"ctrl+option+b"` / `"ctrl+option+r"` / `"ctrl+option+p"` | §5.5・§15.3 |
 | `consentNoticeShown` | `Bool` | false | §11.6 |
 
 - [ ] **Step 1: Write the failing test**
@@ -155,9 +156,10 @@
 @Test func partialSettingsAreFilledAndClamped() async throws {
     let p = AppPaths(root: try TemporaryDirectory.make()); try p.createBaseDirectories()
     #expect(try await SettingsStore(paths: p).load() == Settings())
-    try Data(#"{"output_folder":"/v/Meetings","countdown_seconds":99,"shortcuts":{}}"#.utf8).write(to: p.settingsFile)
+    try Data(#"{"output_folder":"/v/Meetings","countdown_seconds":99,"disconnect_grace_seconds":1,"summarizer_kind":"claude_code","shortcuts":{"bookmark":"cmd+b"}}"#.utf8).write(to: p.settingsFile)
     let s = try await SettingsStore(paths: p).load()
-    #expect(s.outputFolder == "/v/Meetings"); #expect(s.countdownSeconds == 30); #expect(s.fillerRemoval); #expect(s.shortcuts.bookmark == "ctrl+option+b")
+    #expect(s.outputFolder == "/v/Meetings"); #expect(s.countdownSeconds == 30); #expect(s.disconnectGraceSeconds == 5); #expect(s.fillerRemoval)
+    #expect(s.shortcuts.bookmark == "cmd+b"); #expect(s.shortcuts.toggleRecording == "ctrl+option+r"); #expect(s.shortcuts.togglePause == "ctrl+option+p")
     let store = SettingsStore(paths: p); let updated = try await store.update { $0.audioRetentionDays = 0 }
     #expect(try await store.load() == updated)
 }
@@ -177,11 +179,11 @@
     try await store.delete(id); #expect(!FileManager.default.fileExists(atPath: p.meetingDirectory(id).path))
     let r = AppPaths(root: URL(filePath: "/r"))
     #expect(r.manifestFile(id).path == "/r/recordings/20261024-1400-a1b2/manifest.json"); #expect(r.transcriptFile(id, .raw).path == "/r/transcripts/20261024-1400-a1b2/raw.json")
-    #expect(r.vaultStateFile(id).path == "/r/vault-state/20261024-1400-a1b2.json")
+    #expect(r.vaultStateFile(id).path == "/r/vault-state/20261024-1400-a1b2.json"); #expect(r.modelsDirectory.path == "/r/models")
+    #expect(AppPaths.resolve(environment: ["AUTONOTE_DATA_DIR": "/tmp/e2e"]).root.path == "/tmp/e2e"); #expect(AppPaths.resolve(environment: [:]) == .standard)
 }
 @Test func allSkipsCorruptManifest() async throws {
-    let p = AppPaths(root: try TemporaryDirectory.make()); let store = ManifestStore(paths: p)
-    try await store.save(Samples.manifest)
+    let p = AppPaths(root: try TemporaryDirectory.make()); let store = ManifestStore(paths: p); try await store.save(Samples.manifest)
     let broken = p.meetingDirectory(MeetingID(rawValue: "20261024-0900-ffff"))
     try FileManager.default.createDirectory(at: broken, withIntermediateDirectories: true)
     try Data("{".utf8).write(to: broken.appending(path: "manifest.json"))
@@ -200,12 +202,12 @@
 
 **Interfaces:**
 - Consumes: Task 2 の型、`AppPaths` `Settings` `ManifestStore`
-- Produces（protocol は overview §4 の宣言そのまま。実装は計画 02・04・05）:
+- Produces（protocol は overview §4 の宣言そのまま。実装は計画 02・04・05。`UserNotifier`・`UserNotice`・`FakeUserNotifier` は計画 03 が置くので本計画では作らない）:
   - `public struct AudioChunk: Sendable, Equatable { static let sampleRate = 16_000.0; var track: Track; var samples: [Int16]; var start: TimelineTime; var hostTime: UInt64; var duration: Double { get } }`（16kHz・モノラル。`start` は会議タイムライン）
   - `public struct SummaryInput: Codable, Equatable, Sendable { var instructions: String; var terms: [String]; var bookmarks: [Bookmark]; var transcript: Transcript; var language: Language }`
   - `public enum StageName { static let transcribe = "transcribe", summarize = "summarize", writeVault = "write_vault", updateIndex = "update_index", automations = "automations"; static let all: [String] }`（この順）
   - `public enum JobState: String, Codable, Sendable { case pending, running, waiting, failed, done }`
-  - `public struct Job: Codable, Equatable, Sendable { var id: String; var meeting: MeetingID; var stages: [String]; var completedStages: [String]; var state: JobState; var attempts: Int; var lastError: String?; var notBefore: Date?; var createdAt: Date; var nextStage: String? { get } }`（`nextStage` は未完了の最初の段階。再試行の規則は計画 05）
+  - `public struct Job: Codable, Equatable, Sendable { var id: String; var meeting: MeetingID; var stages: [String]; var completedStages: [String]; var state: JobState; var attempts: Int; var lastError: String?; var notBefore: Date?; var createdAt: Date; var generation: Int; var transcriptEngine: String?; var summaryFailure: String?; var overwriteApproved: Bool; var nextStage: String? { get } }`（overview §3 の一覧どおり。public init は後ろの 4 つに既定値 `0` `nil` `nil` `false` を持ち、デコードも欠けたら既定値。`generation` は再生成のたびに +1 し、Automations の二重実行防止キーは `"\(meeting.rawValue):\(generation)"`。`nextStage` は未完了の最初の段階。意味づけと再試行の規則は計画 05）
   - `public struct StageContext: Sendable { var paths: AppPaths; var settings: Settings; var manifests: ManifestStore; var now: @Sendable () -> Date; var reportProgress: @Sendable (Double) -> Void }`（計画 05 が足してよい）
   - TestSupport: `struct FakeError: Error, Equatable { var message: String }`、`actor CallLog { var entries: [String]; func append(_: String) }`、`actor FakeAudioSource(track:chunks:)`（`nonisolated let track`。`start` は台本の chunk を順に渡して返る。`stopCount`）、`actor FakeLiveTranscriber(script: [Utterance])`（`start` のストリームに台本を流す。`feed` は `fedChunks` に貯め、`finish` でストリームを閉じる。`startedWith: (Language, [String])?`）、`actor FakeBatchTranscriber(results: [String: [Utterance]], failure: FakeError? = nil)`（キーは `lastPathComponent`。progress に 0 と 1。`calls: [URL]`）、`actor FakeSummarizer(result: Result<MinutesOutput, FakeError>)`（`inputs`）、`struct FakeQueueStage(name:log:failure:)`（`run` で `log.append(name)`、failure があれば投げる）
 
@@ -226,7 +228,8 @@
 @Test func fakeStageRunsAndJobRoundTrips() async throws {
     let log = CallLog(); let stage: any QueueStage = FakeQueueStage(name: StageName.summarize, log: log, failure: nil)
     var job = Job(id: "j1", meeting: Samples.manifest.id, stages: StageName.all, completedStages: ["transcribe"], state: .pending, attempts: 0, lastError: nil, notBefore: nil, createdAt: Samples.start)
-    #expect(job.nextStage == "summarize")
+    #expect(job.nextStage == "summarize"); #expect(job.generation == 0); #expect(job.overwriteApproved == false)
+    job.generation = 1; job.transcriptEngine = "whisper.cpp large-v3-turbo"; job.summaryFailure = "rate_limit"
     let paths = AppPaths(root: try TemporaryDirectory.make())
     try await stage.run(&job, context: StageContext(paths: paths, settings: Settings(), manifests: ManifestStore(paths: paths), now: { Samples.start }, reportProgress: { _ in }))
     #expect(await log.entries == ["summarize"])
@@ -760,7 +763,7 @@ private func url(_ o: VaultWriteOutcome) throws -> URL { guard case .written(let
 ### Task 14: 開発用サブコマンド `autonote dev render-fixture`、E2E 更新、全 PASS 確認
 **Files:**
 - Create: `Sources/autonote/DevCommands.swift`
-- Modify: `Sources/autonote/main.swift`、`scripts/e2e-check.sh`（項目 16・16b を足し、`CHECKS` の末尾に `check_render_fixture` `check_render_fixture_detects_diff`）
+- Modify: `Sources/autonote/main.swift`、`scripts/e2e-check.sh`（共通の補助 `AUTONOTE_CLI` と `need_autonote_cli` を `have_gui()` の後に、項目 01.1・01.2 を足し、`CHECKS` の末尾に `check_render_fixture` `check_render_fixture_detects_diff`。冒頭コメントの「環境変数」に `AUTONOTE_CLI` を 1 行足す）
 
 **Interfaces:**
 - Consumes: `FixtureRenderer.render(fixtures:into:)` `compare(_:expected:)`、`FixtureLibrary.defaultDirectory`
@@ -773,20 +776,27 @@ private func url(_ o: VaultWriteOutcome) throws -> URL { guard case .written(let
 
 - [ ] **Step 1: E2E に項目を足す（失敗する確認を先に書く）**
 ```bash
-AUTONOTE_CLI=""
+# 共通の補助（計画 01 が足し、後の計画の項目も使う。overview §7）
+AUTONOTE_CLI="${AUTONOTE_CLI:-${ROOT}/.build/debug/autonote}"   # 環境変数で差し替え可
+AUTONOTE_CLI_BUILT=0
+need_autonote_cli() {   # 0: 使える / 1: 無い（呼び手が skip）/ 2: ビルド失敗（呼び手が fail）。--quick でなければ最初の 1 回だけ swift build
+    if [[ "${QUICK}" -eq 0 && "${AUTONOTE_CLI_BUILT}" -eq 0 ]]; then run swift build --product autonote || return 2; AUTONOTE_CLI_BUILT=1; fi
+    [[ -x "${AUTONOTE_CLI}" ]] || return 1
+}
+cli_or_skip() {   # 項目の先頭で呼ぶ。使えなければ skip / fail を出して 1 を返す
+    need_autonote_cli; case $? in 0) return 0 ;; 1) skip "autonote が無い（swift build で作る）" ;; *) fail "swift build --product autonote が失敗" ;; esac; return 1
+}
 check_render_fixture() {
-    CURRENT="16. autonote dev render-fixture がフィクスチャを期待ファイルどおりに書く"
-    if [[ "${QUICK}" -eq 0 ]]; then run swift build --product autonote || { fail "swift build --product autonote が失敗"; return; }; fi
-    local c; for c in "${ROOT}/.build/debug/autonote" "${APP}/Contents/MacOS/autonote"; do [[ -x "${c}" ]] && { AUTONOTE_CLI="${c}"; break; }; done
-    [[ -n "${AUTONOTE_CLI}" ]] || { skip "autonote の実行ファイルが無い（swift build で作る）"; return; }
+    CURRENT="01.1 render-fixture が golden と一致"
+    cli_or_skip || return
     local out="${WORK}/render-fixture"
     run "${AUTONOTE_CLI}" dev render-fixture --out "${out}" --fixtures "${ROOT}/Tests/Fixtures" || { fail "render-fixture が 0 以外で終了"; return; }
     [[ -f "${out}/_index.md" ]] || { LAST_LOG=""; fail "_index.md が書かれていない"; return; }
     pass "$(tail -n 1 "${LAST_LOG}")"
 }
 check_render_fixture_detects_diff() {
-    CURRENT="16b. render-fixture が期待ファイルとの差を検出して exit 1"
-    [[ -n "${AUTONOTE_CLI}" ]] || { skip "項目 16 で autonote が見つからなかった"; return; }
+    CURRENT="01.2 render-fixture が golden との差を検出して exit 1"
+    cli_or_skip || return
     local fx="${WORK}/fixtures-tampered"; cp -R "${ROOT}/Tests/Fixtures" "${fx}"; printf '改ざん\n' >>"${fx}/expected/_index.md"
     run "${AUTONOTE_CLI}" dev render-fixture --out "${WORK}/render-tampered" --fixtures "${fx}"; local code=$?
     [[ ${code} -eq 1 ]] || { fail "exit ${code}（期待 1）"; return; }
@@ -794,7 +804,7 @@ check_render_fixture_detects_diff() {
     pass
 }
 ```
-- [ ] **Step 2: 失敗を確認** `scripts/e2e-check.sh` → 項目 16・16b が FAIL（`dev` が未実装で usage と exit 1）、他の項目はこれまでどおり
+- [ ] **Step 2: 失敗を確認** `scripts/e2e-check.sh` → 項目 01.1・01.2 が FAIL（`dev` が未実装で usage と exit 1）、他の項目はこれまでどおり
 - [ ] **Step 3: Implement** `DevCommands.run(_:)` と `main.swift` の分岐（Interfaces どおり）
-- [ ] **Step 4: 全 PASS を確認** `swift test` → PASS。`scripts/e2e-check.sh` → 終了コード 0、項目 1・6・16・16b が PASS、FAIL 0（機材・GUI・証明書に依存する項目は条件しだいで SKIP 可）。`--quick` では `.build/debug/autonote` が古いと 16 が FAIL しうるので、そのときは `swift build` してから回す
+- [ ] **Step 4: 全 PASS を確認** `swift test` → PASS。`scripts/e2e-check.sh` → 終了コード 0、項目 1・6・01.1・01.2 が PASS、FAIL 0（機材・GUI・証明書に依存する項目は条件しだいで SKIP 可）。`--quick` は `swift build` を飛ばすので、`.build/debug/autonote` が古いと 01.1 が FAIL しうる。そのときは `swift build` してから回す
 - [ ] **Step 5: Commit** `git add Sources/autonote scripts/e2e-check.sh` → `git commit -m "feat: add autonote dev render-fixture and e2e checks"`

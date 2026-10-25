@@ -2,20 +2,21 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 録音停止後の「確定版文字起こし → 議事録生成（`claude -p`）→ Vault 書き出し → `_index.md` 更新 → Automations」を、永続化された待ち行列として失敗段階だけ再実行でき、再起動で途中から再開できる形で作り、議事録失敗時の `transcript_only`、再生成、保持と削除まで揃える。
+**Goal:** 録音停止後の「確定版文字起こし → 議事録生成（`claude -p`）→ Vault 書き出し → `_index.md` 更新 → Automations」を、永続化された待ち行列として作る。失敗した段階だけを再実行でき、再起動で途中から再開できるようにし、議事録失敗時の `transcript_only`、再生成、保持と削除まで揃える。
 
-**Architecture:** `Minutes/` に、stdin を組み立てる `PromptBuilder`、`claude` を `Process` で呼ぶ `ClaudeCodeSummarizer`（`Summarizer` の実装）、`queue/jobs/<meeting-id>.json` に 1 会議 1 ジョブで状態を持つ `JobStore`、段階（`QueueStage`）を古い順に 1 つずつ回す `actor PostProcessingQueue`、各段階の実装、`Retention` を置く。段階間のデータはアプリ領域のファイル（`final.json`・`minutes.json`）で受け渡し、ジョブには段階の状態と最小限の記録だけを持つ。時計・録音状態・外部プロセスはすべて差し替え可能にし、テストはフェイクで端から端まで回す。
+**Architecture:** `Minutes/` に次を置く: stdin を組み立てる `PromptBuilder`、`claude` を `Process` で呼ぶ `ClaudeCodeSummarizer`（`Summarizer` の実装）、計画 01 の `Job` を `queue/jobs/<meeting-id>.json` に保存する `JobStore`、段階（`QueueStage`）を古い順に 1 つずつ回す `actor PostProcessingQueue`、4 つの段階、`Retention`。段階はどれも計画 01・04 の部品を呼ぶだけにする。確定版は 04 の `FinalTranscriptionRunner`、書き出しは 01 の `VaultWriter`、削除は 01 の `ManifestStore.delete` と `VaultWriter.remove` を使う。段階の間のデータはアプリ領域のファイル（`final.json`・`minutes.json`）で受け渡す。時計・録音状態・外部プロセスは差し替えられるようにし、テストはフェイクで端から端まで回す。
 
-**Tech Stack:** Swift 6.3（strict concurrency）/ Foundation（`Process`、`Pipe`、`FileManager`、`JSONEncoder`）/ Swift Testing / claude CLI 2.1.x（実呼び出しは Task 1 と最終タスクの 👤 確認だけ）
+**Tech Stack:** Swift 6.3 ツールチェーン（swift-tools-version 6.2、言語モード v6）/ Foundation（`Process`、`Pipe`、`FileManager`）/ Swift Testing / claude CLI 2.1.x（実呼び出しは Task 1 と Task 14 の 👤 確認だけ）
 
 **Spec:**
 - 要件書: `docs/superpowers/specs/2026-10-24-autonote-design.md`（中心は §8 全部、§9.4、§12、§13。関連: §5.8、§5.9 補足、§6.4、§14.5）
-- 全体設計（共通契約）: `docs/superpowers/plans/2026-10-25-autonote-plans-overview.md`（§2 の `Minutes/`、§3・§4 の型とプロトコル、§5 の保存場所、§7 の開発用サブコマンドと E2E、§8 の申し送り）
+- 全体設計（共通契約）: `docs/superpowers/plans/2026-10-25-autonote-plans-overview.md`（§3 の `Job`・`Settings`・`RecordingEvent`、§4、§5 の `claude-cwd/`、§7 の E2E、§8b の裁定、§9）
 - 根拠: `docs/superpowers/research/2026-10-24-spike-results.md` の項目 6・11、`scripts/probe-claude.sh`、`scripts/minutes-schema.json`、`scripts/make-fake-transcript.py`
 
 ## Global Constraints
 
-- 最低 OS: macOS 26.0。`Package.swift` の platforms は `.macOS("26.0")`、`swiftLanguageModes: [.v6]`
+- 最低 OS: macOS 26.0。`Package.swift` の platforms は `.macOS("26.0")`、`swift-tools-version: 6.2`、`swiftLanguageModes: [.v6]`。ツールチェーンは Swift 6.3（計画 00 と同じ）
+- `autonote` CLI や `AutoNoteApp` から使う `AutoNoteCore` の型・関数は `public` にする（同じパッケージでも別ターゲットからは見えない）
 - Intel（x86_64）と Apple Silicon（arm64）の両方でビルド・動作すること。機種依存の分岐は実行時判定（`isAvailable` など）で行い、`#if arch` で機能を落とさない
 - 署名: 自己署名証明書 `AutoNote Dev`、Bundle ID `com.yutaokoshi.autonote`。`scripts/build-app.sh` を使う。App Sandbox なし、Hardened Runtime なし
 - 音声・文字起こし・議事録・個人の機材識別子（MAC アドレス）をリポジトリにコミットしない。テストのフィクスチャは架空の内容にする
@@ -28,33 +29,31 @@
 
 （上の「本書」は overview を指す。）本計画に固有の制約:
 
-- `claude -p` のコマンドラインは要件書 §8.1 を一字一句使う。足してよいのは設定でモデルを選んだときの末尾の `--model <名前>` だけ
-- `Package.swift` は変更しない（overview §2）。ファイルは `Sources/AutoNoteCore/Minutes/`、フェイクは `Sources/AutoNoteTestSupport/Minutes/`、テストは `Tests/AutoNoteCoreTests/Minutes/`
-- ログ（`os.Logger` と `logs/autonote.log`）に文字起こし本文・議事録本文・`claude` の stdout を書かない。書いてよいのは会議 ID、段階名、状態、終了コード、失敗の分類
+- `claude -p` のコマンドラインは要件書 §8.1 を一字一句使う。足してよいのは、設定でモデルを選んだときの末尾の `--model <名前>` だけ
+- 本計画の型・関数はすべて `public`。public な struct には public な `init` を明示する。JSON は計画 01 の `AutoNoteJSON.encoder()` / `decoder()` を通す
+- `Package.swift` は変更しない。ファイルの置き場所は `Sources/AutoNoteCore/Minutes/`、フェイクは `Sources/AutoNoteTestSupport/Minutes/`、テストは `Tests/AutoNoteCoreTests/Minutes/`
+- 計画 01・04 の型は再定義しない（`Job`・`JobState`・`StageName`・`StageContext`・`SummaryInput`・`Summarizer`・`QueueStage` は 01 の `Minutes/Protocols.swift`）。`enqueue` は計画 06 が配線するので、本計画のコードからは呼ばない（テストと `dev summarize` だけが呼ぶ）
+- ログ（`os.Logger` と `logs/autonote.log`）に、文字起こし本文・議事録本文・`claude` の stdout を書かない。書いてよいのは会議 ID、段階名、状態、終了コード、失敗の分類
 
-## 前提にする他計画の API（計画 01・02・04）
+## 使う他計画の API（各計画の本文から写した実名）
 
-計画 01〜04 は本計画と並行して書かれるため、名前は overview と要件書から決めた。実装時に実物と違えば、**本計画側の呼び出しを実物に合わせる**（他計画の型は変えない。overview §3・§4 の名前と違う場合だけ overview を先に直す）。
-
-| 計画 | 使うもの（想定する形） |
+| 計画 | 名前と署名 |
 |---|---|
-| 01 Model | `MeetingID`、`TimelineTime`（`.hhmmss`、`init?(hhmmss:)`、`seconds`）、`Speaker`（`.displayName` = 自分/相手/不明）、`Utterance`、`Transcript`、`Bookmark`、`Track`、`TrackFile`、`Manifest`、`MeetingStatus`、`MeetingSource`、`MinutesOutput`（overview §3） |
-| 01 Minutes/Protocols.swift | `protocol Summarizer`、`struct SummaryInput { instructions: String; terms: [String]; bookmarks: [Bookmark]; transcript: Transcript; language: Language }`、`protocol QueueStage { var name: String; func run(_ job: inout Job, context: StageContext) async throws }`。`Job` と `StageContext` が 01 で空の仮型なら、本計画 Task 2 が同じ名前で中身を確定する |
-| 01 Storage | `AppPaths(root:)`（`root`、`recordingDirectory(for:)`、`transcriptsDirectory(for:)`）、`actor ManifestStore`（`load(_:) throws -> Manifest`、`save(_:)`、`allIDs()`）、`actor SettingsStore`（`current() -> Settings`）、`PortableConfigStore`（`prompt() -> String?`、`dictionary() -> DictionaryFile`） |
-| 01 Settings の項目 | `outputFolder: URL?`、`claudePath: String?`、`claudeModel: String?`、`summarizer: SummarizerKind`（`.claudeCode` のみ。§8.5）、`audioRetentionDays: Int?`（既定 30、`nil` = 削除しない）、`fillerRemovalEnabled: Bool`。無ければ overview の手順で 01 に足す |
-| 01 Dictionary / Transcript | `DictionaryFile.terms / replacements / fillers`、`FillerRemover`、`Replacer`、`TranscriptMerger.merge(mic:system:) -> [Utterance]`、`EchoDeduplicator.deduplicate(_:) -> [Utterance]` |
-| 01 Vault | `MeetingDocument(manifest:transcript:minutes:status:transcriptEngine:)`、`MeetingFileName.make(start:title:existing:) -> String`（年フォルダ込みの相対パス。`title == nil` で `YYYY-MM-DD_HHMMSS.md`、重複で `-2`）、`VaultWriter(outputFolder:)` の `write(_:to:) throws -> VaultFileRecord`・`isModified(_:) throws -> Bool`（§9.4 の変更検知）・`remove(_:)`、`VaultFileRecord: Codable { relativePath: String; contentHash: String }`、`VaultScanner.scan(outputFolder:) -> [ScannedMeeting]`（`id`、`relativePath`）、`IndexFile.rebuild(outputFolder:) throws` |
-| 01 TestSupport | `FakeSummarizer`（固定の `MinutesOutput` を返す／指定のエラーを投げる。受け取った `SummaryInput` を記録）、`FakeBatchTranscriber`（ファイル名ごとに固定の `[Utterance]` を返す／エラーを投げる）。`autonote` ターゲットは `AutoNoteTestSupport` に依存している（overview §2） |
-| 02 | `RecordingSession` の状態（録音中・一時停止中）。本計画 Task 7 の `RecordingActivity`（意味は Task 8）に 02 が準拠する（02 で準拠していなければ計画 06 が配線時に小さな adapter を書く）。クラッシュ復旧の「はい」は 02 の `CrashRecovery` が manifest を `recorded` に確定してから本計画の `enqueue` を呼ぶ（分割 WAV は `TrackFile` ごとに文字起こしするので結合は要らない） |
-| 04 | `protocol BatchTranscriber`（overview §4。ファイル内相対時刻を返し、呼び手が `startOffset` を足す）。エンジンの表示名（`transcript_engine` に入れる文字列。例 `whisper.cpp large-v3-turbo`）は 04 の `EngineCatalog` から計画 06 が渡す。リアルタイム版は `transcripts/<id>/live.json`（`Transcript`）に保存されている前提 |
+| 01 Model | `MeetingID`、`TimelineTime`（`.hhmmss`・`init?(hhmmss:)`）、`Speaker.displayName`、`Utterance`、`Transcript`、`Transcript.fallbackEngineLabel(live:)`、`Bookmark`、`Manifest`、`MeetingStatus`、`MinutesOutput`、`AutoNoteJSON`、`AutoNoteVersion.current` |
+| 01 Protocols（T4） | `Job { id: String; meeting: MeetingID; stages: [String]; completedStages: [String]; state: JobState; attempts: Int; lastError: String?; notBefore: Date?; createdAt: Date; generation: Int; transcriptEngine: String?; summaryFailure: String?; overwriteApproved: Bool; nextStage: String? }`、`JobState { pending, running, waiting, failed, done }`、`StageName`（`transcribe` … `automations`、`all`）、`StageContext { paths; settings; manifests; now; reportProgress }`、`SummaryInput { instructions; terms; bookmarks; transcript; language }`、`Summarizer`、`QueueStage` |
+| 01 Storage（T3・T12） | `AppPaths`（`root`・`queueJobsDirectory`・`meetingDirectory(_:)`・`tracksDirectory(_:)`・`transcriptFile(_:_:)` と `TranscriptKind.live/raw/final`・`minutesFile(_:)`）、`Settings`（`outputFolder: String?`・`claudePath`・`claudeModel: String?`・`summarizerKind: SummarizerKind`・`fillerRemoval: Bool`・`audioRetentionDays: Int`（0 で削除しない））、`actor SettingsStore`（`load()`・`update(_:)`）、`actor ManifestStore`（`load(_:)`・`update(_:_:)`・`all()`・`delete(_:)`）、`actor PortableConfigStore(paths:outputFolder:)`（`read(_: PortableFile) -> Data?`、`.prompt` `.dictionary` `.frontmatter`）、`PortableDefaults.standard` |
+| 01 Dictionary / Vault（T5〜T11） | `DictionaryFile.parse(_:)`・`.default`、`Replacer(_:)`、`FillerRemover(fillers:)`、`FrontmatterTemplate(text:)`・`.defaultText`、`MeetingDocument(manifest:transcript:minutes:frontmatter:appVersion:timeZone:)`、`actor VaultWriter(outputFolder:paths:now:)` の `write(_:policy:renameToMatchTitle:) -> VaultWriteOutcome`（`.written(URL)` / `.conflict(URL)`）・`rebuildIndex()`・`remove(_:)`・`record(for:)`、`OverwritePolicy.ifUnchanged / .force`、`VaultError.outputFolderUnavailable` |
+| 01 TestSupport | `TemporaryDirectory.make()`、`Samples`、`u(_:_:_:)`、`FakeError`、`CallLog`、`FakeBatchTranscriber(results:failure:)`（キーはファイル名）、`FakeSummarizer(result:)`、`FakeQueueStage(name:log:failure:)` |
+| 02 | `actor RecordingSession` の `events() -> AsyncStream<RecordingEvent>`（呼ぶたびに新しい購読）と `state: SessionState`（`idle` / `recording(MeetingID)` / `paused(MeetingID)`）。`RecordingEvent.started(MeetingID)`・`.stopped(Manifest, StopReason)` |
+| 04 | `actor BatchGate`（`init()`・`pause()`・`resume()`・`waitIfPaused()`・`nonisolated var isPaused`。04 T5）、`struct FinalTranscriptionRunner(transcriber:engineName:paths:gate:)` の `run(manifest:dictionary:fillerRemoval:progress:) async throws -> FinalTranscriptResult`（04 T11。overview §8b）、`FinalTranscriptResult { raw; final; rawURL; finalURL }`、`PCMAudio.writeWAV(_:to:)`。結合後のファイル名は `merged/mic-0.wav`（04 T11 のテスト） |
 
 ## Review Focus
 
-1. **2 時間の会議の stdin（約 90KB）でパイプが詰まる**: stdin を全部書いてから stdout を読むと 64KB でデッドロックし、10 分のタイムアウトまで止まる。書き込みと読み出しを並行させる（Task 5 のテスト `largeStdinDoesNotDeadlock`）
-2. **再生成が失敗したとき既存の議事録を `transcript_only` で上書きする**: 利用者から見ると議事録が消える。前回の `minutes.json` があれば Vault は触らず、失敗だけ表示する（Task 10・11 のテスト `failedRegenerateKeepsExistingMinutes`）
-3. **文字起こしの発言に区切り行そっくりの文や改行が入る**: 「----- ここまで文字起こし -----」を発言されるとデータの終わりを偽装できる。発言内の改行を空白に直し、全行に `[HH:MM:SS] 話者:` を前置する（Task 3 のテスト `utteranceCannotForgeDelimiter`）
-4. **保持期間の自動削除が未処理の会議の音声を消す**: 30 日以上前の録音を取り込んだ・待ち行列が長く止まっていた場合など。確定版文字起こしが済んでいない会議と録音中の会議の音声は消さない（Task 13 のテスト `purgeKeepsAudioOfUntranscribedMeetings`）
-5. **確定版文字起こしの途中でアプリ終了・録音開始が来る**: Intel では 1 時間 20 分かかる段階なので、最初からやり直すと終わらない。5 分の分割ファイル単位で結果を保存し、再開時は済んだファイルを飛ばす。中断は試行回数に数えない（Task 8 の `recordingStartCancelsRunningTranscribe`、Task 9 の `resumesFromCachedSegments`）
+1. **2 時間の会議の stdin（約 90KB）でパイプが詰まる**: stdin を全部書いてから stdout を読むと 64KB で止まり、10 分のタイムアウトまで動かない。書き込みと読み出しを並行させる（Task 5 `largeStdinDoesNotDeadlock`）
+2. **再生成が失敗したとき、既存の議事録を `transcript_only` で上書きしてしまう**: 利用者から見ると議事録が消える。前回の `minutes.json` があれば Vault は触らず、失敗だけを見せる（Task 10・11 `failedRegenerateKeepsExistingMinutes`）
+3. **発言の中に区切り行そっくりの文や改行が入る**: 「----- ここまで文字起こし -----」と発言されると、データの終わりを偽装できる。発言内の改行を空白にし、全行に `[HH:MM:SS] 話者:` を前置する（Task 3 `utteranceCannotForgeDelimiter`）
+4. **保持期間の自動削除が、未処理の会議の音声を消す**: 30 日より前の録音を取り込んだときや、待ち行列が長く止まっていたとき。確定版が済んでいない会議と、録音中の会議の音声は消さない（Task 13 `purgeKeepsAudioOfUntranscribedMeetings`）
+5. **rate limit の 1 時間後に議事録ができても `minutes_generated` の Automations が走らない**: 二重実行を防ぐキーは `meeting:generation`（overview §3）なので、自動の再実行でも `generation` を上げる（Task 7 `rateLimitedJobRerunsSummarizeWithNewGeneration`）
 
 ---
 
@@ -86,48 +85,45 @@ scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
 
 ---
 
-### Task 2: ジョブのモデルと `JobStore`（永続化）
+### Task 2: `JobStore`（計画 01 の `Job` の永続化）と段階の結果の型
 
 **Files:**
-- Create: `Sources/AutoNoteCore/Minutes/Job.swift`（`Job`、`StageRecord`、`StageState`、`StageName`、`SummaryFailure`、`StageError`、`StageContext`）
-- Create: `Sources/AutoNoteCore/Minutes/JobStore.swift`
-- Create: `Sources/AutoNoteCore/Minutes/AppPaths+Minutes.swift`
-- Modify: `Sources/AutoNoteCore/Minutes/Protocols.swift`（計画 01 が置いた `Job`・`StageContext` の仮型があれば削除）
+- Create: `Sources/AutoNoteCore/Minutes/JobStore.swift`、`Sources/AutoNoteCore/Minutes/StageError.swift`、`Sources/AutoNoteCore/Minutes/AppPaths+Minutes.swift`
 - Test: `Tests/AutoNoteCoreTests/Minutes/JobStoreTests.swift`
 
 **Interfaces:**
-- Consumes: `MeetingID`、`AppPaths`、`Settings`、`ManifestStore`、`VaultFileRecord`（計画 01）
+- Consumes: `Job`・`JobState`・`StageName`（計画 01 T4）、`AppPaths.queueJobsDirectory`、`AutoNoteJSON`、`Samples`・`TemporaryDirectory`（計画 01）
 - Produces:
-  - `enum StageName { static let transcribe = "transcribe", summarize = "summarize", writeVault = "write_vault", updateIndex = "update_index", automations = "automations"; static let all: [String] }`（この順）
-  - `enum StageState: String, Codable, Sendable { case pending, running, done, skipped, waiting, failed, awaitingConfirmation }`
-  - `struct StageRecord: Codable, Equatable, Sendable { var name: String; var state: StageState; var attempts: Int; var nextRunAt: Date?; var lastError: String?; var continuedPastFailure: Bool; var updatedAt: Date? }`
-  - `struct SummaryFailure: Codable, Equatable, Sendable { enum Kind: String, Codable, Sendable { case notLoggedIn, rateLimited, contextExceeded, timedOut, claudeNotFound, invalidOutput, other }; var kind: Kind; var message: String; var at: Date }`
-  - `struct Job: Codable, Equatable, Sendable { var meetingID: MeetingID; var createdAt: Date; var stages: [StageRecord]; var transcriptEngine: String?; var summaryFailure: SummaryFailure?; var vaultFile: VaultFileRecord?; var overwriteApproved: Bool; static func new(_ id: MeetingID, createdAt: Date) -> Job; subscript(stage name: String) -> StageRecord? { get set } }`
-  - `enum StageError: Error, Equatable, Sendable { case retry(after: TimeInterval, reason: String); case failed(reason: String); case continueWithout(reason: String, retryAfter: TimeInterval?); case awaitingConfirmation(path: String) }`
-  - `struct StageContext: Sendable { let paths: AppPaths; let settings: Settings; let manifests: ManifestStore; let now: @Sendable () -> Date; let reportProgress: @Sendable (Double) -> Void }`
-  - `actor JobStore { init(directory: URL); func load(_ id: MeetingID) throws -> Job?; func save(_ job: Job) throws; func all() throws -> [Job]; func remove(_ id: MeetingID) throws }`
-  - `extension AppPaths { var jobsDirectory: URL /* queue/jobs */; var claudeWorkingDirectory: URL /* claude-cwd */; func finalTranscript(for:) -> URL /* transcripts/<id>/final.json */; func rawTranscript(for:) -> URL /* raw.json */; func liveTranscript(for:) -> URL /* live.json */; func minutesJSON(for:) -> URL /* minutes.json */; func batchSegmentCache(for:) -> URL /* transcripts/<id>/batch/ */ }`（計画 01 に同じものがあればこの extension は書かず 01 のものを使う）
+  - `public actor JobStore { public init(paths: AppPaths); public func load(_ id: MeetingID) throws -> Job?; public func save(_ job: Job) throws; public func all() throws -> [Job]; public func remove(_ id: MeetingID) throws }`。ファイルは `queueJobsDirectory/<meeting.rawValue>.json`。1 会議 1 ジョブで、`Job.id` は会議 ID の文字列にする
+  - `public enum StageError: Error, Equatable, Sendable { case retry(after: TimeInterval, reason: String); case failed(reason: String); case awaitingConfirmation(path: String) }`（段階が投げる。待ち行列の扱いは Task 7）
+  - `public enum SummaryFailureKind: String, Codable, Sendable { case notLoggedIn = "not_logged_in", rateLimited = "rate_limited", contextExceeded = "context_exceeded", timedOut = "timed_out", claudeNotFound = "claude_not_found", invalidOutput = "invalid_output", other }`、`static func encode(_ kind: Self, message: String) -> String`（`"<raw>: <message>"`。`Job.summaryFailure` に入れる）、`static func of(_ summaryFailure: String?) -> Self?`（先頭の raw を読む）
+  - `extension AppPaths { public var claudeWorkingDirectory: URL }`（`claude-cwd/`。overview §5）
 
 - [ ] **Step 1: 失敗するテストを書く**
 
 ```swift
 @Suite struct JobStoreTests {
-    @Test func newJobHasFiveStagesInOrderAllPending() {
-        let job = Job.new(MeetingID(rawValue: "20261024-1400-a1b2"), createdAt: .init(timeIntervalSince1970: 0))
-        #expect(job.stages.map(\.name) == ["transcribe", "summarize", "write_vault", "update_index", "automations"])
-        #expect(job.stages.allSatisfy { $0.state == .pending && $0.attempts == 0 })
+    private func job(_ id: String, _ created: TimeInterval) -> Job {
+        Job(id: id, meeting: MeetingID(rawValue: id), stages: StageName.all, completedStages: [], state: .pending, attempts: 0, lastError: nil, notBefore: nil, createdAt: Date(timeIntervalSince1970: created))
     }
-    @Test func saveWritesSnakeCaseJsonNamedByMeetingID() async throws { /* "<dir>/20261024-1400-a1b2.json" に "meeting_id"・"next_run_at"・"continued_past_failure"、日付は ISO 8601 */ }
-    @Test func loadRoundTripsAllFields() async throws { /* nextRunAt・lastError・vaultFile・summaryFailure を入れて保存 → load で == */ }
-    @Test func allReturnsOldestFirstAndSkipsBrokenFiles() async throws { /* 3 件を逆順に保存＋壊れた "x.json" → createdAt 昇順の 3 件、"x.json.broken" に改名 */ }
-    @Test func saveIsAtomicAndRemoveDeletes() async throws { /* 保存後に *.tmp が残らない。remove でファイルが消える */ }
+    @Test func saveWritesFileNamedByMeetingAndRoundTrips() async throws {
+        // generation 2・transcriptEngine・summaryFailure・notBefore を入れて保存 → "<root>/queue/jobs/20261024-1400-a1b2.json"、
+        // 中身に "completed_stages"・"not_before"・"overwrite_approved"、load で ==
+    }
+    @Test func allReturnsOldestFirstAndSetsAsideBrokenFiles() async throws { /* 3 件を逆順に保存＋壊れた "x.json" → createdAt 昇順の 3 件、"x.json.broken" に改名 */ }
+    @Test func saveIsAtomicAndRemoveDeletes() async throws { /* 保存後に *.tmp が残らない。remove でファイルが消える。無い ID の load は nil */ }
+    @Test func summaryFailureKindRoundTrips() {
+        #expect(SummaryFailureKind.encode(.rateLimited, message: "hit your limit") == "rate_limited: hit your limit")
+        #expect(SummaryFailureKind.of("not_logged_in: x") == .notLoggedIn); #expect(SummaryFailureKind.of(nil) == nil); #expect(SummaryFailureKind.of("zzz") == .other)
+    }
+    @Test func claudeWorkingDirectoryIsUnderRoot() { #expect(AppPaths(root: URL(filePath: "/r")).claudeWorkingDirectory.path == "/r/claude-cwd") }
 }
 ```
 
-- [ ] **Step 2: 失敗を確認する** — Run: `swift test --filter JobStoreTests` → Expected: FAIL（`Job` / `JobStore` が無いためコンパイルエラー）
-- [ ] **Step 3: 実装する** — `JSONEncoder` は `.convertToSnakeCase`・`.iso8601`・`.sortedKeys`（overview §3）。保存は同じフォルダの一時ファイルに書いてから `FileManager.replaceItemAt`（無ければ `moveItem`）。`all()` はデコードに失敗したファイルを `<name>.broken` に改名して飛ばし、ログに会議 ID 相当のファイル名だけ書く。
+- [ ] **Step 2: 失敗を確認する** — Run: `swift test --filter JobStoreTests` → Expected: FAIL（`JobStore` が無い）
+- [ ] **Step 3: 実装する** — 保存は同じフォルダの一時ファイルに書いてから `FileManager.replaceItemAt`（無ければ `moveItem`）。`all()` はデコードに失敗したファイルを `<name>.broken` に改名して飛ばし、ログにはファイル名だけを書く。
 - [ ] **Step 4: 通過を確認する** — Run: `swift test --filter JobStoreTests` → Expected: PASS
-- [ ] **Step 5: コミット** — `git add Sources/AutoNoteCore/Minutes Tests/AutoNoteCoreTests/Minutes && git commit -m "feat(minutes): add job model and persistent JobStore"`
+- [ ] **Step 5: コミット** — `git add Sources/AutoNoteCore/Minutes Tests/AutoNoteCoreTests/Minutes && git commit -m "feat(minutes): add JobStore for queue jobs"`
 
 ---
 
@@ -136,14 +132,15 @@ scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
 **Files:**
 - Create: `Sources/AutoNoteCore/Minutes/DefaultPrompt.swift`
 - Create: `Sources/AutoNoteCore/Minutes/PromptBuilder.swift`
-- Modify: 計画 01 の `PortableConfigStore`（`prompt.md` の初期作成に仮の文面を使っていれば `DefaultPrompt.instructions` に差し替える）
+- Modify: `Sources/AutoNoteCore/Storage/PortableConfigStore.swift`（計画 01 T12 の `PortableDefaults.standard` に `.prompt: Data(DefaultPrompt.instructions.utf8)` を足す。01 は「prompt の既定文は計画 05 が足す」としている）
+- Modify: `Tests/AutoNoteCoreTests/Storage/PortableConfigStoreTests.swift`（`createdDefaults` の期待値を `[.dictionary, .prompt, .frontmatter, .devices]` にする）
 - Test: `Tests/AutoNoteCoreTests/Minutes/PromptBuilderTests.swift`
 
 **Interfaces:**
-- Consumes: `SummaryInput`、`Utterance`、`Bookmark`、`TimelineTime.hhmmss`、`Speaker.displayName`
+- Consumes: `SummaryInput`、`Utterance`、`Bookmark`、`TimelineTime.hhmmss`、`Speaker.displayName`、`PortableDefaults`・`PortableFile.prompt`（計画 01）
 - Produces:
-  - `enum DefaultPrompt { static let instructions: String; static let dataNotice: String; static func partNote(index: Int, count: Int) -> String; static let mergeInstructions: String }`
-  - `struct PromptBuilder: Sendable { static let charsPerToken: Double = 1.0; static let fixedOverheadTokens = 16_000; static let splitThresholdTokens = 200_000; func build(_ input: SummaryInput) -> String; func build(_ input: SummaryInput, utterances: ArraySlice<Utterance>, part: (index: Int, count: Int)?) -> String; static func estimateTokens(_ prompt: String) -> Int }`
+  - `public enum DefaultPrompt { public static let instructions: String; public static let dataNotice: String; public static func partNote(index: Int, count: Int) -> String; public static let mergeInstructions: String }`
+  - `public struct PromptBuilder: Sendable { public init(); public static let charsPerToken: Double = 1.0; public static let fixedOverheadTokens = 16_000; public static let splitThresholdTokens = 200_000; public func build(_ input: SummaryInput) -> String; public func build(_ input: SummaryInput, utterances: ArraySlice<Utterance>, part: (index: Int, count: Int)?) -> String; public static func estimateTokens(_ prompt: String) -> Int }`
   - 区切り行の定数 `PromptBuilder.transcriptBegin = "----- ここから文字起こし（データ） -----"`、`transcriptEnd = "----- ここまで文字起こし -----"`
 
 既定の指示文（`DefaultPrompt.instructions`。`prompt.md` の初期内容。`prompt.md` が無い・空白だけのときもこれを使う）:
@@ -193,6 +190,9 @@ scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
     @Test func estimateIsCharsPlusOverhead() {
         #expect(PromptBuilder.estimateTokens(String(repeating: "あ", count: 22_300)) == 38_300)
     }
+    @Test func portableDefaultsIncludePrompt() {
+        #expect(PortableDefaults.standard[.prompt] == Data(DefaultPrompt.instructions.utf8))
+    }
     @Test func estimateIsNotBelowMeasuredSpikeValues() {
         // 項目 6 の実測: 60 分 22,300 字 → 34,777、120 分 44,557 字 → 53,528（user 設定。project はこれより少ない）
         #expect(PromptBuilder.estimateTokens(String(repeating: "あ", count: 22_300)) >= 34_777)
@@ -203,8 +203,8 @@ scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
 
 - [ ] **Step 2: 失敗を確認する** — Run: `swift test --filter PromptBuilderTests` → Expected: FAIL（`PromptBuilder` が無い）
 - [ ] **Step 3: 実装する** — `estimateTokens = Int((Double(prompt.count) / charsPerToken).rounded(.up)) + fixedOverheadTokens`。係数の根拠をコメントに書く: 項目 6 で 60→120 分の差 22,257 字が 18,751 トークン（1 トークン ≈ 1.19 字）、固定の上乗せ約 16,000（`user` 設定。`project` では約 10,000）。安全側（多めに見積もる）に丸めて 1.0 と 16,000 にした。
-- [ ] **Step 4: 通過を確認する** — Run: `swift test --filter PromptBuilderTests` → Expected: PASS
-- [ ] **Step 5: コミット** — `git add Sources/AutoNoteCore/Minutes Tests/AutoNoteCoreTests/Minutes && git commit -m "feat(minutes): build claude stdin with fixed data notice and token estimate"`
+- [ ] **Step 4: 通過を確認する** — Run: `swift test --filter "PromptBuilderTests|PortableConfigStoreTests"` → Expected: PASS
+- [ ] **Step 5: コミット** — `git add Sources/AutoNoteCore/Minutes Sources/AutoNoteCore/Storage/PortableConfigStore.swift Tests/AutoNoteCoreTests/Minutes Tests/AutoNoteCoreTests/Storage/PortableConfigStoreTests.swift && git commit -m "feat(minutes): build claude stdin with fixed data notice and token estimate"`
 
 ---
 
@@ -217,9 +217,9 @@ scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
 **Interfaces:**
 - Consumes: Task 3 の `PromptBuilder`、`DefaultPrompt`
 - Produces:
-  - `enum SummaryPlan: Equatable, Sendable { case single(prompt: String); case split(parts: [String]) }`
-  - `func plan(_ input: SummaryInput, minimumParts: Int = 1) -> SummaryPlan`（`PromptBuilder` のメソッド）
-  - `func mergePrompt(instructions: String, partials: [MinutesOutput]) -> String`
+  - `public enum SummaryPlan: Equatable, Sendable { case single(prompt: String); case split(parts: [String]) }`
+  - `public func plan(_ input: SummaryInput, minimumParts: Int = 1) -> SummaryPlan`（`PromptBuilder` のメソッド）
+  - `public func mergePrompt(instructions: String, partials: [MinutesOutput]) -> String`
 
 `partNote(index:count:)` の文面（`{k}` `{n}` に数字を入れる）:
 
@@ -285,12 +285,13 @@ scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
 - Test: `Tests/AutoNoteCoreTests/Minutes/ProcessRunnerTests.swift`、`Tests/AutoNoteCoreTests/Minutes/ClaudeLocatorTests.swift`
 
 **Interfaces:**
+- Consumes: `SettingsStore`・`Settings.claudePath`（計画 01）
 - Produces:
-  - `struct ProcessResult: Sendable, Equatable { var exitCode: Int32; var stdout: Data; var stderr: Data; var timedOut: Bool }`
-  - `protocol ProcessRunning: Sendable { func run(executable: URL, arguments: [String], stdin: Data, workingDirectory: URL, environment: [String: String], timeout: Duration) async throws -> ProcessResult }`
-  - `struct FoundationProcessRunner: ProcessRunning`（タイムアウト時は SIGTERM、5 秒後も生きていれば SIGKILL、`timedOut = true`。呼び出し側の Task がキャンセルされたら同じ手順で止めて `CancellationError` を投げる）
-  - `enum ClaudeLocator { static let fallbackCandidates: [String]; static func locate(home: URL, loginShellLookup: @Sendable () async -> String?, isExecutable: @Sendable (String) -> Bool) async -> String?; static func loginShellLookup() async -> String? }`
-  - `static func childEnvironment(claudePath: String, base: [String: String]) -> [String: String]`（`ClaudeLocator` に置く）
+  - `public struct ProcessResult: Sendable, Equatable { public init(exitCode:stdout:stderr:timedOut:); public var exitCode: Int32; public var stdout: Data; public var stderr: Data; public var timedOut: Bool }`
+  - `public protocol ProcessRunning: Sendable { func run(executable: URL, arguments: [String], stdin: Data, workingDirectory: URL, environment: [String: String], timeout: Duration) async throws -> ProcessResult }`
+  - `public struct FoundationProcessRunner: ProcessRunning`（`public init()`）（タイムアウト時は SIGTERM、5 秒後も生きていれば SIGKILL、`timedOut = true`。呼び出し側の Task がキャンセルされたら同じ手順で止めて `CancellationError` を投げる）
+  - `public enum ClaudeLocator { public static let fallbackCandidates: [String]; public static func locate(home: URL, loginShellLookup: @Sendable () async -> String?, isExecutable: @Sendable (String) -> Bool) async -> String?; public static func loginShellLookup() async -> String?; public static func fillDefaultPath(_ store: SettingsStore, locate: @Sendable () async -> String? = { … 既定の locate … }) async throws -> String? }`。`fillDefaultPath` は `claudePath` が nil のときだけ探して `update` で保存し、保存後の値を返す（計画 01 の Settings 表「既定値は計画 05 が起動時に埋める」。呼ぶのは計画 06 の起動処理）
+  - `public static func childEnvironment(claudePath: String, base: [String: String]) -> [String: String]`（`ClaudeLocator` に置く）
 
 探索の順: `loginShellLookup()`（`/bin/zsh -lc 'command -v claude'` の出力の 1 行目。GUI アプリは PATH を継承しないため）→ `~/.local/bin/claude` → `~/.claude/local/claude` → `/opt/homebrew/bin/claude` → `/usr/local/bin/claude`。実行可能なものの最初。子プロセスの環境は親の環境に、`PATH` の先頭へ `claude` のあるフォルダと `/usr/bin:/bin:/usr/sbin:/sbin` を足したもの。
 
@@ -312,6 +313,7 @@ scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
 @Suite struct ClaudeLocatorTests {
     @Test func prefersLoginShellResult() async { /* lookup が "/x/claude" を返し実行可能 → "/x/claude" */ }
     @Test func fallsBackToCandidatesInOrder() async { /* lookup nil、~/.local/bin/claude だけ実行可能 → それ。何も無ければ nil */ }
+    @Test func fillDefaultPathOnlyWhenUnset() async throws { /* claudePath nil → locate の値を保存。"/y/claude" が保存済み → locate を呼ばず "/y/claude" */ }
     @Test func childPathStartsWithClaudeDirectory() { /* PATH の先頭が "/x:/usr/bin:/bin:/usr/sbin:/sbin:" */ }
 }
 ```
@@ -332,12 +334,12 @@ scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
 - Test: `Tests/AutoNoteCoreTests/Minutes/ClaudeCodeSummarizerTests.swift`、`Tests/AutoNoteCoreTests/Minutes/FakeClaude.swift`（テスト用の偽 `claude` を一時フォルダに作る補助）
 
 **Interfaces:**
-- Consumes: Task 3・4 の `PromptBuilder`・`SummaryPlan`、Task 5 の `ProcessRunning`・`ClaudeLocator.childEnvironment`、`Summarizer`・`SummaryInput`・`MinutesOutput`（計画 01）
+- Consumes: Task 3・4 の `PromptBuilder`・`SummaryPlan`、Task 5 の `ProcessRunning`・`ClaudeLocator.childEnvironment`、`Summarizer`・`SummaryInput`・`MinutesOutput`・`AutoNoteJSON`（計画 01）
 - Produces:
-  - `enum MinutesSchema { static let json: String }`（`scripts/minutes-schema.json` と同じ内容）
-  - `enum SummarizerError: Error, Equatable, Sendable { case claudeNotFound(path: String); case notLoggedIn; case rateLimited(message: String); case contextExceeded(message: String); case timedOut; case invalidOutput(message: String); case failed(exitCode: Int32, message: String) }`
-  - `struct ClaudeCodeSummarizer: Summarizer { init(claudePath: String, model: String?, workingDirectory: URL, runner: any ProcessRunning = FoundationProcessRunner(), timeout: Duration = .seconds(600), builder: PromptBuilder = PromptBuilder()); func summarize(_ input: SummaryInput) async throws -> MinutesOutput; static func arguments(model: String?) -> [String] }`
-  - `enum ClaudeResultClassifier { static func classify(_ result: ProcessResult) -> Result<MinutesOutput, SummarizerError>; static func isLoggedIn(_ result: ProcessResult) -> Bool }`
+  - `public enum MinutesSchema { public static let json: String }`（`scripts/minutes-schema.json` と同じ内容）
+  - `public enum SummarizerError: Error, Equatable, Sendable { case claudeNotFound(path: String); case notLoggedIn; case rateLimited(message: String); case contextExceeded(message: String); case timedOut; case invalidOutput(message: String); case failed(exitCode: Int32, message: String) }`
+  - `public struct ClaudeCodeSummarizer: Summarizer { public init(claudePath: String, model: String?, workingDirectory: URL, runner: any ProcessRunning = FoundationProcessRunner(), timeout: Duration = .seconds(600), builder: PromptBuilder = PromptBuilder()); public func summarize(_ input: SummaryInput) async throws -> MinutesOutput; public static func arguments(model: String?) -> [String] }`
+  - `public enum ClaudeResultClassifier { public static func classify(_ result: ProcessResult) -> Result<MinutesOutput, SummarizerError>; public static func isLoggedIn(_ result: ProcessResult) -> Bool }`
 
 `arguments(model: nil)` は次と完全一致（要件書 §8.1）。`model` が空でなければ末尾に `"--model", model` を足す:
 
@@ -354,7 +356,7 @@ scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
 | 条件（上から順に判定） | 結果 |
 |---|---|
 | `timedOut` | `.timedOut` |
-| JSON で `is_error == false` かつ `subtype == "success"` かつ `structured_output` が `MinutesOutput` にデコードできる | 成功（`num_turns` は見ない） |
+| JSON で `is_error == false` かつ `subtype == "success"` かつ `structured_output` が `AutoNoteJSON.decoder()` で `MinutesOutput` にデコードできる | 成功（`num_turns` は見ない） |
 | 文言に `not logged in` / `run /login` / `invalid api key` / `authentication_error` | `.notLoggedIn` |
 | 文言に `hit your limit` / `usage limit` / `rate_limit` / `rate limit` | `.rateLimited` |
 | 文言に `prompt is too long` / `context window` / `context length` / `too many tokens` | `.contextExceeded` |
@@ -406,348 +408,333 @@ scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
 ### Task 7: `PostProcessingQueue` の骨格 — 順序、再試行規則、再開、進捗の公開
 
 **Files:**
-- Create: `Sources/AutoNoteCore/Minutes/PostProcessingQueue.swift`
-- Create: `Sources/AutoNoteCore/Minutes/QueueSnapshot.swift`
-- Create: `Sources/AutoNoteCore/Minutes/QueueClock.swift`
-- Create: `Sources/AutoNoteCore/Minutes/RecordingActivity.swift`
+- Create: `Sources/AutoNoteCore/Minutes/PostProcessingQueue.swift`、`Sources/AutoNoteCore/Minutes/QueueSnapshot.swift`、`Sources/AutoNoteCore/Minutes/QueueClock.swift`、`Sources/AutoNoteCore/Minutes/RecordingActivity.swift`
 - Create: `Sources/AutoNoteTestSupport/Minutes/FakeQueueClock.swift`、`Sources/AutoNoteTestSupport/Minutes/ScriptedStage.swift`
 - Test: `Tests/AutoNoteCoreTests/Minutes/PostProcessingQueueTests.swift`
 
 **Interfaces:**
-- Consumes: Task 2 の `Job`・`StageRecord`・`StageError`・`StageContext`・`JobStore`、`QueueStage`・`ManifestStore`・`SettingsStore`（計画 01）
+- Consumes: Task 2 の `JobStore`・`StageError`・`SummaryFailureKind`、`Job`・`JobState`・`StageName`・`StageContext`・`QueueStage`・`ManifestStore`・`SettingsStore`・`CallLog`（計画 01）、`BatchGate`（計画 04。この Task では受け取って持つだけ）
 - Produces:
-  - `protocol QueueClock: Sendable { func now() -> Date; func sleep(until: Date) async throws }`、`struct SystemQueueClock: QueueClock`
-  - `struct QueueSnapshot: Equatable, Sendable { var jobs: [JobProgress]; var pausedForRecording: Bool }`
-  - `struct JobProgress: Equatable, Sendable { var meetingID: MeetingID; var stage: String?; var state: StageState; var progress: Double?; var nextRunAt: Date?; var lastError: String?; var summaryFailure: SummaryFailure? }`（完了していないジョブと、`summaryFailure` を持つ完了ジョブ。`createdAt` 昇順）
-  - `actor PostProcessingQueue { init(store: JobStore, stages: [any QueueStage], manifests: ManifestStore, settings: SettingsStore, paths: AppPaths, recording: any RecordingActivity, clock: any QueueClock); func register(_ stage: any QueueStage); func start() async; func stop() async; func enqueue(_ id: MeetingID) async throws; func rerun(_ id: MeetingID, from stage: String) async throws; func resolveOverwrite(_ id: MeetingID, overwrite: Bool) async throws; func snapshot() -> QueueSnapshot; nonisolated func snapshots() -> AsyncStream<QueueSnapshot>; func runUntilIdle() async }`
-  - `enum QueueError: Error, Equatable { case manifestNotRecorded(MeetingStatus); case unknownMeeting(MeetingID); case unknownStage(String); case transcriptMissing(MeetingID) }`
-  - TestSupport: `final class FakeQueueClock: QueueClock`（`advance(by:)` で進み、`sleep(until:)` は進められるまで待つ）、`struct ScriptedStage: QueueStage`（名前と、呼び出し回ごとの結果 `[Result<Void, StageError>]`・進捗値・待ち合わせ用の `AsyncStream` を受け、呼び出しを共有ログ actor に記録する）
-  - `protocol RecordingActivity: Sendable { func isRecordingUpdates() -> AsyncStream<Bool> }`（購読直後に現在値を 1 回流し、以後変化のたびに流す）と `struct NeverRecording: RecordingActivity`（常に `false`。CLI の開発用）。録音状態による停止の規則は Task 8 で足す
+  - `public protocol QueueClock: Sendable { func now() -> Date; func sleep(until: Date) async throws }`、`public struct SystemQueueClock: QueueClock`
+  - `public protocol RecordingActivity: Sendable { func isRecordingUpdates() async -> AsyncStream<Bool> }`（購読直後に現在値を 1 回流し、以後は変化のたびに流す）、`public struct NeverRecording: RecordingActivity`（常に `false`。`dev summarize` 用）。録音状態で何をするかは Task 8
+  - `public struct QueueSnapshot: Equatable, Sendable { public var jobs: [JobProgress]; public var pausedForRecording: Bool }`
+  - `public struct JobProgress: Equatable, Sendable { public var meetingID: MeetingID; public var stage: String?; public var state: JobState; public var progress: Double?; public var notBefore: Date?; public var lastError: String?; public var summaryFailure: SummaryFailureKind?; public var awaitingConfirmation: Bool; public var generation: Int }`。並びは `createdAt` 昇順。完了したジョブは `summaryFailure` を持つものだけ入れる。計画 06 の `NoticeRelay` はこれを見て `claudeNotLoggedIn`・`overwriteConfirmation`・`transcriptOnly` などの通知を出す（本計画は通知を出さない）
+  - `public actor PostProcessingQueue { public init(paths: AppPaths, stages: [any QueueStage], activity: any RecordingActivity, gate: BatchGate? = nil, clock: any QueueClock = SystemQueueClock()); public func register(_ stage: any QueueStage); public func start() async; public func stop() async; public func enqueue(_ id: MeetingID) async; public func rerun(_ id: MeetingID, from stage: String) async throws; public func retry(_ id: MeetingID) async throws; public func resolveOverwrite(_ id: MeetingID, overwrite: Bool) async throws; public func snapshot() -> QueueSnapshot; public nonisolated func snapshots() -> AsyncStream<QueueSnapshot>; public func runUntilIdle() async }`。呼び出し形 `PostProcessingQueue(paths:stages:activity:)` は overview §8b のとおり。`gate` は計画 06 が `FinalTranscriptionRunner` に渡したものと同じものを渡す。内部で `JobStore(paths:)`・`ManifestStore(paths:)`・`SettingsStore(paths:)` を作る
+  - `public enum QueueError: Error, Equatable { case unknownMeeting(MeetingID); case unknownStage(String); case transcriptMissing(MeetingID); case notTooShort(MeetingStatus) }`
+  - TestSupport: `public final class FakeQueueClock: QueueClock, @unchecked Sendable`（`advance(by:)` で進む。`sleep(until:)` は時刻がそこへ進むまで待つ）、`public struct ScriptedStage: QueueStage`（`init(name: String, log: CallLog, results: [Result<Void, StageError>] = [], progress: Double? = nil, onRun: (@Sendable (inout Job) -> Void)? = nil, gate: AsyncStream<Void>? = nil)`。n 回目の呼び出しで `results[n]` を返し、尽きたら成功。`gate` があれば 1 要素届くまで待つ）
 
-規則（実装とテストの両方の基準）:
-- 1 会議 1 ジョブ（ファイル名は会議 ID）。`enqueue` は manifest の `status == .recorded` のときだけ受け、ジョブを作って保存する。同じ会議の未完了ジョブがあれば何もしない
-- 実行するのは常に 1 段階だけ（全ジョブを通して）。選ぶのは「実行できる段階を持つジョブのうち `createdAt` が最も古いもの」の、先頭から最初の未完了段階
-- 段階が実行できる: `pending`、または `waiting` で `nextRunAt <= now`。`failed`・`awaitingConfirmation`、`nextRunAt` 前の `waiting` はジョブをそこで止める（他のジョブは進む）。ただし `continuedPastFailure == true` の段階は飛ばして後ろを見る
-- 実行前に `state = .running` を保存し、`attempts += 1`
-- 段階の結果: 正常終了 → `done`。`.retry(after:reason:)` → `waiting`、`nextRunAt = now + after`。`.failed` → `failed`。`.continueWithout(reason:retryAfter:)` → `retryAfter` があれば `waiting`＋`nextRunAt`、無ければ `failed`、どちらも `continuedPastFailure = true` で後続へ進む。`.awaitingConfirmation(path:)` → `awaitingConfirmation`（`lastError` に Vault からの相対パス）。その他のエラー → `failed`（`lastError` は `String(describing:)` の先頭 300 字）。`CancellationError` → `pending` に戻し `attempts -= 1`
-- `continuedPastFailure` の段階が後で正常終了したら、その後ろの段階をすべて `pending`（`attempts = 0`）に戻す
-- 登録されていない段階名（初期状態の `automations`）は実行せず `skipped`
-- `start()`: 保存済みジョブを読み、`running` の段階を `pending` に戻して（`attempts -= 1`）保存し、ループを始める。ループは `runUntilIdle()` → 最も早い `nextRunAt` まで `clock.sleep`、または `enqueue`・`rerun`・`resolveOverwrite`・録音状態の変化で起きる
-- `rerun(_:from:)`: 指定段階とその後ろを `pending`・`attempts = 0`・`continuedPastFailure = false` に戻す。`resolveOverwrite(_:overwrite: true)` は `job.overwriteApproved = true` で `write_vault` を `pending` に、`false` は `write_vault` 以降を `skipped` にする
-- 状態が変わるたびに `snapshots()` の全購読者へ流す。`StageContext.reportProgress` の値は `JobProgress.progress` に入れる（保存はしない）
+規則（`Job` の各項目の意味。実装とテストの両方の基準）:
+- `enqueue`: 会議 ID のジョブがあれば何もしない。manifest が読めない、または `status != .recorded` ならログに書いて何もしない（`async` で投げない。overview §8b）。それ以外は `Job(id: id.rawValue, meeting: id, stages: StageName.all, completedStages: [], state: .pending, attempts: 0, lastError: nil, notBefore: nil, createdAt: now)` を保存する
+- 実行するのは常に 1 段階だけ（全ジョブを通して。`claude` の直列化も兼ねる。§8.1）。選ぶのは「実行できるジョブのうち `createdAt` が最も古いもの」の `nextStage`
+- 実行できるジョブ: `state == .pending`、または `state == .waiting` で `notBefore != nil` かつ `notBefore <= now`。`.failed`・`.done`、`notBefore == nil` の `.waiting`（利用者の確認待ち）は選ばない
+- 実行前に `state = .running`、`attempts += 1` を保存する。`StageContext` は `paths`・その時点の `settings`（`SettingsStore.load()`）・`manifests`・`clock.now`・進捗の受け口で作る
+- 結果: 成功 → `completedStages` に段階名を足し、`attempts = 0`・`lastError = nil`・`notBefore = nil`。続きがあれば `.pending`。`.retry(after:reason:)` → `.waiting`・`notBefore = now + after`・`lastError = reason`。`.failed(reason:)` → `.failed`・`lastError = reason`。`.awaitingConfirmation(path:)` → `.waiting`・`notBefore = nil`・`lastError = "overwrite_confirmation: <path>"`。その他のエラー → `.failed`（`lastError` は `String(describing:)` の先頭 300 字）。`CancellationError`（`delete` と `stop` のときだけ起きる）→ `.pending`・`attempts -= 1`
+- 全段階が済んだとき: `SummaryFailureKind.of(job.summaryFailure) == .rateLimited` なら `.waiting`・`notBefore = now + 3600`（§8.1「上限由来なら 1 時間後に自動で再試行」）。それ以外は `.done`。`nextStage == nil` の `.waiting` が時刻に達したら、`rerun(id, from: "summarize")` と同じ処理をする
+- 登録されていない段階名（初期状態の `automations`）は実行せずに `completedStages` へ足す
+- `rerun(_:from:)`: `completedStages` を、`StageName.all` で `from` より前のものだけにする。`state = .pending`、`attempts = 0`、`lastError = nil`、`notBefore = nil`、`overwriteApproved = false`。`from` が `summarize` 以前なら `generation += 1`（議事録が作り直されるので、Automations の `minutes_generated` がもう一度走る。overview §3）
+- `retry(_:)`: `.failed` か `.waiting` のジョブを `.pending`・`notBefore = nil` にする（同じ段階をすぐ再実行。`generation` は変えない）
+- `resolveOverwrite(_:overwrite: true)`: `overwriteApproved = true`・`.pending`。`false`: `write_vault`・`update_index`・`automations` を `completedStages` に足して `.done`
+- `start()`: 保存済みのジョブを読み、`.running` を `.pending` に戻して `attempts -= 1` で保存し、ループを始める。ループは `runUntilIdle()` の後、最も早い `notBefore` まで `clock.sleep` するか、`enqueue`・`rerun`・`retry`・`resolveOverwrite`・録音状態の変化で起きる
+- 状態が変わるたびに `snapshots()` の全購読者へ流す。進捗の値は `JobProgress.progress` に入れる（保存はしない）
 
 - [ ] **Step 1: 失敗するテストを書く**
 
 ```swift
 @Suite struct PostProcessingQueueTests {
-    @Test func enqueueCreatesPersistedJob() async throws { /* recorded の manifest → jobs/<id>.json、5 段階 pending */ }
-    @Test func enqueueRejectsNonRecordedManifest() async throws { /* status .recording → QueueError.manifestNotRecorded(.recording) */ }
-    @Test func runsStagesInOrderAndSkipsUnregisteredAutomations() async throws {
-        // 4 段階の ScriptedStage → ログ == [transcribe, summarize, write_vault, update_index]、automations は skipped
+    // 共通: 一時 AppPaths、status .recorded の Samples.manifest を保存、ScriptedStage 4 つ（transcribe〜update_index）、NeverRecording、FakeQueueClock
+    @Test func enqueueCreatesPersistedJobOnlyForRecordedMeetings() async throws {
+        // enqueue → queue/jobs/<id>.json、stages == StageName.all、state .pending。もう一度 enqueue → 変化なし。status .recording の会議 → ジョブ無し
     }
-    @Test func oldestJobFirstAndOneStageAtATime() async throws { /* 2 ジョブ → ログは古い方の 4 段階が先、同時実行数の最大 1 */ }
-    @Test func retryWaitsUntilNextRunAt() async throws {
-        // write_vault が 1 回目 .retry(after: 300) → waiting、nextRunAt = now+300、attempts 1。
-        // advance(299) → 再実行されない。advance(1) → 再実行、done、attempts 2
+    @Test func runsStagesInOrderAndCompletesUnregisteredAutomations() async throws {
+        // ログ == [transcribe, summarize, write_vault, update_index]、completedStages == StageName.all、state .done
     }
-    @Test func failedStageBlocksOnlyItsJob() async throws { /* 古いジョブの write_vault が .failed → 新しいジョブは完了する */ }
-    @Test func continueWithoutRunsDownstreamThenResetsOnRecovery() async throws {
-        // summarize が 1 回目 .continueWithout(retryAfter: 3600)、2 回目成功
-        // → 1 周目で write_vault・update_index が 1 回ずつ実行。advance(3600) で summarize 成功 → 両者がもう 1 回ずつ実行
+    @Test func oldestJobFirstAndOneStageAtATime() async throws { /* 2 ジョブ → 古い方の 4 段階が先、同時実行数の最大 1 */ }
+    @Test func retryWaitsUntilNotBefore() async throws {
+        // write_vault が 1 回目 .retry(after: 300) → .waiting、notBefore = now+300、attempts 1。
+        // advance(299) → 再実行されない。advance(1) → 再実行して完了、attempts 0
     }
+    @Test func failedStageBlocksOnlyItsJob() async throws { /* 古いジョブの write_vault が .failed → 新しいジョブは .done になる。retry(古い方) → 完了 */ }
     @Test func awaitingConfirmationResolves() async throws {
-        // write_vault が .awaitingConfirmation → 止まる。resolveOverwrite(true) → job.overwriteApproved == true で再実行
-        // 別ジョブで resolveOverwrite(false) → write_vault 以降 skipped
+        // write_vault が .awaitingConfirmation(path: "2026/x.md") → .waiting・notBefore nil・lastError "overwrite_confirmation: 2026/x.md"、snapshot の awaitingConfirmation true。
+        // resolveOverwrite(true) → overwriteApproved == true で再実行。別ジョブで resolveOverwrite(false) → .done、write_vault 以降が completedStages にある
+    }
+    @Test func rateLimitedJobRerunsSummarizeWithNewGeneration() async throws {
+        // summarize の onRun が job.summaryFailure = "rate_limited: x" を書く（1 回目だけ）→ 4 段階が済んで .waiting・notBefore = now+3600。
+        // advance(3600) → summarize・write_vault・update_index がもう 1 回ずつ実行され、generation 1、state .done
     }
     @Test func restartResumesInterruptedStageWithoutCountingAttempt() async throws {
-        // summarize が running・attempts 1 のジョブを保存 → 新しい queue.start() → summarize から実行、transcribe は呼ばれない、attempts 1
+        // completedStages ["transcribe"]・state .running・attempts 1 のジョブを保存 → 新しい queue の start() → summarize から実行、transcribe は呼ばれない
     }
-    @Test func rerunResetsStageAndDownstream() async throws { /* rerun(from: "summarize") → summarize 以降 pending・attempts 0、transcribe は done のまま */ }
-    @Test func snapshotsReportProgress() async throws { /* transcribe が reportProgress(0.5) → 流れた snapshot に progress 0.5 */ }
-    @Test func unexpectedErrorMarksFailedWithShortMessage() async throws { /* 1,000 字のメッセージのエラー → failed、lastError は 300 字 */ }
+    @Test func rerunFromSummarizeResetsDownstreamAndBumpsGeneration() async throws { /* completedStages ["transcribe"]、generation 1。from "write_vault" なら generation は変わらない */ }
+    @Test func snapshotsReportProgress() async throws { /* transcribe の progress 0.5 → 流れた snapshot に progress 0.5 */ }
+    @Test func unexpectedErrorMarksFailedWithShortMessage() async throws { /* 1,000 字の FakeError → .failed、lastError は 300 字 */ }
 }
 ```
 
 - [ ] **Step 2: 失敗を確認する** — Run: `swift test --filter PostProcessingQueueTests` → Expected: FAIL（`PostProcessingQueue` が無い）
-- [ ] **Step 3: 実装する** — 段階の実行は子 Task で走らせ、その `Task` を保持する（Task 8 のキャンセルと `delete` に使う）。`runUntilIdle()` はスリープせず、今実行できる段階が無くなるまで回して戻る（テストと `autonote dev summarize` が使う）。
+- [ ] **Step 3: 実装する** — 段階は子 Task で走らせ、その `Task` を持つ（`delete` と `stop` のキャンセルに使う）。`runUntilIdle()` はスリープせず、今実行できる段階が無くなるまで回して戻る（テストと `dev summarize` が使う）。
 - [ ] **Step 4: 通過を確認する** — Run: `swift test --filter PostProcessingQueueTests` → Expected: PASS
-- [ ] **Step 5: コミット** — `git add Sources/AutoNoteCore/Minutes Sources/AutoNoteTestSupport/Minutes Tests/AutoNoteCoreTests/Minutes && git commit -m "feat(minutes): add persistent post-processing queue with stage retry rules"`
+- [ ] **Step 5: コミット** — `git add Sources/AutoNoteCore/Minutes Sources/AutoNoteTestSupport/Minutes Tests/AutoNoteCoreTests/Minutes && git commit -m "feat(minutes): add persistent post-processing queue with retry rules"`
 
 ---
 
-### Task 8: 録音中は確定版文字起こしを止める
+### Task 8: 録音中は確定版を一時停止する（`BatchGate`）と `RecordingActivity` のアダプタ
 
 **Files:**
-- Create: `Sources/AutoNoteTestSupport/Minutes/FakeRecordingActivity.swift`
+- Create: `Sources/AutoNoteCore/Minutes/RecordingSessionActivity.swift`、`Sources/AutoNoteTestSupport/Minutes/FakeRecordingActivity.swift`
 - Modify: `Sources/AutoNoteCore/Minutes/PostProcessingQueue.swift`
 - Test: `Tests/AutoNoteCoreTests/Minutes/QueueRecordingPauseTests.swift`
 
 **Interfaces:**
-- Consumes: Task 7 の `PostProcessingQueue`・`RecordingActivity`
+- Consumes: Task 7 の `PostProcessingQueue`・`RecordingActivity`、`BatchGate`（計画 04 T5）、`RecordingSession.events()`・`state`・`RecordingEvent`・`SessionState`（計画 02 T10）
 - Produces:
-  - `RecordingActivity` の意味の確定: `true` は録音中・一時停止中・猶予中（会議が続いている間）。計画 02 の `RecordingSession`（または計画 06 の adapter）が準拠する
-  - TestSupport: `final class FakeRecordingActivity: RecordingActivity`（`set(_ recording: Bool)`）
+  - `public struct RecordingSessionActivity: RecordingActivity { public init(initial: @escaping @Sendable () async -> Bool, events: @escaping @Sendable () async -> AsyncStream<RecordingEvent>); public init(session: RecordingSession) }`。2 つ目は `initial: { await session.state != .idle }`、`events: { await session.events() }`。`.started` で `true`、`.stopped` で `false`。一時停止（`.paused`・`.resumed`）と猶予中（`.microphoneDetached` から `.stopped` まで）は `true` のまま。同じ値は続けて流さない。overview §8b のとおり、アダプタは本計画に置く
+  - TestSupport: `public final class FakeRecordingActivity: RecordingActivity, @unchecked Sendable`（`set(_ recording: Bool)`）
 
-規則: 録音中は `transcribe` 段階を選ばない（そのジョブはそこで止まり、他のジョブの `summarize` 以降は進む。§13）。`transcribe` の実行中に `true` が来たらその子 Task をキャンセルし、Task 7 の `CancellationError` の規則で `pending` に戻す。`QueueSnapshot.pausedForRecording` は「録音中で、かつ `transcribe` が次の段階のジョブがある」とき `true`。
+規則: `RecordingActivity` が `true` になったら `await gate?.pause()`、`false` になったら `await gate?.resume()` を呼ぶ（overview §8b。04 の `WhisperBatchTranscriber` がセグメント境界で止まる。タスクは取り消さない）。録音中は `nextStage == "transcribe"` のジョブを新しく始めない（他のジョブの `summarize` 以降は進む）。実行中の `transcribe` はそのまま続け、`gate` で止まる。`QueueSnapshot.pausedForRecording` は「録音中で、かつ次の段階が `transcribe` のジョブがある」とき `true`。
 
 - [ ] **Step 1: 失敗するテストを書く**
 
 ```swift
 @Suite struct QueueRecordingPauseTests {
-    @Test func transcribeWaitsWhileRecording() async throws {
-        // set(true) → enqueue → runUntilIdle → transcribe 未実行、snapshot.pausedForRecording == true。set(false) → 実行される
+    @Test func gateFollowsRecordingActivity() async throws {
+        // gate = BatchGate()、FakeRecordingActivity → start()。set(true) → gate.isPaused == true。set(false) → false
     }
-    @Test func laterStagesRunWhileRecording() async throws { /* transcribe 済みのジョブは録音中でも summarize 以降が完了する */ }
-    @Test func recordingStartCancelsRunningTranscribe() async throws {
-        // transcribe の ScriptedStage が待ち合わせで止まっている間に set(true)
-        // → stage は CancellationError で終わり pending、attempts 0。set(false) → もう一度呼ばれ done
+    @Test func transcribeIsNotStartedWhileRecording() async throws {
+        // set(true) → enqueue → runUntilIdle → transcribe が呼ばれない、snapshot.pausedForRecording == true。set(false) → 実行される
+    }
+    @Test func laterStagesRunWhileRecording() async throws { /* completedStages ["transcribe"] のジョブは録音中でも .done になる */ }
+    @Test func runningTranscribeIsPausedNotCancelled() async throws {
+        // transcribe の ScriptedStage が gate ストリームで止まっている間に set(true) → stage は取り消されない（state .running のまま）、gate.isPaused。
+        // set(false)・ストリームに 1 要素 → 完了、attempts は 1 回分だけ
+    }
+    @Test func sessionActivityMapsEvents() async throws {
+        // initial false、events に [.started(id), .paused(t), .resumed(t), .stopped(Samples.manifest, .manual)] を流す
+        // → isRecordingUpdates() の値 == [false, true, false]（paused・resumed では変わらない）
     }
 }
 ```
 
-- [ ] **Step 2: 失敗を確認する** — Run: `swift test --filter QueueRecordingPauseTests` → Expected: FAIL（録音中でも transcribe が実行される）
-- [ ] **Step 3: 実装する** — `start()` で `isRecordingUpdates()` を購読する Task を持ち、値を actor の状態に入れてループを起こす。
+- [ ] **Step 2: 失敗を確認する** — Run: `swift test --filter QueueRecordingPauseTests` → Expected: FAIL（`RecordingSessionActivity` が無い）
+- [ ] **Step 3: 実装する** — `start()` で `activity.isRecordingUpdates()` を購読する Task を持ち、値を actor の状態に入れて `gate` を切り替え、ループを起こす。
 - [ ] **Step 4: 通過を確認する** — Run: `swift test --filter "QueueRecordingPauseTests|PostProcessingQueueTests"` → Expected: PASS
-- [ ] **Step 5: コミット** — `git add Sources/AutoNoteCore/Minutes Sources/AutoNoteTestSupport/Minutes Tests/AutoNoteCoreTests/Minutes && git commit -m "feat(minutes): pause final transcription while recording"`
+- [ ] **Step 5: コミット** — `git add Sources/AutoNoteCore/Minutes Sources/AutoNoteTestSupport/Minutes Tests/AutoNoteCoreTests/Minutes && git commit -m "feat(minutes): pause final transcription via BatchGate while recording"`
 
 ---
 
-### Task 9: `TranscribeStage` — 確定版文字起こしとリアルタイム版での代替
+### Task 9: `TranscribeStage` — 04 の runner を呼び、失敗したらリアルタイム版で代用する
 
 **Files:**
 - Create: `Sources/AutoNoteCore/Minutes/Stages/TranscribeStage.swift`
 - Test: `Tests/AutoNoteCoreTests/Minutes/TranscribeStageTests.swift`
 
 **Interfaces:**
-- Consumes: `BatchTranscriber`（計画 04）、`FakeBatchTranscriber`・`TranscriptMerger`・`EchoDeduplicator`・`FillerRemover`・`Replacer`・`PortableConfigStore`・`ManifestStore`（計画 01）、Task 2 の `AppPaths` extension
-- Produces: `struct TranscribeStage: QueueStage { init(transcriber: any BatchTranscriber, engineName: String, portable: PortableConfigStore); let name = "transcribe"; static let fallbackSuffix: String }`。成果物: `raw.json`（フィラー除去・置換の前）と `final.json`（後）の `Transcript`、`job.transcriptEngine`
+- Consumes: `FinalTranscriptionRunner`・`FinalTranscriptResult`・`BatchGate`・`PCMAudio.writeWAV`（計画 04）、`FakeBatchTranscriber`・`ManifestStore.update`・`PortableConfigStore.read(.dictionary)`・`DictionaryFile.parse`・`Replacer`・`FillerRemover`・`Transcript.fallbackEngineLabel(live:)`・`AppPaths.transcriptFile(_:_:)`（計画 01）
+- Produces: `public struct TranscribeStage: QueueStage { public init(runner: FinalTranscriptionRunner); public let name = "transcribe" }`。成果物: `raw.json`・`final.json`（runner か代用の処理が書く）、`job.transcriptEngine`
 
 流れ:
-1. manifest を読み `status = .transcribing` で保存
-2. `tracks` を `startOffset` 順に 1 つずつ、`batch/<index>.json` があればそれを使い、無ければ `transcribe(file: recordingDirectory/relativePath, language: manifest.language, hints: dictionary.terms, progress:)` を呼んで、各発話の `start`・`end` に `startOffset` を足し、話者を `mic → .me`・`system → .other`（`source == .imported` は `.unknown`）にして `batch/<index>.json` に保存
-3. 進捗は「済んだファイルの秒数＋現在のファイルの秒数×p」÷ 全体の秒数（`durationSeconds` が無いファイルは 1 として数える）
-4. トラックごとに連結して `TranscriptMerger.merge` → `EchoDeduplicator.deduplicate` → `raw.json`（`engine = engineName`）。`Replacer` と（`fillerRemovalEnabled` なら）`FillerRemover` をかけて `final.json`
-5. `job.transcriptEngine = engineName`、manifest `status = .transcribed`、`batch/` を消す
-6. 2 で `CancellationError` 以外のエラー: `live.json` があり発話が 1 件以上なら、それに置換とフィラー除去をかけて `raw.json`・`final.json` にし、`job.transcriptEngine = live.engine + TranscribeStage.fallbackSuffix`（`fallbackSuffix = "（確定版の失敗によりリアルタイム版で代替）"`。計画 06 はこの接尾辞で「確定版を再実行」を出し、`rerun(id, from: "transcribe")` を呼ぶ）、段階は正常終了。元のエラーは分類だけログに書く。`live.json` が無い（取り込みなど）なら `StageError.failed(reason:)`、manifest `status = .failed`
+1. manifest を `status = .transcribing` に更新する。辞書は `PortableConfigStore(paths:, outputFolder: settings.outputFolder.map { URL(filePath: $0) }).read(.dictionary)` を `DictionaryFile.parse` で読む（無ければ `DictionaryFile.default`）
+2. `try await runner.run(manifest:, dictionary:, fillerRemoval: settings.fillerRemoval, progress: context.reportProgress)` を呼ぶ。成功したら `job.transcriptEngine = result.final.engine`、manifest を `.transcribed` にする
+3. `CancellationError` はそのまま投げる。それ以外のエラーのとき: `transcriptFile(id, .live)` を `Transcript` として読めて発話が 1 件以上あれば、代用する。engine は `Transcript.fallbackEngineLabel(live: live.engine)`。raw は live の発話のまま、final は `Replacer(dictionary.replacements)` を通し、`fillerRemoval` なら `FillerRemover(fillers: dictionary.fillers)` も通す。この 2 つを `.raw`・`.final` に原子的に書き、`job.transcriptEngine` と manifest の `.transcribed` を書いて正常に終わる。元のエラーは分類だけをログに書く。`live.json` が無いとき（取り込みなど）は manifest を `.failed` にし、`StageError.failed(reason:)` を投げる
+4. 確定版のやり直しは計画 06 が `rerun(id, from: "transcribe")` で行う（§6.4「後から再実行できる」。代用したかは `transcriptEngine` の接尾辞で分かる）。分割ファイル単位の途中再開はしない（runner の責任範囲。本計画は `batch/` を使わない）
 
-- [ ] **Step 1: 失敗するテストを書く**
+- [ ] **Step 1: 失敗するテストを書く**（音声は `PCMAudio.writeWAV(Array(repeating: 0, count: 16_000), to: tracksDirectory/mic-000.wav)` で置き、manifest の `tracks` に並べる。runner は `FinalTranscriptionRunner(transcriber: FakeBatchTranscriber(...), engineName: "whisper.cpp large-v3-turbo", paths:, gate: BatchGate())`）
 
 ```swift
 @Suite struct TranscribeStageTests {
-    @Test func offsetsAndSpeakersAreApplied() async throws {
-        // mic 2 ファイル（offset 0・300）、system 1 ファイル（offset 0）。偽の発話 start 1.0
-        // → final の発話に 00:00:01 自分、00:05:01 自分、00:00:01 相手 が時刻順に並ぶ
-    }
-    @Test func rawKeepsFillersFinalRemovesThem() async throws { /* "えーと" だけの発話が raw にあり final に無い。設定オフなら final にもある */ }
-    @Test func replacementsApplyToFinal() async throws { /* 置換 "オートノート => AutoNote" */ }
-    @Test func importedMeetingUsesUnknownSpeakerAndProgressEndsAtOne() async throws { /* 話者 .unknown。進捗は単調増加で最後が 1.0 */ }
-    @Test func resumesFromCachedSegments() async throws {
-        // 1 回目: 2 ファイル目でエラーを投げる偽 → batch/0.json が残る（live.json は置かない → failed）
-        // 2 回目: 正常な偽 → 1 ファイル目のファイル名では呼ばれない。完了後 batch/ が無い
+    @Test func successRecordsEngineAndStatus() async throws {
+        // FakeBatchTranscriber(results: ["mic-0.wav": [u(1, .unknown, "はじめます")]]) → final.json あり、
+        // job.transcriptEngine == "whisper.cpp large-v3-turbo"、manifest .transcribed、開始時に .transcribing を通った
     }
     @Test func fallsBackToLiveTranscript() async throws {
-        // 偽がエラー、live.json（engine "DictationTranscriber"）あり → 段階は正常終了、
-        // job.transcriptEngine == "DictationTranscriber（確定版の失敗によりリアルタイム版で代替）"、final は live の内容
+        // FakeBatchTranscriber(results: [:], failure: FakeError(message: "x"))、live.json（engine "DictationTranscriber"、"えーと、オートノートです"）
+        // 辞書（出力フォルダの _autonote/dictionary.md）: 置換 オートノート => AutoNote → 正常終了、job.transcriptEngine == "DictationTranscriber（確定版の失敗によりリアルタイム版で代用）"、
+        // raw の本文は live のまま、final の本文は "AutoNote" を含み "オートノート" を含まない、final.json の engine も代用の名前
     }
-    @Test func failsWithoutLiveTranscript() async throws { /* → StageError.failed、manifest .failed */ }
-    @Test func setsManifestStatus() async throws { /* 開始時 .transcribing、終了時 .transcribed */ }
+    @Test func failsWithoutLiveTranscript() async throws { /* runner 失敗・live.json 無し → StageError.failed、manifest .failed */ }
+    @Test func emptyLiveTranscriptIsNotUsed() async throws { /* live.json の発話 0 件 → StageError.failed */ }
 }
 ```
 
 - [ ] **Step 2: 失敗を確認する** — Run: `swift test --filter TranscribeStageTests` → Expected: FAIL（`TranscribeStage` が無い）
-- [ ] **Step 3: 上の Interfaces・流れ・規則のとおり実装する**
+- [ ] **Step 3: 上の流れのとおり実装する**
 - [ ] **Step 4: 通過を確認する** — Run: `swift test --filter TranscribeStageTests` → Expected: PASS
-- [ ] **Step 5: コミット** — `git add Sources/AutoNoteCore/Minutes Tests/AutoNoteCoreTests/Minutes && git commit -m "feat(minutes): add transcribe stage with segment cache and live fallback"`
+- [ ] **Step 5: コミット** — `git add Sources/AutoNoteCore/Minutes Tests/AutoNoteCoreTests/Minutes && git commit -m "feat(minutes): add transcribe stage calling final runner with live fallback"`
 
 ---
 
 ### Task 10: `SummarizeStage` — 議事録生成と失敗時の扱い
 
 **Files:**
-- Create: `Sources/AutoNoteCore/Minutes/Stages/SummarizeStage.swift`
-- Create: `Sources/AutoNoteCore/Minutes/SummarizerFactory.swift`
+- Create: `Sources/AutoNoteCore/Minutes/Stages/SummarizeStage.swift`、`Sources/AutoNoteCore/Minutes/SummarizerFactory.swift`、`Sources/AutoNoteTestSupport/Minutes/ScriptedSummarizer.swift`
 - Test: `Tests/AutoNoteCoreTests/Minutes/SummarizeStageTests.swift`
 
 **Interfaces:**
-- Consumes: `Summarizer`・`FakeSummarizer`・`PortableConfigStore`（計画 01）、Task 6 の `SummarizerError`・`ClaudeCodeSummarizer`、Task 5 の `ClaudeLocator`
+- Consumes: `Summarizer`・`SummaryInput`・`FakeSummarizer`・`PortableConfigStore.read(.prompt / .dictionary)`・`AppPaths.minutesFile(_:)`・`transcriptFile(_:.final)`（計画 01）、Task 2 の `SummaryFailureKind`、Task 3 の `DefaultPrompt`、Task 5 の `ClaudeLocator`、Task 6 の `SummarizerError`・`ClaudeCodeSummarizer`
 - Produces:
-  - `struct SummarizeStage: QueueStage { init(summarizer: @escaping @Sendable (Settings) async throws -> any Summarizer, portable: PortableConfigStore); let name = "summarize" }`（`Summarizer` は実行のたびに設定から作る。`claude` のパスやモデルの変更を再起動なしで効かせるため）
-  - `enum SummarizerFactory { static func make(settings: Settings, paths: AppPaths) async throws -> any Summarizer }`（`summarizer == .claudeCode` → `ClaudeCodeSummarizer(claudePath: settings.claudePath ?? ClaudeLocator.locate(...) , model: settings.claudeModel, workingDirectory: paths.claudeWorkingDirectory)`。見つからなければ `SummarizerError.claudeNotFound(path: "")`）
-  - 成果物: `minutes.json`（`MinutesOutput`。snake_case）、manifest の `title`
+  - `public struct SummarizeStage: QueueStage { public init(summarizer: @escaping @Sendable (Settings, AppPaths) async throws -> any Summarizer = SummarizerFactory.make); public let name = "summarize" }`（実行のたびに設定から作る。`claude` のパスやモデルの変更を再起動なしで効かせるため）
+  - `public enum SummarizerFactory { public static func make(settings: Settings, paths: AppPaths) async throws -> any Summarizer }`（`summarizerKind == .claudeCode` → `ClaudeCodeSummarizer(claudePath: settings.claudePath ?? <ClaudeLocator.locate の結果>, model: settings.claudeModel, workingDirectory: paths.claudeWorkingDirectory)`。見つからなければ `SummarizerError.claudeNotFound(path: "")`）
+  - TestSupport: `public actor ScriptedSummarizer: Summarizer`（`init(results: [Result<MinutesOutput, SummarizerError>])`、`inputs: [SummaryInput]`）
+  - 成果物: `minutes.json`（`MinutesOutput`。`AutoNoteJSON`）
 
-流れ: `final.json` を読む（無ければ `StageError.failed`）→ manifest を `status = .generating` で保存 → `SummaryInput(instructions: prompt.md の中身（無い・空白だけなら DefaultPrompt.instructions）, terms: dictionary.terms, bookmarks: manifest.bookmarks, transcript:, language: manifest.language)` → `summarize`。
-- 成功: `minutes.json` を原子的に書き、`job.summaryFailure = nil`、manifest `title = output.title`
-- 失敗: `job.summaryFailure = SummaryFailure(kind:message:at:)` を書き、次を投げる。`minutes.json` は消さない
-
-| `SummarizerError` | 投げる `StageError` |
-|---|---|
-| `.rateLimited` | `.continueWithout(reason:, retryAfter: 3600)`（§8.1 の「1 時間後に自動で再試行」） |
-| `.notLoggedIn` | `.continueWithout(reason:, retryAfter: nil)`（「未生成」。通知は計画 06 が `summaryFailure.kind` を見て出す） |
-| `.contextExceeded`・`.timedOut`・`.invalidOutput`・`.claudeNotFound`・`.failed` | `.continueWithout(reason:, retryAfter: nil)`（再生成待ち） |
+流れ: `final.json` を読む（無ければ `StageError.failed`）→ manifest を `.generating` に更新 → `SummaryInput(instructions:, terms: dictionary.terms, bookmarks: manifest.bookmarks, transcript: final, language: manifest.language)` を作る。`instructions` は `read(.prompt)` の UTF-8（無い・空白だけなら `DefaultPrompt.instructions`）→ `summarize` を呼ぶ。
+- 成功: `minutes.json` を原子的に書き、`job.summaryFailure = nil`。manifest の `title` は変えない（`title` は利用者の改名用。議事録の題は `MeetingDocument` が `minutes.title` から取る）
+- 失敗: `job.summaryFailure = SummaryFailureKind.encode(kind, message:)` を書いて**正常に終わる**。後続の `write_vault` が `transcript_only` を書く（§8.4）。`minutes.json` は消さない。分類は `SummarizerError` の case と一対一（`.rateLimited` → `rateLimited` など）、それ以外のエラーは `.other`。`rateLimited` の 1 時間後の再実行は Task 7 の規則で起きる。`notLoggedIn` の通知は計画 06 が `JobProgress.summaryFailure` を見て `UserNotice.claudeNotLoggedIn` を出す
 
 - [ ] **Step 1: 失敗するテストを書く**
 
 ```swift
 @Suite struct SummarizeStageTests {
     @Test func buildsInputFromPromptDictionaryAndBookmarks() async throws {
-        // prompt.md = "独自の指示"、terms ["AutoNote"]、bookmark 1 件 → FakeSummarizer が受けた入力にそれぞれ入っている
+        // 出力フォルダの _autonote/prompt.md = "独自の指示"、用語 ["ルミナ茶"]、ブックマーク 1 件 → ScriptedSummarizer.inputs[0] にそれぞれ入る
     }
     @Test func emptyPromptFileUsesDefault() async throws { /* prompt.md が "  \n" → instructions == DefaultPrompt.instructions */ }
-    @Test func rateLimitContinuesAndRetriesInOneHour() async throws { /* → .continueWithout(retryAfter: 3600)、summaryFailure.kind == .rateLimited */ }
-    @Test func notLoggedInContinuesWithoutRetry() async throws { /* → retryAfter nil、kind .notLoggedIn */ }
+    @Test func successWritesMinutesJsonAndClearsFailure() async throws { /* minutes.json が Samples.minutes、summaryFailure nil、manifest.title は nil のまま */ }
+    @Test func rateLimitIsRecordedAndStageSucceeds() async throws { /* .rateLimited("hit your limit") → 投げない、SummaryFailureKind.of(job.summaryFailure) == .rateLimited */ }
+    @Test func notLoggedInIsRecorded() async throws { /* → .notLoggedIn */ }
     @Test func failedRegenerateKeepsExistingMinutes() async throws {
-        // 事前に minutes.json（title "前回"）あり、偽が .failed → minutes.json の title は "前回" のまま
+        // 事前に minutes.json（title "前回"）あり、.failed(exitCode: 1, message: "x") → minutes.json の title は "前回" のまま
     }
-    @Test func successWritesMinutesJsonTitleAndClearsFailure() async throws { /* minutes.json・manifest.title、summaryFailure == nil */ }
 }
 ```
 
 - [ ] **Step 2: 失敗を確認する** — Run: `swift test --filter SummarizeStageTests` → Expected: FAIL（`SummarizeStage` が無い）
-- [ ] **Step 3: 上の Interfaces・流れ・規則のとおり実装する**
+- [ ] **Step 3: 上の流れのとおり実装する**
 - [ ] **Step 4: 通過を確認する** — Run: `swift test --filter SummarizeStageTests` → Expected: PASS
-- [ ] **Step 5: コミット** — `git add Sources/AutoNoteCore/Minutes Tests/AutoNoteCoreTests/Minutes && git commit -m "feat(minutes): add summarize stage with rate-limit retry and transcript-only fallback"`
+- [ ] **Step 5: コミット** — `git add Sources/AutoNoteCore/Minutes Sources/AutoNoteTestSupport/Minutes Tests/AutoNoteCoreTests/Minutes && git commit -m "feat(minutes): add summarize stage recording failures for transcript-only fallback"`
 
 ---
 
-### Task 11: `WriteVaultStage` — `transcript_only`、改名、編集済みの確認、5 分おきの再試行
+### Task 11: `WriteVaultStage` — 01 の `VaultWriter` で書き出す（`transcript_only`、改名、編集済みの確認、5 分おきの再試行）
 
 **Files:**
 - Create: `Sources/AutoNoteCore/Minutes/Stages/WriteVaultStage.swift`
 - Test: `Tests/AutoNoteCoreTests/Minutes/WriteVaultStageTests.swift`
 
 **Interfaces:**
-- Consumes: `MeetingDocument`・`MeetingFileName`・`VaultWriter`・`VaultFileRecord`（計画 01）、Task 2 の `Job.vaultFile`・`overwriteApproved`・`summaryFailure`
-- Produces: `struct WriteVaultStage: QueueStage { init(); let name = "write_vault"; static let retryInterval: TimeInterval = 300; static func isUntitled(_ relativePath: String) -> Bool }`
+- Consumes: `VaultWriter(outputFolder:paths:now:)`・`write(_:policy:renameToMatchTitle:)`・`VaultWriteOutcome`・`OverwritePolicy`・`VaultError`・`MeetingDocument(manifest:transcript:minutes:frontmatter:appVersion:timeZone:)`・`FrontmatterTemplate`・`PortableConfigStore.read(.frontmatter)`・`AppPaths.minutesFile(_:)`（計画 01 T8〜T12）、`Job.summaryFailure`・`overwriteApproved`
+- Produces: `public struct WriteVaultStage: QueueStage { public init(timeZone: TimeZone = .current); public let name = "write_vault"; public static let retryInterval: TimeInterval = 300 }`
 
 流れ:
-1. `settings.outputFolder` が `nil`・存在しない・書けない → `.retry(after: 300, reason:)`（§9.5・§13。内容はアプリ領域にあるので失われない）
-2. `job.summaryFailure != nil` かつ `minutes.json` がある（再生成の失敗）→ 何も書かず正常終了し、`update_index`・`automations` を `skipped` にする（既存の議事録を `transcript_only` で上書きしない）
-3. `minutes.json` があれば `status = .minutesGenerated`、無ければ `.transcriptOnly`
-4. ファイル名: `job.vaultFile` が無い → `MeetingFileName.make(start: manifest.startedAt, title: minutes?.title, existing:)`（`transcript_only` は `YYYY-MM-DD_HHMMSS.md`。§8.4）。ある → そのまま使う。ただし `isUntitled(既存) && minutes != nil` なら新しいタイトル付きの名前にする（§8.4 の改名。§9.1 の例外）
-5. 既存の記録があり、ファイルが存在し、`VaultWriter.isModified` が `true` で `job.overwriteApproved == false` → `.awaitingConfirmation(path:)`（§8.4・§9.4。確認の UI は計画 06 が `QueueSnapshot` の `awaitingConfirmation` を見て出し、`resolveOverwrite` を呼ぶ）。既存ファイルが消えていれば確認せず新しく書く
-6. `write` → 改名した場合は古い記録を `remove`。`job.vaultFile` を更新、`overwriteApproved = false`、manifest の `status` を 3 の値で保存
-7. 書き込みの I/O エラー（権限・ディスク満杯）→ `.retry(after: 300, reason:)`
-
-`isUntitled`: ファイル名部分が `^\d{4}-\d{2}-\d{2}_\d{6}(-\d+)?\.md$`。
+1. `settings.outputFolder` が nil → `.retry(after: 300, reason: "output_folder_missing")`（§9.5・§13。内容はアプリ領域にあるので失われない）
+2. `job.summaryFailure != nil` かつ `minutes.json` がある（再生成の失敗）→ 何も書かず、`update_index` と `automations` を `job.completedStages` に足して正常に終わる（既存の議事録を `transcript_only` で上書きしない）
+3. status は、`minutes.json` があり `summaryFailure == nil` なら `.minutesGenerated`、それ以外は `.transcriptOnly`。manifest にこの status を入れた写しで `MeetingDocument` を作る。`transcript` は `final.json`、`frontmatter` は `read(.frontmatter)`（無ければ `FrontmatterTemplate.defaultText`）、`appVersion` は `AutoNoteVersion.current`
+4. `VaultWriter(outputFolder: URL(filePath:), paths:, now: context.now).write(doc, policy: job.overwriteApproved ? .force : .ifUnchanged)`。秒付きの名前（§8.4）と、タイトルが付いたときの改名（§8.4 の例外）は 01 の `write` が行う
+5. `.written` → manifest の status を 3 の値で保存、`overwriteApproved = false`。`.conflict(url)` → `StageError.awaitingConfirmation(path: <出力フォルダからの相対パス>)`（§9.4。確認の UI は計画 06）
+6. `VaultError.outputFolderUnavailable`、その他の I/O エラー（権限・ディスク満杯）→ `.retry(after: 300, reason:)`
 
 - [ ] **Step 1: 失敗するテストを書く**
 
 ```swift
 @Suite struct WriteVaultStageTests {
-    @Test func writesMinutesGeneratedFile() async throws { /* 2026/2026-10-24_1400_<title>.md、frontmatter status: minutes_generated */ }
-    @Test func writesTranscriptOnlyWithSecondsName() async throws { /* minutes.json 無し → 2026/2026-10-24_140005.md、status: transcript_only */ }
-    @Test func renamesUntitledFileWhenTitleArrives() async throws {
-        // 1 回目 transcript_only → 2 回目 minutes あり → タイトル付きの名前、古いファイルは無い
+    @Test func writesMinutesGeneratedFile() async throws { /* minutes.json あり → 2026/2026-10-24_1400_プロジェクト定例.md、status: minutes_generated、manifest .minutesGenerated */ }
+    @Test func writesTranscriptOnlyWithSecondsName() async throws { /* minutes.json 無し・summaryFailure あり → 2026/2026-10-24_140000.md、status: transcript_only */ }
+    @Test func renamesUntitledFileWhenMinutesArrive() async throws { /* 1 回目 transcript_only → minutes.json を置き summaryFailure nil で 2 回目 → タイトル付きの名前、古いファイルは無い */ }
+    @Test func editedFileAwaitsConfirmationThenForceWrites() async throws {
+        // 書き出し後にファイルへ 1 行追記 → .awaitingConfirmation(path: "2026/2026-10-24_1400_プロジェクト定例.md")。
+        // overwriteApproved = true で再実行 → 上書き、overwriteApproved == false に戻る
     }
-    @Test func keepsTitledFileNameOnRegenerate() async throws { /* 既にタイトル付き → 新しいタイトルでも同じパス */ }
-    @Test func editedFileAwaitsConfirmation() async throws {
-        // 書き出し後にファイルへ 1 行追記 → .awaitingConfirmation。overwriteApproved = true で再実行 → 上書き、overwriteApproved == false に戻る
-    }
-    @Test func missingPreviousFileIsRewrittenWithoutConfirmation() async throws { /* 利用者が Vault のファイルを消した後の再生成 → 確認なしで新しく書く */ }
-    @Test func unavailableOutputFolderRetriesInFiveMinutes() async throws { /* outputFolder 未設定・存在しない → .retry(after: 300) */ }
+    @Test func missingOutputFolderRetriesInFiveMinutes() async throws { /* outputFolder nil・存在しないパス → どちらも .retry(after: 300, …)、パスにフォルダは作られない */ }
     @Test func failedRegenerateKeepsExistingMinutes() async throws {
-        // minutes.json あり + summaryFailure あり → ファイル内容が変わらない、update_index と automations が skipped
+        // minutes.json あり＋summaryFailure あり → 既存ファイルの内容が変わらない、completedStages に update_index と automations
     }
 }
 ```
 
 - [ ] **Step 2: 失敗を確認する** — Run: `swift test --filter WriteVaultStageTests` → Expected: FAIL（`WriteVaultStage` が無い）
-- [ ] **Step 3: 上の Interfaces・流れ・規則のとおり実装する**
+- [ ] **Step 3: 上の流れのとおり実装する**
 - [ ] **Step 4: 通過を確認する** — Run: `swift test --filter WriteVaultStageTests` → Expected: PASS
-- [ ] **Step 5: コミット** — `git add Sources/AutoNoteCore/Minutes Tests/AutoNoteCoreTests/Minutes && git commit -m "feat(minutes): add vault write stage with transcript-only naming and edit check"`
+- [ ] **Step 5: コミット** — `git add Sources/AutoNoteCore/Minutes Tests/AutoNoteCoreTests/Minutes && git commit -m "feat(minutes): add vault write stage on top of VaultWriter"`
 
 ---
 
-### Task 12: `UpdateIndexStage`、Automations の差し込み口、再生成と短すぎる録音の API
+### Task 12: `UpdateIndexStage`、標準の段階一式、再生成と短すぎる録音の API
 
 **Files:**
-- Create: `Sources/AutoNoteCore/Minutes/Stages/UpdateIndexStage.swift`
-- Create: `Sources/AutoNoteCore/Minutes/PostProcessingQueue+Commands.swift`
-- Create: `Sources/AutoNoteCore/Minutes/PostProcessingPipeline.swift`
+- Create: `Sources/AutoNoteCore/Minutes/Stages/UpdateIndexStage.swift`、`Sources/AutoNoteCore/Minutes/PostProcessingQueue+Commands.swift`、`Sources/AutoNoteCore/Minutes/PostProcessingPipeline.swift`
 - Test: `Tests/AutoNoteCoreTests/Minutes/PipelineEndToEndTests.swift`
 
 **Interfaces:**
-- Consumes: `IndexFile.rebuild(outputFolder:)`（計画 01）、Task 7〜11 の全段階
+- Consumes: `VaultWriter.rebuildIndex()`（計画 01 T11）、Task 7〜11 の全段階、`FinalTranscriptionRunner`（計画 04）
 - Produces:
-  - `struct UpdateIndexStage: QueueStage { let name = "update_index" }`（`IndexFile.rebuild`。フォルダが使えない・I/O エラーは `.retry(after: 300, reason:)`）
-  - Automations の差し込み口: 計画 06 は `name == "automations"` の `QueueStage` を作り `queue.register(_:)` で渡す。段階は manifest の `status`（`.minutesGenerated` / `.transcriptOnly`）できっかけを決め、Automation の失敗で投げない（§14.5「議事録の成否に影響しない」）。未登録なら `skipped`（Task 7）
-  - `extension PostProcessingQueue { func regenerate(_ id: MeetingID) async throws /* final.json が無ければ QueueError.transcriptMissing。ジョブが無ければ transcribe を done にしたジョブを作る。あとは rerun(id, from: "summarize") */; func acceptShortRecording(_ id: MeetingID) async throws /* tooShort → recorded に保存して enqueue（§5.9「文字起こしする」）*/ }`
-  - `enum PostProcessingPipeline { static func makeQueue(paths: AppPaths, manifests: ManifestStore, settings: SettingsStore, portable: PortableConfigStore, transcriber: any BatchTranscriber, transcriberName: String, summarizer: @escaping @Sendable (Settings) async throws -> any Summarizer, recording: any RecordingActivity, clock: any QueueClock = SystemQueueClock()) -> PostProcessingQueue }`（4 段階を登録した待ち行列を作る。計画 06 と `autonote dev summarize` が使う）
+  - `public struct UpdateIndexStage: QueueStage { public init(); public let name = "update_index" }`（`VaultWriter(...).rebuildIndex()` を呼ぶだけ。出力フォルダが nil・使えない・I/O エラーは `.retry(after: 300, reason:)`）
+  - `public enum PostProcessingPipeline { public static func standardStages(runner: FinalTranscriptionRunner, summarizer: @escaping @Sendable (Settings, AppPaths) async throws -> any Summarizer = SummarizerFactory.make) -> [any QueueStage] }`（transcribe・summarize・write_vault・update_index の 4 つ。計画 06 はこれに `AutomationsStage`（`name == "automations"`）を足して `PostProcessingQueue(paths:stages:activity:gate:)` に渡すか、`register(_:)` で足す。Automations 段階は manifest の status できっかけを決め、二重実行防止キーは `"\(meeting.rawValue):\(generation)"`。失敗しても投げない。§14.5）
+  - `extension PostProcessingQueue { public func regenerate(_ id: MeetingID) async throws; public func acceptShortRecording(_ id: MeetingID) async throws }`
+    - `regenerate`: `final.json` が無ければ `QueueError.transcriptMissing`。ジョブが無ければ `completedStages: ["transcribe"]` のジョブを作る。続けて `rerun(id, from: "summarize")`（`generation` が上がる）。§8.4「何度でもでき」
+    - `acceptShortRecording`: manifest が `.tooShort` でなければ `QueueError.notTooShort(status)`。`.recorded` に更新してから `enqueue`（§5.9「文字起こしする」。「破棄」は Task 13 の `delete`）
 
 - [ ] **Step 1: 失敗するテストを書く（フェイクで端から端まで）**
 
 ```swift
 @Suite struct PipelineEndToEndTests {
+    // 共通: 一時 AppPaths と出力フォルダ、Settings.outputFolder を保存、status .recorded の manifest と無音の tracks/mic-000.wav、
+    // runner = FinalTranscriptionRunner(transcriber: FakeBatchTranscriber(results: ["mic-0.wav": [u(5, .unknown, "はじめます")]]), engineName: "whisper.cpp large-v3-turbo", paths:, gate: BatchGate())
     @Test func recordedMeetingBecomesMinutesFileAndIndexRow() async throws {
-        // 一時 AppPaths・出力フォルダ、recorded の manifest、FakeBatchTranscriber、FakeSummarizer
-        // → enqueue → runUntilIdle → 会議ファイル（status: minutes_generated）、_index.md に 1 行、
-        //   job の全段階 done（automations は skipped）、manifest .minutesGenerated
+        // standardStages(runner:, summarizer: { _, _ in FakeSummarizer(result: .success(Samples.minutes)) }) → enqueue → runUntilIdle
+        // → 2026/2026-10-24_1400_プロジェクト定例.md（status: minutes_generated、^t00-00-05）、_index.md に 1 行、job .done、manifest .minutesGenerated
     }
     @Test func summaryFailureProducesTranscriptOnlyThenRegenerateRenames() async throws {
-        // FakeSummarizer が .failed → YYYY-MM-DD_HHMMSS.md（transcript_only）と _index.md の行
-        // → 成功する偽に替えて regenerate → タイトル付きのファイル、古いファイル無し、_index.md の行も新しい名前
+        // FakeSummarizer(result: .failure(FakeError(message: "x"))) → 2026-10-24_140000.md（transcript_only）と _index.md の行
+        // → 成功する偽に替えて regenerate → タイトル付きのファイル、古いファイル無し、_index.md の行も新しい名前、generation 1
     }
     @Test func rateLimitedSummaryRetriesAfterOneHour() async throws {
-        // 1 回目 .rateLimited → transcript_only を書く。advance(3599) → 変化なし。advance(1) → minutes_generated に改名
+        // ScriptedSummarizer([.failure(.rateLimited(message: "x")), .success(Samples.minutes)]) → transcript_only を書く。
+        // advance(3599) → 変化なし。advance(1) → minutes_generated に改名、generation 1
     }
     @Test func registeredAutomationsStageRunsLast() async throws { /* ScriptedStage(name: "automations") を register → 最後に 1 回 */ }
-    @Test func acceptShortRecordingEnqueues() async throws { /* tooShort → recorded になり完走 */ }
-    @Test func regenerateWithoutTranscriptThrows() async throws { /* final.json 無し・ジョブ無し → QueueError.transcriptMissing */ }
-    @Test func vaultUnavailableKeepsJobAndResumes() async throws {
-        // outputFolder が存在しない → write_vault waiting。フォルダを作り advance(300) → 完走
-    }
+    @Test func acceptShortRecordingEnqueues() async throws { /* .tooShort → .recorded になり完走。.recorded の会議では notTooShort */ }
+    @Test func regenerateWithoutTranscriptThrows() async throws { /* final.json 無し → QueueError.transcriptMissing */ }
+    @Test func vaultUnavailableKeepsJobAndResumes() async throws { /* outputFolder のパスが無い → write_vault で .waiting。フォルダを作り advance(300) → 完走 */ }
 }
 ```
 
 - [ ] **Step 2: 失敗を確認する** — Run: `swift test --filter PipelineEndToEndTests` → Expected: FAIL（`UpdateIndexStage` / `PostProcessingPipeline` が無い）
-- [ ] **Step 3: 上の Interfaces・流れ・規則のとおり実装する**
+- [ ] **Step 3: 上の Interfaces のとおり実装する**
 - [ ] **Step 4: 通過を確認する** — Run: `swift test --filter Minutes` → Expected: PASS（本計画の全スイート）
-- [ ] **Step 5: コミット** — `git add Sources/AutoNoteCore/Minutes Tests/AutoNoteCoreTests/Minutes && git commit -m "feat(minutes): add index stage, automations slot, regenerate and pipeline wiring"`
+- [ ] **Step 5: コミット** — `git add Sources/AutoNoteCore/Minutes Tests/AutoNoteCoreTests/Minutes && git commit -m "feat(minutes): add index stage, standard stages, regenerate and short-recording API"`
 
 ---
 
 ### Task 13: `Retention` — 音声の保持期間と会議単位の即時削除
 
 **Files:**
-- Create: `Sources/AutoNoteCore/Minutes/Retention.swift`
-- Create: `Sources/AutoNoteCore/Minutes/RetentionScheduler.swift`
+- Create: `Sources/AutoNoteCore/Minutes/Retention.swift`、`Sources/AutoNoteCore/Minutes/RetentionScheduler.swift`
 - Modify: `Sources/AutoNoteCore/Minutes/PostProcessingQueue+Commands.swift`（`delete`）
 - Test: `Tests/AutoNoteCoreTests/Minutes/RetentionTests.swift`
 
 **Interfaces:**
-- Consumes: `ManifestStore`・`VaultScanner`・`IndexFile`（計画 01）、Task 2 の `JobStore`、Task 7 の `QueueClock`
+- Consumes: `ManifestStore.all()`・`delete(_:)`（`recordings/<id>`・`transcripts/<id>`・`vault-state/<id>.json` を消す）、`VaultWriter.remove(_:)`・`record(for:)`・`rebuildIndex()`、`AppPaths.tracksDirectory(_:)`・`meetingDirectory(_:)`（計画 01）、Task 2 の `JobStore`、Task 7 の `QueueClock`
 - Produces:
-  - `struct Retention: Sendable { init(paths: AppPaths, manifests: ManifestStore, jobs: JobStore); func purgeExpiredAudio(retentionDays: Int?, now: Date) async throws -> [MeetingID]; func deleteMeeting(_ id: MeetingID, outputFolder: URL?) async throws }`
-  - `enum RetentionError: Error, Equatable { case outputFolderUnavailable }`
-  - `actor RetentionScheduler { init(retention: Retention, settings: SettingsStore, clock: any QueueClock); func start(); func stop() }`（起動直後に 1 回、以後 24 時間ごとに `purgeExpiredAudio`。§12）
-  - `extension PostProcessingQueue { func delete(_ id: MeetingID) async throws }`（実行中の段階をキャンセルしてジョブを外し、`Retention.deleteMeeting` を呼ぶ。§12 の「この会議を削除」、§5.8・§5.9 の「破棄」も使う）
+  - `public struct Retention: Sendable { public init(paths: AppPaths); public func purgeExpiredAudio(retentionDays: Int, now: Date) async throws -> [MeetingID]; public func deleteMeeting(_ id: MeetingID, outputFolder: String?) async throws }`
+  - `public enum RetentionError: Error, Equatable { case outputFolderUnavailable }`
+  - `public actor RetentionScheduler { public init(retention: Retention, settings: SettingsStore, clock: any QueueClock = SystemQueueClock()); public func start(); public func stop() }`（起動直後に 1 回、以後 24 時間ごとに `purgeExpiredAudio(retentionDays: settings.audioRetentionDays, now:)`。§12）
+  - `extension PostProcessingQueue { public func delete(_ id: MeetingID) async throws }`（その会議の段階が実行中ならキャンセルしてジョブを外し、`Retention.deleteMeeting` を呼ぶ。§12「この会議を削除」と、§5.8・§5.9 の「破棄」が使う）
 
 規則:
-- `purgeExpiredAudio`: `retentionDays == nil`（削除しない）なら何もしない。対象は `(endedAt ?? startedAt) + 日数 < now` の会議の `recordings/<id>/tracks/` だけ（manifest・文字起こし・Vault は残す。§12）。`status == .recording`、`.tooShort`、ジョブの `transcribe` が `done` でない会議は消さない
-- `deleteMeeting`: Vault 側は `VaultScanner` で `autonote_id` が一致するファイルを探す（利用者が改名していても消せる）。会議が Vault に書かれた形跡（`job.vaultFile` か走査の一致）があるのに出力フォルダが使えない場合は、何も消さずに `.outputFolderUnavailable` を投げる。消す順: Vault のファイル → `IndexFile.rebuild` → `recordings/<id>/` → `transcripts/<id>/` → `queue/jobs/<id>.json`
+- `purgeExpiredAudio`: `retentionDays == 0`（削除しない）なら何もしない。対象は `(endedAt ?? startedAt) + 日数 < now` の会議の `tracksDirectory(id)` と `meetingDirectory(id)/merged/` だけ（manifest・文字起こし・Vault は残す。§12）。`status` が `.recording` か `.tooShort`、またはジョブがあって `completedStages` に `transcribe` が無い会議は消さない
+- `deleteMeeting`: Vault に書いた形跡（`VaultWriter.record(for:)` が非 nil）があるのに出力フォルダが nil か存在しなければ、何も消さずに `.outputFolderUnavailable` を投げる。消す順: `VaultWriter.remove(id)`（記録が無くても `autonote_id` で探して消す。01 T11）→ `rebuildIndex()` → `ManifestStore.delete(id)` → `JobStore.remove(id)`。出力フォルダが無く、書いた形跡も無ければ Vault の手順を飛ばす
 
 - [ ] **Step 1: 失敗するテストを書く**
 
 ```swift
 @Suite struct RetentionTests {
-    @Test func purgesAudioOlderThanRetention() async throws { /* 31 日前・transcribe done → tracks/ が無い、manifest.json は残る */ }
-    @Test func keepsAudioWithinRetention() async throws { /* 29 日前 → 残る */ }
-    @Test func neverDeleteKeepsEverything() async throws { /* retentionDays nil → 残る */ }
+    @Test func purgesAudioOlderThanRetention() async throws { /* 31 日前・transcribe 済み → tracks/ と merged/ が無い、manifest.json は残る */ }
+    @Test func keepsAudioWithinRetentionOrWhenZero() async throws { /* 29 日前 → 残る。retentionDays 0 → 100 日前でも残る */ }
     @Test func purgeKeepsAudioOfUntranscribedMeetings() async throws {
-        // 40 日前でも: status .recording、.tooShort、ジョブの transcribe が pending → どれも残る
+        // 40 日前でも: status .recording、.tooShort、ジョブの completedStages が [] → どれも残る
     }
     @Test func deleteMeetingRemovesEverything() async throws {
-        // 音声・transcripts・ジョブ・Vault のファイル（利用者が改名済み）・_index.md の行が無い
+        // 音声・transcripts・vault-state・ジョブ・Vault のファイル（利用者が改名済み）・_index.md の行が無い
     }
-    @Test func deleteWithUnavailableFolderDeletesNothing() async throws { /* → .outputFolderUnavailable、recordings/<id>/ は残る */ }
-    @Test func deleteNeverWrittenMeetingWithoutFolder() async throws { /* tooShort（Vault 未書き出し）・outputFolder nil → アプリ内データだけ消えて成功 */ }
+    @Test func deleteWithUnavailableFolderDeletesNothing() async throws { /* 書き出し済み・出力フォルダのパスが無い → .outputFolderUnavailable、recordings/<id>/ は残る */ }
+    @Test func deleteNeverWrittenMeetingWithoutFolder() async throws { /* .tooShort（未書き出し）・outputFolder nil → アプリ内データだけ消えて成功 */ }
     @Test func schedulerRunsAtStartAndDaily() async throws { /* start 直後に 1 回、advance(86_400) でもう 1 回 */ }
     @Test func queueDeleteCancelsRunningStage() async throws { /* 実行中の ScriptedStage がキャンセルされ、snapshot から消える */ }
 }
 ```
 
 - [ ] **Step 2: 失敗を確認する** — Run: `swift test --filter RetentionTests` → Expected: FAIL（`Retention` が無い）
-- [ ] **Step 3: 上の Interfaces・流れ・規則のとおり実装する**
+- [ ] **Step 3: 上の規則のとおり実装する**
 - [ ] **Step 4: 通過を確認する** — Run: `swift test --filter RetentionTests` → Expected: PASS
 - [ ] **Step 5: コミット** — `git add Sources/AutoNoteCore/Minutes Tests/AutoNoteCoreTests/Minutes && git commit -m "feat(minutes): add audio retention and per-meeting deletion"`
 
@@ -756,43 +743,37 @@ scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
 ### Task 14: 開発用サブコマンド `autonote dev summarize` と E2E 更新、全 PASS、コミット
 
 **Files:**
-- Create: `Sources/autonote/DevSummarize.swift`（待ち行列を組んで回す本体）
-- Create: `Sources/AutoNoteCore/Minutes/DevSummarizeArguments.swift`（引数の解析。`autonote` は実行ターゲットでテストから import できないので Core に置く）
-- Modify: `Sources/autonote/main.swift`（`dev summarize` の振り分けを足す。`dev` 配下は使い方に出さない。overview §7）
-- Modify: `scripts/e2e-check.sh`（項目 M1・M2 を足し、`CHECKS` に登録）
+- Create: `Sources/autonote/DevSummarize.swift`（待ち行列を組んで回す本体）、`Sources/AutoNoteCore/Minutes/DevSummarizeArguments.swift`（引数の解析。`autonote` は実行ターゲットなのでテストから import できず、Core に置く）
+- Modify: `Sources/autonote/DevCommands.swift`（計画 01 T14 の `DevCommands.run` に `summarize` の分岐を足す。`main.swift` は触らない）、`scripts/e2e-check.sh`（項目 05.1・05.2 を足して `CHECKS` に登録）
 - Test: `Tests/AutoNoteCoreTests/Minutes/DevSummarizeArgumentsTests.swift`
 
 **Interfaces:**
-- Consumes: Task 12 の `PostProcessingPipeline.makeQueue`、`FakeBatchTranscriber`・`FakeSummarizer`（TestSupport）、Task 6 の `ClaudeCodeSummarizer`、Task 8 の `NeverRecording`
-- Produces: `autonote dev summarize --fake <transcript.json> --out <dir> [--minutes <minutes.json>] [--fail-summary] [--claude]`
-
-動作: `<dir>/app` を `AppPaths` の root、`<dir>/vault` を出力フォルダにした設定で、`<transcript.json>`（`Transcript` の JSON）を返す `FakeBatchTranscriber` と、`--minutes` の `MinutesOutput` を返す `FakeSummarizer`（`--fail-summary` なら `SummarizerError.failed` を投げる）で待ち行列を作る。開始時刻 2026-10-24 14:00:05（現地時刻）の `recorded` の manifest と空の `tracks/mic-000.wav` を作って `enqueue` → `runUntilIdle()`。終わったら stdout に JSON 1 行 `{"meeting_id":…,"file":"<vault からの相対パス>","status":"minutes_generated|transcript_only"}`、ジョブが完了していなければ終了コード 1。`--claude` は `FakeSummarizer` の代わりに `SummarizerFactory`（実の `claude`）を使う（E2E では使わない）。引数の解析は `struct DevSummarizeArguments { var transcript: URL; var out: URL; var minutes: URL?; var failSummary: Bool; var useClaude: Bool; static func parse(_ args: [String]) throws -> DevSummarizeArguments }` に分けてテストする。
+- Consumes: `DevCommands.run(_:)`（計画 01 T14）、Task 12 の `PostProcessingPipeline.standardStages`、Task 7 の `PostProcessingQueue`・`NeverRecording`、`FakeBatchTranscriber`・`FakeSummarizer`（TestSupport）、`FinalTranscriptionRunner`・`BatchGate`・`PCMAudio.writeWAV`（計画 04）、Task 10 の `SummarizerFactory`
+- Produces:
+  - `public struct DevSummarizeArguments: Equatable, Sendable { public var transcript: URL; public var out: URL; public var minutes: URL?; public var failSummary: Bool; public var useClaude: Bool; public static func parse(_ args: [String]) throws -> DevSummarizeArguments }`（`--fake <transcript.json> --out <dir> [--minutes <minutes.json>] [--fail-summary] [--claude]`。`--minutes` は `--fail-summary` と `--claude` のどちらも無いとき必須）
+  - `autonote dev summarize …`: `<dir>/app` を `AppPaths` の root にし、`<dir>/vault` を `outputFolder` にした `settings.json` を書く。`<transcript.json>`（`Transcript` の JSON）の発話を `FakeBatchTranscriber(results: ["mic-0.wav": …])` に入れる。`FinalTranscriptionRunner(gate: BatchGate())` の後に、`FakeSummarizer` を置く（`--minutes` の内容を返す。`--fail-summary` なら `.failure(FakeError(message: "dev"))`。`--claude` なら `SummarizerFactory.make`）。この並びの `standardStages` で `PostProcessingQueue(paths:stages:activity: NeverRecording())` を作る。開始 `2026-10-24T05:00:00Z`、`.recorded` の manifest と 1 秒の無音 `tracks/mic-000.wav` を書いて `enqueue` → `runUntilIdle()`。stdout に JSON 1 行 `{"meeting_id":…,"file":"<vault からの相対パス>","status":"minutes_generated|transcript_only"}` を出す。ジョブが `.done` でなければ終了コード 1、引数の誤りは使い方を標準エラーに出して 2
 
 - [ ] **Step 1: 失敗するテストを書く**
 
 ```swift
 @Suite struct DevSummarizeArgumentsTests {
-    @Test func parsesAllOptions() throws { /* --fake t.json --out d --minutes m.json --fail-summary */ }
+    @Test func parsesAllOptions() throws { /* --fake t.json --out d --minutes m.json --fail-summary → 各項目 */ }
     @Test func requiresFakeAndOut() { /* --out が無い → エラー */ }
-    @Test func minutesRequiredUnlessFailOrClaude() { /* --fake と --out だけ → エラー */ }
+    @Test func minutesRequiredUnlessFailOrClaude() { /* --fake と --out だけ → エラー。--claude なら可 */ }
 }
 ```
 
 - [ ] **Step 2: 失敗を確認する** — Run: `swift test --filter DevSummarizeArgumentsTests` → Expected: FAIL
-- [ ] **Step 3: 実装する** — `main.swift` は `arguments.prefix(2) == ["dev", "summarize"]` で `DevSummarize.run(_:)` に渡す。
-- [ ] **Step 4: E2E に項目を足す**
-
-`scripts/e2e-check.sh` に次の 2 関数を足して `CHECKS` に登録する（番号は他計画と衝突しないよう `M` を付ける）。入力はヒアドキュメントで `${WORK}` に書く架空の内容（3 発話の `Transcript` JSON と、`decisions` 1 件の `MinutesOutput` JSON）。`autonote` は `swift build` 済みの `.build/debug/autonote` を使い、無ければ `skip`。
-
-- `check_dev_summarize`（`CURRENT="M1. autonote dev summarize --fake で議事録ファイルと _index.md ができる"`）: 終了コード 0、出力 JSON の `status == "minutes_generated"`、`${WORK}/m1/vault/<file>` が存在し `status: minutes_generated`・`## 決定事項`・`^t00-00-05` を含む、`${WORK}/m1/vault/_index.md` にそのファイル名の行がある、`${WORK}/m1/app/queue/jobs/` に JSON が 1 つ
-- `check_dev_summarize_failure`（`CURRENT="M2. 議事録生成の失敗で transcript_only の秒付きファイルになる"`）: `--fail-summary` で終了コード 0、`file` のファイル名が `^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}\.md$`、本文に `status: transcript_only`
-
-- [ ] **Step 5: 全テストと E2E を回す** — Run: `swift test` → Expected: PASS（全スイート）。Run: `scripts/e2e-check.sh` → Expected: M1・M2 が PASS、全体で `0 failed`（機材・GUI 依存の項目は SKIP 可）
-- [ ] **Step 6: 👤 利用者（任意・1 回）: Swift 実装から実の `claude` を呼ぶ** — 費用がかかるので利用者が判断する。1 分の偽文字起こしを `Transcript` JSON に変えたもの（`python3 -I scripts/make-fake-transcript.py --minutes 1` の行を実装者が変換して `$TMPDIR/t1.json` に置く）で `swift run autonote dev summarize --fake "$TMPDIR/t1.json" --out "$TMPDIR/claude-check" --claude`。合格: `status == "minutes_generated"` で、会議ファイルに 3 行要約がある。`~/.claude/projects` に新しい項目が増えていない。
+- [ ] **Step 3: 実装する** — `DevCommands.run` の分岐に `case "summarize": return await DevSummarize.run(Array(args.dropFirst()))` を足す。
+- [ ] **Step 4: E2E に項目を足す** — 計画 01 の `cli_or_skip` と `"${AUTONOTE_CLI}"` を使う。入力は `${WORK}` にヒアドキュメントで書く架空の内容（start 5・40・80 秒の 3 発話の `Transcript` JSON と、`decisions` 1 件の `MinutesOutput` JSON）
+  - `check_dev_summarize`（`CURRENT="05.1 dev summarize --fake で議事録ファイルと _index.md ができる"`）: 終了コード 0、出力 JSON の `status` が `minutes_generated`、`${WORK}/s1/vault/<file>` があり `status: minutes_generated`・`## 決定事項`・`^t00-00-05` を含む、`${WORK}/s1/vault/_index.md` にそのファイル名の行がある、`${WORK}/s1/app/queue/jobs/` に JSON が 1 つ
+  - `check_dev_summarize_failure`（`CURRENT="05.2 議事録生成の失敗で transcript_only の秒付きファイルになる"`）: `--fail-summary` で終了コード 0、`file` のファイル名が `^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}\.md$`、本文に `status: transcript_only`
+- [ ] **Step 5: 全テストと E2E を回す** — Run: `swift test` → Expected: PASS（全スイート）。Run: `scripts/e2e-check.sh` → Expected: 05.1・05.2 が PASS、全体で `0 failed`（機材・GUI に依存する項目は SKIP してよい）
+- [ ] **Step 6: 👤 利用者（任意・1 回。overview §8b で残すと決定済み）: Swift の実装から本物の `claude` を呼ぶ** — 費用がかかるので、やるかは利用者が決める。用意: 実装者が `python3 -I scripts/make-fake-transcript.py --minutes 1` の出力を `Transcript` JSON に変えて `$TMPDIR/t1.json` に置く。実行: `"$AUTONOTE_CLI" dev summarize --fake "$TMPDIR/t1.json" --out "$TMPDIR/claude-check" --claude`。合格: `status` が `minutes_generated` で、会議ファイルに 3 行要約がある。`~/.claude/projects` に新しい項目が増えていない
 - [ ] **Step 7: コミット** — `git add Sources/autonote Sources/AutoNoteCore/Minutes Tests/AutoNoteCoreTests/Minutes scripts/e2e-check.sh && git commit -m "feat(cli): add dev summarize subcommand and E2E checks for the minutes queue"`
 
 ---
 
 ## 要件との対応
 
-§8.1 → Task 1・3〜6・10（直列化は Task 7）、§8.2 → 6、§8.3 → 3・10、§8.4 → 10〜12、§8.5 → 10、§9.4 → 11、§12 → 13、§13 → 7・8・11・12、§5.8・§5.9 → 12・13、§6.4 → 9、§14.5 の差し込み口 → 12、overview §7 → 14。
+§8.1 → Task 1・3〜6・10（直列化は Task 7）、§8.2 → 6、§8.3 → 3・10、§8.4 → 10〜12（ファイル名と改名の規則そのものは計画 01 T8・T11）、§8.5 → 10、§9.4 → 11（検知は 01 T11）、§12 → 13、§13 → 7・8・11・12、§5.8・§5.9 → 12・13（`enqueue` の配線は計画 06 T13）、§6.4 → 9（組み立ては計画 04 T11）、§14.5 の差し込み口 → 12、overview §7 → 14。

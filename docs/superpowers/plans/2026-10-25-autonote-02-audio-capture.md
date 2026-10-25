@@ -14,7 +14,8 @@
 
 ## Global Constraints
 
-- 最低 OS: macOS 26.0。`Package.swift` の platforms は `.macOS("26.0")`、`swiftLanguageModes: [.v6]`
+- 最低 OS: macOS 26.0。`Package.swift` の platforms は `.macOS("26.0")`、`swift-tools-version: 6.2`、`swiftLanguageModes: [.v6]`。ツールチェーンは Swift 6.3（計画 00 と同じ）
+- `autonote` CLI や `AutoNoteApp` から使う `AutoNoteCore` の型・関数は `public` にする（同じパッケージでも別ターゲットからは見えない）
 - Intel（x86_64）と Apple Silicon（arm64）の両方でビルド・動作すること。機種依存の分岐は実行時判定（`isAvailable` など）で行い、`#if arch` で機能を落とさない
 - 署名: 自己署名証明書 `AutoNote Dev`、Bundle ID `com.yutaokoshi.autonote`。`scripts/build-app.sh` を使う。App Sandbox なし、Hardened Runtime なし
 - 音声・文字起こし・議事録・個人の機材識別子（MAC アドレス）をリポジトリにコミットしない。テストのフィクスチャは架空の内容にする
@@ -26,11 +27,11 @@
 - 実装者はタスク完了前に `scripts/e2e-check.sh` を回し、結果を報告に含める
 
 （「本書」は overview を指す。）
-
 本計画だけの決まり:
 - 音声コールバックの中ではロック・メモリ確保・ディスク I/O・ログ出力・`await` をしない（overview §6）。`AudioRingBuffer.write` だけを呼ぶ
 - Core Audio の破棄（`AudioDeviceStop` 〜 `AudioHardwareDestroyProcessTap`）はメインスレッドで同期的に呼ばない。専用の `DispatchQueue` で行い、呼び手はタイムアウト付きで待つ（要件書 §3.4）
 - テストは `Tests/AutoNoteCoreTests/Audio/`、フェイクは `Sources/AutoNoteTestSupport/` に置く。実行は `swift test --filter <スイート名>`
+- 各タスクの Produces に書いた `AutoNoteCore` の型・関数・init はすべて `public`（`autonote dev …` と計画 06 の App から使う）。テスト専用の口（`waitUntilIdle`、`tick`）だけ `internal`
 
 ## Review Focus
 
@@ -48,20 +49,20 @@ overview §3 の型（`MeetingID`、`TimelineTime`、`Track`、`Language`、`Boo
 
 | 前提 | 想定する形 |
 |---|---|
-| `AudioSource`（`Sources/AutoNoteCore/Audio/AudioSource.swift`） | overview §4 のとおり。`var track: Track { get }`、`start(onBuffer: @Sendable @escaping (AudioChunk) -> Void) async throws`、`stop() async` |
+| `AudioSource`（計画 01 の `Sources/AutoNoteCore/Audio/Protocols.swift`。本計画は作らず、そのまま使う） | overview §4 のとおり。`var track: Track { get }`、`start(onBuffer: @Sendable @escaping (AudioChunk) -> Void) async throws`、`stop() async` |
 | `AudioChunk`（計画 01 の Task 4） | `public struct AudioChunk: Sendable, Equatable { static let sampleRate = 16_000.0; var track: Track; var samples: [Int16]; var start: TimelineTime; var hostTime: UInt64; var duration: Double { get } }`（計画 01 の案と同じ）。`samples` は 16kHz/mono/Int16、`start` は会議タイムライン、`hostTime` は先頭サンプルの mach ホスト時刻。音源は自分の `track` を入れる |
 | 型の公開 | 上記の型はすべて `public` で memberwise の `public init` を持つ。`TimelineTime(seconds:)`、`MeetingID.make(start:)` |
 | `AppPaths` | 計画 01 の案のとおり `init(root:)`、`static var standard`、`recordingsDirectory`、`logsDirectory`、`meetingDirectory(_:)`（`recordings/<id>`）、`manifestFile(_:)`、`tracksDirectory(_:)`（`recordings/<id>/tracks` を想定） |
 | `ManifestStore` | 計画 01 の案のとおり `save(_:) throws`、`load(_:) throws -> Manifest`、`update(_:_:) throws -> Manifest`、`all() -> [Manifest]`、`unfinishedRecordings() -> [Manifest]`（status `recording`）、`delete(_:) throws`（`recordings/<id>` ほかを消す） |
-| `FakeAudioSource`、`TemporaryDirectory.make() -> URL`（TestSupport） | 計画 01 が置く（`FakeAudioSource(track:chunks:)`）。本計画 Task 2 で `emit` と `startError` を足す |
+| `FakeAudioSource`、`TemporaryDirectory.make() -> URL`（TestSupport） | 計画 01 が `Sources/AutoNoteTestSupport/Fakes.swift` に置く（`FakeAudioSource(track:chunks:)`）。本計画 Task 2 はそのファイルを Modify して `emit` と `startError` を足す |
 | CLI の `dev` 振り分け | 計画 01 の `enum DevCommands { static func run(_ args: [String]) async -> Int32 }`（`Sources/autonote/DevCommands.swift`）。本計画は `record` と `import` をここに足す |
-| `Settings` | 本計画は読まない。計画 06 が `LiveAudioSourceFactory(voiceProcessing:)` に渡すため、`Settings` に `voiceProcessing: Bool`（既定 false）が要る |
+| `Settings` | 計画 01 の `voiceProcessing: Bool`（既定 false）だけを `RecordingSession.live(paths:settings:clock:)`（Task 10）が読む |
 
 ### Task 1: TCC まとめ確認（👤 利用者）と一時的な開発メニュー
 
 overview §8 の 3 項目（システム音声録音の許可の持続、許可なしの挙動、DictationTranscriber が許可不要なこと）と、IOProc が無音時に呼ばれない件の BT 出力での再確認、aggregate に出力デバイスを含めない構成で受信できるかを確かめる。
 
-**方式の決定: `.app` に最小の「開発」サブメニューを足す（CLI 側の確認にはしない）。** 理由: TCC の責任プロセスは起動元で決まり、`autonote dev …` をターミナルから打つとターミナル（Orca.app）の許可を見てしまう（スパイク項目 9 の誤測定と同じ）。確かめたいのは `open` で起動した `com.yutaokoshi.autonote` の許可なので、`.app` の中から呼ぶ必要がある。計画 00 の骨組みにはすでに「マイク許可を確認」項目があり、その隣に足すだけで済む。「計画 06 まで App は骨組みのまま」の例外として `DevChecks.swift` 1 ファイルとメニュー 2 項目に限り、計画 06 のメニューバー実装で削除する。
+**方式の決定: `.app` に最小の「開発」サブメニューを足す（CLI 側の確認にはしない）。** 理由: TCC の責任プロセスは起動元で決まり、`autonote dev …` をターミナルから打つとターミナル（Orca.app）の許可を見てしまう（スパイク項目 9 の誤測定と同じ）。確かめたいのは `open` で起動した `com.yutaokoshi.autonote` の許可なので、`.app` の中から呼ぶ必要がある。計画 00 の骨組みにはすでに「マイク許可を確認」項目があり、その隣に足すだけで済む。「計画 06 まで App は骨組みのまま」の例外（overview §8b で承認済み）として `DevChecks.swift` 1 ファイルとメニュー 2 項目に限り、計画 06 の Task 13 で削除する。
 
 **Files:**
 - Create: `Sources/AutoNoteApp/DevChecks.swift`
@@ -76,7 +77,7 @@ overview §8 の 3 項目（システム音声録音の許可の持続、許可�
 - [ ] **Step 1: `DevChecks.swift` を実装する**
 
 `enum DevChecks`（`nonisolated`。IOProc ブロックを MainActor 文脈で作ると SIGILL になる。スパイク項目 3）に 2 つの処理を置き、結果を `<logsDirectory>/dev-checks.log` に 1 行ずつ追記する（`open` 起動では標準出力が見えないため）:
-- `static func checkSystemAudio(seconds: Int = 15) async`: TapCapture の手順 1〜8 を写す。ただし (a) aggregate は**出力デバイスを含めない** `tapOnly` 構成（`MainSubDeviceKey` と `SubDeviceListKey` なし、`TapList` は drift compensation あり、`TapAutoStart`=true、`IsPrivate`=true）で作る、(b) IOProc では `Atomic<Int>` のカウンタ（callbacks、frames）と固定長配列への最大値更新（peak）だけを行い、ロック・確保・ファイル書き込みをしない、(c) 1 秒ごとのコールバック数、各コールバック間で `mHostTime` が 0.1 秒以上飛んだ箇所の「ホスト時刻の飛び（秒）と `mSampleTime` の飛び（フレーム）」を最大 16 件記録する、(d) `tapOnly` で callbacks=0 なら同じ秒数を `withOutputClock`（スパイクと同じ、出力デバイスを MainSubDevice に入れる）で取り直す、(e) 破棄は専用キューで行い 10 秒で打ち切ってログに `teardown timeout` を残す。ログ行の形: `system layout=tapOnly callbacks=N frames=N peak_dbfs=X per_second=[…] gaps=[{host_s:…, sample_frames:…}]`
+- `static func checkSystemAudio(seconds: Int = 15) async`: TapCapture の手順 1〜8 を写す。ただし (a) aggregate は UID を `com.yutaokoshi.autonote.tap.<UUID>` にし（計画 03 が機材と誤認しないため）、**出力デバイスを含めない** `tapOnly` 構成（`MainSubDeviceKey` と `SubDeviceListKey` なし、`TapList` は drift compensation あり、`TapAutoStart`=true、`IsPrivate`=true）で作る、(b) IOProc では `Atomic<Int>` のカウンタ（callbacks、frames）と固定長配列への最大値更新（peak）だけを行い、ロック・確保・ファイル書き込みをしない、(c) 1 秒ごとのコールバック数、各コールバック間で `mHostTime` が 0.1 秒以上飛んだ箇所の「ホスト時刻の飛び（秒）と `mSampleTime` の飛び（フレーム）」を最大 16 件記録する、(d) `tapOnly` で callbacks=0 なら同じ秒数を `withOutputClock`（スパイクと同じ、出力デバイスを MainSubDevice に入れる）で取り直す、(e) 破棄は専用キューで行い 10 秒で打ち切ってログに `teardown timeout` を残す。ログ行の形: `system layout=tapOnly callbacks=N frames=N peak_dbfs=X per_second=[…] gaps=[{host_s:…, sample_frames:…}]`
 - `static func checkDictation(file: URL) async`: `SFSpeechRecognizer.authorizationStatus()` をログに出してから、`Spikes/Sources/AppleSpeechProbe` の dictation `--file` 経路（`DictationTranscriber(locale: ja_JP, preset:)` → `SpeechAnalyzer(modules:)` → `analyzeSequence(from:)`）を写して認識し、本文の先頭 100 文字とエラーをログに出す。許可の要求（`requestAuthorization`）は呼ばない
 
 メニュー項目: 「システム音声を確認（15 秒）」「Dictation を確認（/tmp/autonote-dictation.aiff）」。
@@ -128,7 +129,7 @@ Expected（記録すること）: `per_second` が音の鳴った秒だけ 0 で
 **Files:**
 - Create: `Sources/AutoNoteCore/Audio/MeetingClock.swift`, `Sources/AutoNoteCore/Audio/TimelineAligner.swift`
 - Create: `Sources/AutoNoteTestSupport/FakeHostClock.swift`, `Sources/AutoNoteTestSupport/AudioFixtures.swift`
-- Modify: `Sources/AutoNoteTestSupport/FakeAudioSource.swift`
+- Modify: `Sources/AutoNoteTestSupport/Fakes.swift`（計画 01 の `FakeAudioSource` に `emit` と `startError` を足す。`AudioSource` の宣言がある計画 01 の `Audio/Protocols.swift` は変えない）
 - Test: `Tests/AutoNoteCoreTests/Audio/MeetingClockTests.swift`, `Tests/AutoNoteCoreTests/Audio/TimelineAlignerTests.swift`
 
 **Interfaces:**
@@ -410,7 +411,7 @@ Expected（記録すること）: `per_second` が音の鳴った秒だけ 0 で
   - `public protocol TapHardware: Sendable { func createTap(_ spec: TapSpec) throws -> (id: AudioObjectID, uuid: String); func tapFormat(_ tap: AudioObjectID) throws -> AudioStreamBasicDescription; func defaultOutputDeviceUID() throws -> String; func createAggregate(_ description: [String: any Sendable]) throws -> AudioObjectID; func createIOProc(_ device: AudioObjectID, queue: DispatchQueue, block: @escaping AudioDeviceIOBlock) throws -> AudioDeviceIOProcID; func start(_ device: AudioObjectID, _ proc: AudioDeviceIOProcID) throws; func stop(_ device: AudioObjectID, _ proc: AudioDeviceIOProcID) throws; func destroyIOProc(_ device: AudioObjectID, _ proc: AudioDeviceIOProcID) throws; func destroyAggregate(_ device: AudioObjectID) throws; func destroyTap(_ tap: AudioObjectID) throws }`、本番は `public struct CoreAudioTapHardware: TapHardware`
   - `public enum AudioSourceError: Error, Equatable, Sendable { case coreAudio(call: String, status: OSStatus); case microphonePermission(MicrophonePermissionStatus); case deviceNotFound(uid: String); case alreadyStarted; case unsupportedFormat }`、`public enum MicrophonePermissionStatus: String, Sendable, Equatable { case authorized, denied, notDetermined, restricted }`（Task 9 が使う。同じファイルに置く）
   - `public struct SourceStatistics: Sendable, Equatable { public var callbacks: Int; public var frames: Int; public var droppedFrames: Int }`
-  - `public actor ProcessTapSource: AudioSource { public nonisolated let track: Track /* = .system */; public init(clock: MeetingClock, hardware: any TapHardware = CoreAudioTapHardware(), excludeBundleIDs: [String] = [Bundle.main.bundleIdentifier].compactMap { $0 }, layout: AggregateLayout = .tapOnly, stopTimeout: Duration = .seconds(5)); public func start(onBuffer: @Sendable @escaping (AudioChunk) -> Void) async throws; public func stop() async; public func statistics() -> SourceStatistics; public static func aggregateDescription(tapUUID: String, layout: AggregateLayout, outputUID: String?) -> [String: any Sendable] }`
+  - `public actor ProcessTapSource: AudioSource { public nonisolated let track: Track /* = .system */; public init(clock: MeetingClock, hardware: any TapHardware = CoreAudioTapHardware(), excludeBundleIDs: [String] = [Bundle.main.bundleIdentifier].compactMap { $0 }, layout: AggregateLayout = .tapOnly, stopTimeout: Duration = .seconds(5)); public func start(onBuffer: @Sendable @escaping (AudioChunk) -> Void) async throws; public func stop() async; public func statistics() -> SourceStatistics; public static let aggregateUIDPrefix = "com.yutaokoshi.autonote.tap."; public static func aggregateDescription(tapUUID: String, layout: AggregateLayout, outputUID: String?) -> [String: any Sendable] }`
   - TestSupport: `public final class FakeTapHardware: TapHardware, @unchecked Sendable { public var calls: [String] { get }; public var lastTapSpec: TapSpec? { get }; public var failOn: String?; public var teardownDelay: Duration; public var format: AudioStreamBasicDescription /* 既定 48k/2ch/Float32 interleaved */; public func fire(frames: Int, hostTime: UInt64, sampleTime: Double, value: Float) }`（`fire` は登録された IOProc ブロックを、組み立てた `AudioBufferList` と `AudioTimeStamp` で呼ぶ）
 
 Core Audio の呼び出し順（スパイクで動いた順。`CoreAudioTapHardware` と `start`/`stop` はこの順を守る）:
@@ -418,7 +419,7 @@ Core Audio の呼び出し順（スパイクで動いた順。`CoreAudioTapHardw
 2. `AudioHardwareCreateProcessTap` → tap の UUID は `desc.uuid.uuidString`
 3. `kAudioTapPropertyFormat` を読む（Intel 内蔵スピーカーで 48000/2ch/Float32/interleaved）
 4. `withOutputClock` のときだけ既定出力の UID（`kAudioHardwarePropertyDefaultSystemOutputDevice` → `kAudioDevicePropertyDeviceUID`）
-5. `AudioHardwareCreateAggregateDevice`: Name、UID（毎回新しい UUID）、`IsPrivate`=true、`IsStacked`=false、`TapAutoStart`=true、`TapList`=[[`SubTapUID`: tap UUID, `SubTapDriftCompensation`: true]]。`tapOnly` は `MainSubDevice` と `SubDeviceList` を入れない
+5. `AudioHardwareCreateAggregateDevice`: Name、UID（`ProcessTapSource.aggregateUIDPrefix` ＋ 毎回新しい UUID。接頭辞は `"com.yutaokoshi.autonote.tap."`。overview §3）、`IsPrivate`=true、`IsStacked`=false、`TapAutoStart`=true、`TapList`=[[`SubTapUID`: tap UUID, `SubTapDriftCompensation`: true]]。`tapOnly` は `MainSubDevice` と `SubDeviceList` を入れない
 6. `AudioDeviceCreateIOProcIDWithBlock`（ブロックは nonisolated な static 関数で作る。中身は `ring.write(inInputData, frameCount:, hostTime: inInputTime.mHostTime, sampleTime: inInputTime.mSampleTime)` だけ）
 7. `AudioDeviceStart`
 8. 停止: `AudioDeviceStop` → `AudioDeviceDestroyIOProcID` → `AudioHardwareDestroyAggregateDevice` → `AudioHardwareDestroyProcessTap`
@@ -437,6 +438,7 @@ Core Audio の呼び出し順（スパイクで動いた順。`CoreAudioTapHardw
         let d = ProcessTapSource.aggregateDescription(tapUUID: "T", layout: .tapOnly, outputUID: nil)
         #expect(d[kAudioAggregateDeviceSubDeviceListKey] == nil && d[kAudioAggregateDeviceMainSubDeviceKey] == nil)
         #expect(d[kAudioAggregateDeviceTapAutoStartKey] as? Bool == true && d[kAudioAggregateDeviceIsPrivateKey] as? Bool == true)
+        #expect((d[kAudioAggregateDeviceUIDKey] as? String)?.hasPrefix("com.yutaokoshi.autonote.tap.") == true)
     }
     @Test func failureMidwayTearsDownCreatedObjects() async {
         let hw = FakeTapHardware(); hw.failOn = "createAggregate"
@@ -479,7 +481,7 @@ Core Audio の呼び出し順（スパイクで動いた順。`CoreAudioTapHardw
 - Produces:
   - `public protocol MicrophonePermissionChecking: Sendable { func status() -> MicrophonePermissionStatus }`、`public struct AVMicrophonePermission: MicrophonePermissionChecking`（`AVCaptureDevice.authorizationStatus(for: .audio)`。要求はしない。要求は計画 06 の画面が行う）
   - `public struct InputFormat: Sendable, Equatable { public var sampleRate: Double; public var channels: Int }`、`public protocol MicrophoneEngine: AnyObject, Sendable { func prepare(deviceID: AudioDeviceID?, voiceProcessing: Bool) throws -> InputFormat; func start(writingTo ring: AudioRingBuffer) throws; func stop() }`、本番 `public final class AVMicrophoneEngine: MicrophoneEngine, @unchecked Sendable`
-  - `public protocol AudioDeviceLookup: Sendable { func deviceID(forUID uid: String) -> AudioDeviceID?; func deviceRef(forUID uid: String?) -> DeviceRef? }`（nil は既定入力）、本番 `public struct CoreAudioDeviceLookup: AudioDeviceLookup`
+  - `public protocol AudioDeviceLookup: Sendable { func deviceID(forUID uid: String) -> AudioDeviceID?; func deviceRef(forUID uid: String?) -> DeviceRef? }`（nil は既定入力。`DeviceRef.transport` は overview §3 の小文字の値 `builtin` `bluetooth` `usb` `aggregate` `virtual` `unknown` に変換する）、本番 `public struct CoreAudioDeviceLookup: AudioDeviceLookup`
   - `public actor MicrophoneSource: AudioSource { public nonisolated let track: Track /* = .mic */; public init(deviceUID: String?, clock: MeetingClock, voiceProcessing: Bool = false, permission: any MicrophonePermissionChecking = AVMicrophonePermission(), engine: any MicrophoneEngine = AVMicrophoneEngine(), lookup: any AudioDeviceLookup = CoreAudioDeviceLookup()); public func start(onBuffer: @Sendable @escaping (AudioChunk) -> Void) async throws; public func stop() async }`
   - TestSupport: `public final class FakeMicrophoneEngine: MicrophoneEngine, @unchecked Sendable { public var prepared: (deviceID: AudioDeviceID?, voiceProcessing: Bool)?; public var format: InputFormat; public func push(frames: Int, hostTime: UInt64, value: Float) }`、`public struct FakeMicrophonePermission: MicrophonePermissionChecking`、`public struct FakeDeviceLookup: AudioDeviceLookup`
 
@@ -516,7 +518,7 @@ Core Audio の呼び出し順（スパイクで動いた順。`CoreAudioTapHardw
 - Test: `Tests/AutoNoteCoreTests/Audio/RecordingSessionTests.swift`, `Tests/AutoNoteCoreTests/Audio/SessionHarness.swift`
 
 **Interfaces:**
-- Consumes: `AudioSource`、`ProcessTapSource`、`MicrophoneSource`、`WAVSegmentWriter`、`SegmentChange`、`SilenceMonitor`、`MeetingClock`、`HostClock`、`AppPaths`、`ManifestStore`、`Manifest` ほか §3 の型
+- Consumes: `AudioSource`、`ProcessTapSource`、`MicrophoneSource`、`WAVSegmentWriter`、`SegmentChange`、`SilenceMonitor`、`MeetingClock`、`HostClock`、`AppPaths`、`ManifestStore`、`Settings.voiceProcessing`（`live` だけ）、`Manifest` ほか §3 の型
 - Produces（計画 03・06 が使う完全なシグネチャ）:
 
 ```swift
@@ -526,6 +528,7 @@ public protocol AudioSourceFactory: Sendable {
     func inputDevice(uid: String?) -> DeviceRef?          // manifest.device 用。nil = 既定入力
 }
 public struct LiveAudioSourceFactory: AudioSourceFactory {
+    public let voiceProcessing: Bool
     public init(voiceProcessing: Bool = false, tapLayout: AggregateLayout = .tapOnly)
 }
 
@@ -562,7 +565,10 @@ public actor RecordingSession {
     public init(paths: AppPaths, manifests: ManifestStore, sources: any AudioSourceFactory,
                 host: any HostClock = MachHostClock(), disk: any DiskSpaceProvider = SystemDiskSpace(),
                 now: @escaping @Sendable () -> Date = { Date() }, tickInterval: Duration = .seconds(1))
-    public nonisolated let events: AsyncStream<RecordingEvent>
+    /// アプリ用の組み立て（計画 03・06 の `AppEnvironment.make` が使う）。実機の tap とマイク、`ManifestStore(paths:)`、`SystemDiskSpace()`、
+    /// `LiveAudioSourceFactory(voiceProcessing: settings.voiceProcessing)` で組む。`clock` はホスト時計（会議ごとの `MeetingClock` は `start` で作る）
+    public static func live(paths: AppPaths, settings: Settings, clock: any HostClock = MachHostClock()) -> RecordingSession
+    public func events() -> AsyncStream<RecordingEvent>                   // 呼ぶたびに新しい購読。全購読者に同じ事象を流す（overview §8b）
     public var state: SessionState { get }
     public func elapsed() -> TimelineTime
     public func start(_ configuration: Configuration) async throws -> MeetingID
@@ -582,6 +588,7 @@ public actor RecordingSession {
 
 振る舞い:
 - `start`: 状態確認 → `MeetingID.make(start: now())` → `MeetingClock(origin: host.hostTime())` → manifest（`status .recording`、`source .live`、`device`、`language`、`silenceWarning false`、`autonoteVersion AutoNoteVersion.current`）を保存 → 両トラックの `WAVSegmentWriter.open(at: 0)` → マイク、システムの順に `start`。マイクの `.microphonePermission` は録音を始めずに後始末（会議ディレクトリを消す）して同じ値の `RecordingError` を throw。それ以外の片方の失敗は `.sourceFailed` を出し、`silenceWarning = true` にして続ける。両方失敗なら後始末して `.allSourcesFailed`
+- `events()`: 購読ごとに `AsyncStream.makeStream()` で continuation を作り、`[UUID: AsyncStream<RecordingEvent>.Continuation]` に登録する。事象は登録中の全員に yield し、`onTermination` で登録を外す。購読より前の事象は流さない
 - 音源の `onBuffer` は `AsyncStream<(Track, AudioChunk)>` に yield し、セッション内の 1 本のタスクが順に `SilenceMonitor.observe` → 一時停止中でなければ `writer.write` → `audio(for:)` の購読者へ、と処理する（到着順を保つ。`Task {}` を chunk ごとに作らない）
 - `pause`: `pauses` に `PauseInterval(start: now, end: nil)`、両トラック `close(at: now)`。一時停止中のチャンクは捨てる。`resume`: `end` を埋め、両トラック `open(at: now)`
 - `bookmark`: 録音中・一時停止中に可。`Bookmark(at: elapsed(), note:)` を manifest に足す
@@ -597,7 +604,7 @@ public actor RecordingSession {
 @Suite struct RecordingSessionTests {
     @Test func startWritesRecordingManifest() async throws {
         let h = try await SessionHarness.make()
-        let id = try await h.session.start(.init(language: .ja, device: DeviceRef(name: "Test Mic", uid: "TEST:input", transport: "USB")))
+        let id = try await h.session.start(.init(language: .ja, device: DeviceRef(name: "Test Mic", uid: "TEST:input", transport: "usb")))
         let m = try await h.manifests.load(id)
         #expect(m.status == .recording && m.source == .live && m.language == .ja && m.device?.uid == "TEST:input")
         #expect(await h.session.state == .recording(id))
@@ -620,6 +627,8 @@ public actor RecordingSession {
     @Test func audioStreamYieldsOnlyWhileRecording() async throws { /* audio(for: .mic) に録音中の 2 チャンクだけが来て、一時停止中のものは来ない */ }
     @Test func invalidTransitionsThrow() async throws { /* idle で pause/stop/bookmark → .notRecording、録音中に start → .alreadyRecording、録音中に resume → .notPaused、二重 pause → .alreadyPaused */ }
     @Test func setLanguageUpdatesManifest() async throws { /* .ja で開始 → setLanguage(.en) → manifest.language == .en */ }
+    @Test func eventsReachEverySubscriber() async throws { /* events() を 2 回呼んで 2 人が購読 → start → bookmark → 両方のストリームが [.started(id), .bookmarked(b)] を受け取る。片方を cancel してももう片方に .stopped が届く */ }
+    @Test func liveUsesVoiceProcessingSetting() async throws { /* voiceProcessing を true にした Settings() で RecordingSession.live → @testable で見た sources が LiveAudioSourceFactory で voiceProcessing == true（録音は始めない） */ }
 }
 ```
 - [ ] **Step 2: Run test to verify it fails** — Run: `swift test --filter RecordingSessionTests` → Expected: FAIL（`RecordingSession` が未定義）
@@ -692,7 +701,7 @@ public actor RecordingSession {
 
 ### Task 13: 音声ファイルの取り込み
 
-要件書 §10。確定版文字起こしと議事録生成だけを行う会議として manifest を作る。話者「不明」は manifest には持たず、計画 04/05 が `source == .imported` を見て `Speaker.unknown` にする。
+要件書 §10。確定版文字起こしと議事録生成だけを行う会議として manifest を作る。形は overview §3 の「取り込んだ音声の manifest」に従う。話者は下流が `source` で決めるので本計画は触らない。
 
 **Files:**
 - Create: `Sources/AutoNoteCore/Audio/AudioImporter.swift`
@@ -702,7 +711,7 @@ public actor RecordingSession {
 - Consumes: `AppPaths`、`ManifestStore`、`WAVFile`、`MeetingID.make(start:)`
 - Produces: `public struct AudioImporter: Sendable { public static let supportedExtensions: Set<String> /* ["wav", "m4a", "mp3", "mp4"] */; public static let importDevice: DeviceRef /* name "import", uid "import", transport "import" */; public init(paths: AppPaths, manifests: ManifestStore); public func importFile(_ url: URL, startedAt: Date? = nil, language: Language, progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> Manifest }`、`public enum ImportError: Error, Equatable, Sendable { case unsupportedFormat(String); case noAudioTrack; case unreadable(String) }`
 
-規則: 拡張子（小文字化）で受け付けを判定。`AVURLAsset` の音声トラックを `AVAssetReaderTrackOutput`（`kAudioFormatLinearPCM`、16000Hz、1ch、16bit、little-endian、非インターリーブなし）で読み、`tracksDirectory(id)/import.wav` に書く。`startedAt` が nil ならファイルの作成日時（`URLResourceValues.creationDate`、無ければ更新日時）。manifest: `source .imported`、`device importDevice`、`tracks [TrackFile(track: .system, relativePath: "tracks/import.wav", startOffset: 0, durationSeconds: 長さ)]`、`pauses []`、`bookmarks []`、`status .recorded`（取り込みには「短すぎる録音」を適用しない）、`endedAt = startedAt + 長さ`。
+規則: 拡張子（小文字化）で受け付けを判定。`AVURLAsset` の音声トラックを `AVAssetReaderTrackOutput`（`kAudioFormatLinearPCM`、16000Hz、1ch、16bit、little-endian、非インターリーブなし）で読み、`tracksDirectory(id)/import-000.wav` に書く。`startedAt` が nil ならファイルの作成日時（`URLResourceValues.creationDate`、無ければ更新日時）。manifest: `source .imported`、`device importDevice`、`tracks [TrackFile(track: .mic, relativePath: "tracks/import-000.wav", startOffset: 0, durationSeconds: 長さ)]`、`pauses []`、`bookmarks []`、`status .recorded`（取り込みには「短すぎる録音」を適用しない）、`endedAt = startedAt + 長さ`。
 
 - [ ] **Step 1: Write the failing test**
 
@@ -711,7 +720,7 @@ public actor RecordingSession {
 ```swift
 @Suite struct AudioImporterTests {
     @Test(arguments: ["wav", "m4a", "mp4"])
-    func importsTo16kMonoWAV(ext: String) async throws { /* 3 秒の 440Hz 正弦 → importFile(language: .ja) info: 16000 / 1ch / 16bit、durationSeconds 3.0±0.05（AAC の前後の詰め物を含めて） manifest: source .imported、device?.name == "import"、status .recorded、tracks.count == 1 */ }
+    func importsTo16kMonoWAV(ext: String) async throws { /* 3 秒の 440Hz 正弦 → importFile(language: .ja) info: 16000 / 1ch / 16bit、durationSeconds 3.0±0.05（AAC の前後の詰め物を含めて） manifest: source .imported、device == DeviceRef(name: "import", uid: "import", transport: "import")、status .recorded、tracks == [TrackFile(track: .mic, relativePath: "tracks/import-000.wav", …)] */ }
     @Test func defaultsStartToFileCreationDate() async throws { /* 作成日時を 2026-10-20 10:00 に設定した wav → startedAt がその日時、id.rawValue の先頭が "20261020-1000-" */ }
     @Test func explicitStartOverridesCreationDate() async throws { /* startedAt 指定がそのまま入る */ }
     @Test func rejectsUnsupportedExtension() async { /* "notes.txt" → .unsupportedFormat("txt") */ }
@@ -720,47 +729,80 @@ public actor RecordingSession {
 }
 ```
 - [ ] **Step 2: Run test to verify it fails** — Run: `swift test --filter AudioImporterTests` → Expected: FAIL
-- [ ] **Step 3: Implement `AudioImporter`**（失敗時は作りかけの会議ディレクトリを消す。mp3 は自動テストしない。AVFoundation でエンコードできないため Task 14 の 👤 手順で確かめる）
+- [ ] **Step 3: Implement `AudioImporter`**（失敗時は作りかけの会議ディレクトリを消す。mp3 は自動テストしない。AVFoundation でエンコードできないため Task 15 の 👤 手順で確かめる）
 - [ ] **Step 4: Run test to verify it passes** — Run: `swift test --filter AudioImporterTests` → Expected: PASS
 - [ ] **Step 5: Commit** — `git add Sources/AutoNoteCore/Audio/AudioImporter.swift Tests/AutoNoteCoreTests/Audio/AudioImporterTests.swift && git commit -m "feat: import audio files as 16 kHz mono meetings"`
 
-### Task 14: 開発用サブコマンドと E2E 更新、全 PASS、コミット
+### Task 14: 開発用サブコマンド `dev record` と `dev import`
 
 **Files:**
-- Create: `Sources/autonote/DevRecord.swift`, `Sources/autonote/DevImport.swift`
-- Modify: `Sources/autonote/DevCommands.swift`（`record` と `import` を足す）、`scripts/e2e-check.sh`（`check_dev_record`、`check_dev_import` と `CHECKS` 配列）
-- Modify（👤 の結果）: `docs/superpowers/research/2026-10-24-spike-results.md`（項目 3・5）、`docs/superpowers/specs/2026-10-24-autonote-design.md`（§5.6、§19 の項目 5）
-- Test: E2E 項目 16・17（CLI は `AutoNoteCore` の外なので、Step 1 で先に E2E を書いて失敗させる）
+- Create: `Sources/AutoNoteCore/Audio/RecordingReport.swift`, `Sources/autonote/DevRecord.swift`, `Sources/autonote/DevImport.swift`
+- Modify: `Sources/autonote/DevCommands.swift`（`record` と `import` を足す）
+- Test: `Tests/AutoNoteCoreTests/Audio/RecordingReportTests.swift`
 
 **Interfaces:**
-- Consumes: `RecordingSession`、`LiveAudioSourceFactory`、`AVMicrophonePermission`、`AudioImporter`、`AppPaths(root:)`、`ManifestStore`
+- Consumes: `RecordingSession.live(paths:settings:clock:)`、`RecordingSession.Configuration`、`events()`、`statistics()`、`AVMicrophonePermission`、`AudioImporter`、`AppPaths(root:)`、`Settings`、`DevCommands.run(_:)`（計画 01）
 - Produces:
-  - `autonote dev record --seconds <N> --out <dir> [--mic-uid <UID>] [--voice-processing] [--check-permission]`: `AppPaths(root: <dir>)` で録る。標準出力に JSON 1 行 `{"meeting_id":…,"manifest":"<絶対パス>","status":"<MeetingStatus の rawValue>","mic_permission":"authorized","tracks":[{"track":"mic","files":1,"seconds":5.0,"chunks":…,"peak_dbfs":…},{"track":"system",…}],"events":["sourceFailed(system)",…]}`。終了コード 0 成功、3 マイク許可が `authorized` でない（エンジンを組まずに即終了）、1 その他。`--check-permission` は `mic_permission` だけを出して 0
+  - `public struct RecordingReport: Codable, Equatable, Sendable { public struct TrackReport: Codable, Equatable, Sendable { public var track: String; public var files: Int; public var seconds: Double; public var chunks: Int; public var peakDbfs: Double? }; public var meetingId: String; public var manifest: String; public var status: String; public var micPermission: String; public var tracks: [TrackReport]; public var events: [String]; public static func make(manifest: Manifest, manifestURL: URL, meetingDirectory: URL, statistics: [Track: TrackStatistics], events: [RecordingEvent], micPermission: MicrophonePermissionStatus) throws -> RecordingReport; public func jsonLine() throws -> String }`（JSON キーは snake_case。`peakDbfs` は −∞ のとき null。`events` は `"started"` `"sourceFailed(system)"` `"silenceWarning(mic)"` のように case 名と Track だけ）
+  - `autonote dev record --seconds <N> --out <dir> [--mic-uid <UID>] [--voice-processing] [--check-permission]`: `AppPaths(root: <dir>)` と `Settings()`（`--voice-processing` で `voiceProcessing = true`）で `RecordingSession.live` を組んで録り、`RecordingReport.jsonLine()` を標準出力に 1 行出す。終了コード 0 成功、3 マイク許可が `authorized` でない（エンジンを組まずに即終了）、1 その他。`--check-permission` は `{"mic_permission":"…"}` だけを出して 0
   - `autonote dev import <file> --out <dir> [--lang auto|ja|en] [--start <ISO8601>]`: 標準出力に `{"meeting_id":…,"manifest":…,"wav":…,"seconds":…}`。終了コード 0 / 1
-  - E2E 項目 `16. autonote dev record（5 秒）` と `17. autonote dev import（m4a / wav）`
 
-- [ ] **Step 1: E2E の確認項目を先に書く（失敗する状態）**
+- [ ] **Step 1: Write the failing test**
 
-`scripts/e2e-check.sh` に 2 関数を足し、`CHECKS` の `check_cli` の後に入れる:
-- `check_dev_record`: `${APP}/Contents/MacOS/autonote` が無ければ SKIP。`dev record --check-permission` の `mic_permission` が `authorized` でなければ SKIP（「マイク許可がない（責任プロセス: ターミナル）」）。`run_timeout 40 autonote dev record --seconds 5 --out "${WORK}/rec"` が exit 0、JSON の `status` が `tooShort`（`MeetingStatus.tooShort.rawValue`。5 秒は 1 分未満）、manifest ファイルがあり `plutil -extract status raw` が同じ、mic と system の `seconds` がともに 5.0±0.5（システム音はコールバックが無くても無音で埋まる）、`afinfo` で各 WAV が `16000 Hz`・`1 ch`・16 bit。PASS の説明に system の `chunks` を出す（0 は失敗にしない）
-- `check_dev_import`: `say -o "${WORK}/s.aiff" "テストです"` → `afconvert -f m4af -d aac` と `afconvert -f WAVE -d LEI16@44100` で m4a と wav を作る → それぞれ `autonote dev import … --out "${WORK}/imp" --start 2026-10-20T10:00:00+09:00` が exit 0、manifest の `source` が `imported`、`device.name` が `import`、出力 WAV が `afinfo` で 16000 Hz / 1 ch。`say` が無ければ SKIP
-- Run: `scripts/build-app.sh && scripts/e2e-check.sh` → Expected: 16・17 が FAIL（`dev record` / `dev import` が未実装）
-- [ ] **Step 2: Implement `DevRecord.swift` と `DevImport.swift`**
+```swift
+@Suite struct RecordingReportTests {
+    @Test func summarizesTracksAndEvents() throws { /* mic 2 分割（0..300, 300..310）と system 1 分割（0..310）を writer で作った manifest、statistics、events [.started(id), .sourceFailed(.system, message: "x")] → tracks[0] == (track "mic", files 2, seconds 310)、events == ["started", "sourceFailed(system)"]、status == manifest.status.rawValue */ }
+    @Test func jsonUsesSnakeCaseAndNullForSilence() throws { /* peakDBFS が −∞ の track → jsonLine() に "\"peak_dbfs\":null" と "\"meeting_id\":" と "\"mic_permission\":\"authorized\"" が含まれ、JSONSerialization で読める */ }
+}
+```
+- [ ] **Step 2: Run test to verify it fails** — Run: `swift test --filter RecordingReportTests` → Expected: FAIL（`RecordingReport` が未定義）
+- [ ] **Step 3: Implement `RecordingReport`、`DevRecord.swift`、`DevImport.swift`、`DevCommands` への登録**
 
-`dev record`: 先に `AVMicrophonePermission().status()` を見て `authorized` 以外なら exit 3（`AVAudioEngine` に触らない。要件書 §3.4）。`RecordingSession` を `LiveAudioSourceFactory(voiceProcessing:)` で作り、`start` → `Task.sleep(seconds)` → `stop` → `statistics()` と `events` から JSON を作る。SIGINT では `stop(reason: .manual)` してから終わる。`dev import`: `AudioImporter.importFile`。
-- [ ] **Step 3: E2E を全部回す** — Run: `scripts/build-app.sh && scripts/e2e-check.sh` → Expected: FAIL 0。16 はターミナルにマイク許可があれば PASS、無ければ SKIP。17 は PASS
-- [ ] **Step 4: Commit** — `git add Sources/autonote/ scripts/e2e-check.sh && git commit -m "feat: add dev record and dev import subcommands with e2e checks"`
-- [ ] **Step 5: 👤 利用者 — 実機での録音（BT 出力・ボイスプロセッシング・mp3）**
+`dev record`: 先に `AVMicrophonePermission().status()` を見て `authorized` 以外なら exit 3（`AVAudioEngine` に触らない。要件書 §3.4）。`events()` を購読してから `start` → `Task.sleep(seconds)` → `stop` → `RecordingReport.make`。SIGINT では `stop(reason: .manual)` してから終わる。`dev import`: `AudioImporter.importFile`。
+- [ ] **Step 4: Run test to verify it passes** — Run: `swift test --filter RecordingReportTests && swift build --product autonote && say -o /tmp/an.aiff "テストです" && afconvert -f m4af -d aac /tmp/an.aiff /tmp/an.m4a && .build/debug/autonote dev import /tmp/an.m4a --out /tmp/an-imp` → Expected: PASS、`dev import` が exit 0 で `seconds` が 0 より大きい JSON を出す
+- [ ] **Step 5: Commit** — `git add Sources/AutoNoteCore/Audio/RecordingReport.swift Sources/autonote/ Tests/AutoNoteCoreTests/Audio/RecordingReportTests.swift && git commit -m "feat: add dev record and dev import subcommands"`
 
-1. 内蔵スピーカー: `afplay` を 20 秒目から 10 秒だけ鳴らしながら `build/AutoNote.app/Contents/MacOS/autonote dev record --seconds 70 --out /tmp/an-rec` → mic と system の `seconds` が 70±0.5、`status` が `recorded`、system の WAV を聞いて音が 20〜30 秒の位置にある
+### Task 15: 👤 実機での録音確認（後回し可）
+
+Task 1 の観測が本体（リングバッファ・穴埋め・変換）でも成り立つことと、ボイスプロセッシング（スパイク項目 5）を確かめる。機材と利用者の手が要るので後回しにしてよい。後回しにした場合は Task 16 へ進み、報告に「Task 15 未実施」と書く。
+
+**Files:**
+- Modify: `docs/superpowers/research/2026-10-24-spike-results.md`（項目 3・5）、`docs/superpowers/specs/2026-10-24-autonote-design.md`（§5.6、§19 の項目 5）
+
+**Interfaces:**
+- Consumes: Task 14 の `autonote dev record` / `dev import`
+- Produces: なし（記録だけ）
+
+- [ ] **Step 1: 👤 利用者 — 内蔵スピーカーと BT 出力での穴埋め**
+
+1. 内蔵スピーカー: `afplay` を 20 秒目から 10 秒だけ鳴らしながら `.build/debug/autonote dev record --seconds 70 --out /tmp/an-rec` → mic と system の `seconds` が 70±0.5、`status` が `recorded`、system の WAV を聞いて音が 20〜30 秒の位置にある
 2. Shokz を出力にして 1 と同じ（Task 1 Step 7 の観測が本体でも穴埋めされることの確認）
-3. ボイスプロセッシング（スパイク項目 5 の手順を本体で）: 内蔵スピーカーで音楽を流し、`dev record --seconds 20 --voice-processing --out /tmp/an-vp` と `--voice-processing` なしを録る。記録: 起動直後に音楽の音量が下がるか（ダッキング）、system の `chunks` が 0 にならず同時に録れるか、mic の WAV で音楽の回り込みが減ったか
-4. 手元の mp3 を `autonote dev import <file>.mp3 --out /tmp/an-imp` → exit 0、WAV が 16000 Hz / 1 ch
 
 Expected: 記録した値。BT の UID が出たら下 3 オクテットを伏せる
-- [ ] **Step 6: 結果を記録して Commit**
+- [ ] **Step 2: 👤 利用者 — ボイスプロセッシングと mp3**
 
-結果表の項目 3 に 1・2 の結果、項目 5 に 3 の結果（`--vpio` のスパイクでなく本体の `--voice-processing` で測ったこと）を足す。要件書 §5.6 の「スパイク未実施のため仮」を結果で置き換え（既定オフは変えない。変える必要があると判断したら利用者に確認する）、§19 の項目 5 の状態を更新する。
+1. 内蔵スピーカーで音楽を流し、`dev record --seconds 20 --voice-processing --out /tmp/an-vp` と `--voice-processing` なしを録る。記録: 起動直後に音楽の音量が下がるか（ダッキング）、system の `chunks` が 0 にならず同時に録れるか、mic の WAV で音楽の回り込みが減ったか
+2. 手元の mp3 を `autonote dev import <file>.mp3 --out /tmp/an-imp` → exit 0、WAV が 16000 Hz / 1 ch
 
-Commit: `git add docs/superpowers/research/ docs/superpowers/specs/2026-10-24-autonote-design.md && git commit -m "docs: record on-device recording and voice processing checks"`
+Expected: 記録した値
+- [ ] **Step 3: 結果を記録する**
 
+結果表の項目 3 に Step 1 の結果、項目 5 に Step 2 の 1 の結果（スパイクの `--vpio` でなく本体の `--voice-processing` で測ったこと）を足す。要件書 §5.6 の「スパイク未実施のため仮」を結果で置き換え（既定オフは変えない。変える必要があると判断したら利用者に確認する）、§19 の項目 5 の状態を更新する。
+- [ ] **Step 4: Commit** — `git add docs/superpowers/research/ docs/superpowers/specs/2026-10-24-autonote-design.md && git commit -m "docs: record on-device recording and voice processing checks"`
+
+### Task 16: E2E 更新、全 PASS、コミット
+
+**Files:**
+- Modify: `scripts/e2e-check.sh`（`check_dev_record`、`check_dev_import` と `CHECKS` 配列）
+
+**Interfaces:**
+- Consumes: Task 14 の `autonote dev record` / `dev import`、計画 01 が足す `AUTONOTE_CLI`（`swift build` 済みの `autonote`。無ければ `.build/debug/autonote`）
+- Produces: E2E 項目 `CURRENT="02.1 dev record で 5 秒の WAV と manifest"` と `CURRENT="02.2 dev import で m4a / wav を 16k mono WAV に"`（overview §7 の名前の付け方）
+
+- [ ] **Step 1: E2E の確認項目を足す**
+
+`scripts/e2e-check.sh` に 2 関数を足し、`CHECKS` の計画 01 の項目の後に入れる。どちらも `AUTONOTE_CLI` が実行できなければ SKIP:
+- `check_dev_record`（02.1）: `"${AUTONOTE_CLI}" dev record --check-permission` の `mic_permission` が `authorized` でなければ SKIP（「マイク許可がない（責任プロセス: ターミナル）」）。`run_timeout 40 "${AUTONOTE_CLI}" dev record --seconds 5 --out "${WORK}/rec"` が exit 0、JSON の `status` が `tooShort`（`MeetingStatus.tooShort.rawValue`。5 秒は 1 分未満）、manifest ファイルがあり `plutil -extract status raw` が同じ、mic と system の `seconds` がともに 5.0±0.5（システム音はコールバックが無くても無音で埋まる）、`afinfo` で各 WAV が `16000 Hz`・`1 ch`・16 bit。PASS の説明に system の `chunks` を出す（0 は失敗にしない）
+- `check_dev_import`（02.2）: `say -o "${WORK}/s.aiff" "テストです"` → `afconvert -f m4af -d aac` と `afconvert -f WAVE -d LEI16@44100` で m4a と wav を作る → それぞれ `"${AUTONOTE_CLI}" dev import … --out "${WORK}/imp" --start 2026-10-20T10:00:00+09:00` が exit 0、manifest の `source` が `imported`、`device.name` が `import`、`tracks.0.relative_path` が `tracks/import-000.wav`、出力 WAV が `afinfo` で 16000 Hz / 1 ch。`say` が無ければ SKIP
+- [ ] **Step 2: E2E を全部回す** — Run: `scripts/build-app.sh && scripts/e2e-check.sh` → Expected: FAIL 0。02.1 はターミナルにマイク許可があれば PASS、無ければ SKIP。02.2 は PASS
+- [ ] **Step 3: Commit** — `git add scripts/e2e-check.sh && git commit -m "test: add e2e checks for dev record and dev import"`
