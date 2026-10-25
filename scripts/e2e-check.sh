@@ -315,6 +315,19 @@ check_device_probe() {
     pass "present ${present} 行、exit 0"
 }
 
+check_apple_speech_probe() {
+    CURRENT="15. Spikes の AppleSpeechProbe --engine transcriber が isAvailable を出す"
+    local bin=Spikes/.build/debug/AppleSpeechProbe
+    [[ -x "${bin}" ]] || { skip "${bin} が無い（swift build --package-path Spikes を先に）"; return; }
+    # 機材・許可は不要（SpeechTranscriber / DictationTranscriber の静的な問い合わせだけ）
+    if ! run_timeout 30 "${bin}" --engine transcriber --locale ja-JP; then fail "exit 0 で終わらない"; return; fi
+    local line
+    line="$(grep -m1 '^SpeechTranscriber.isAvailable: ' "${LAST_LOG}")"
+    [[ -n "${line}" ]] || { fail "isAvailable の行が無い"; return; }
+    grep -q '^DictationTranscriber.supportedLocales: ' "${LAST_LOG}" || { fail "DictationTranscriber.supportedLocales の行が無い"; return; }
+    pass "${line}、$(grep -m1 '^DictationTranscriber.supportedLocales: ' "${LAST_LOG}")"
+}
+
 # ---------------------------------------------------------------- 実行
 
 CHECKS=(
@@ -332,6 +345,7 @@ CHECKS=(
     check_fake_transcript
     check_claude_probe_files
     check_device_probe
+    check_apple_speech_probe
 )
 
 START=${SECONDS}
