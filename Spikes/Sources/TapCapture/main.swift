@@ -28,8 +28,11 @@
 //   - 許可ダイアログが未応答の間: 全 API が status 0 を返し、callbacks=0。AudioDeviceDestroyIOProcID が約 3 分ブロックした。
 //   - main.swift のトップレベルに書いたクロージャは @MainActor に推論され、IO スレッドで SIGILL（makeIOBlock 参照）。
 //   - TCC の責任プロセスは起動元アプリ（今回は Orca.app = com.stablyai.orca）。
-//   - 許可なし（Orca をオフ、tccd は authValue=0、coreaudiod は "Client is not granted access to the tap."）でも
-//     全 API が status 0 で、音声も届いた（rms=-31.74 dBFS）。拒否はエラーにも無音にもならなかった。
+//   - 許可なし時の挙動は本スパイクでは再現できなかった（未確定）:
+//     (a) Orca で許可をオフ → 同じ系統から実行: tccd は authValue=0、coreaudiod は "Client is not granted access to the tap."
+//         を出したが、全 API が status 0 で音声も届いた（rms=-31.74 dBFS）。
+//     (b) 許可状態が未確認の Terminal.app から実行: ダイアログなしで届いた（frames=235520, rms=-31.71 dBFS）。
+//     → 自己署名 .app 単体・再起動後に計画 02 の最初のタスクで再確認する。許可なしは API エラーで検知できない前提で設計する。
 //   ※ 許可なし時の挙動などは docs/superpowers/research/2026-10-24-spike-results.md 項目 3。
 
 import AVFoundation
