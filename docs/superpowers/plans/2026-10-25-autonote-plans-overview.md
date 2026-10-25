@@ -39,6 +39,8 @@ Sources/
     Transcription/  計画 04: LiveTranscriber / BatchTranscriber（protocol）, DictationLiveTranscriber, SpeechLiveTranscriber, WhisperBatchTranscriber, WhisperLiveTranscriber, ModelManager, EngineCatalog, LiveFeed
     Minutes/        計画 05: Summarizer（protocol）, ClaudeCodeSummarizer, PromptBuilder, PostProcessingQueue, JobStore, Retention
     IPC/            計画 06: SocketServer, SocketClient, Protocol（JSON 行）
+    Automations/    計画 06: AutomationsFile, AutomationRunner, AutomationsStage
+    Presentation/   計画 06: AppModel と表示規則（SwiftUI の View は AutoNoteApp 側）
   AutoNoteTestSupport/   計画 01 が作るライブラリターゲット。フェイクとフィクスチャ。Tests と `autonote` の開発用サブコマンドだけが依存する
   AutoNoteApp/           計画 06（それまでは計画 00 の骨組みのまま。各計画は App を触らない）
   autonote/              CLI。計画 01 以降、`autonote dev …` の開発用サブコマンドを足していく。利用者向けコマンドは計画 06
@@ -79,6 +81,13 @@ struct MinutesOutput: Codable, Equatable, Sendable   // scripts/minutes-schema.j
 
 録音器の状態（要件書 §5.9）は計画 03 の `enum RecorderState { idle, countdown, recording, paused, grace }`。`MeetingStatus` とは別物。
 
+計画 01 が決めた細部（2026-10-26 に各計画の草稿から取り込み）:
+- JSON の形: `MeetingID` は文字列 1 つ、`TimelineTime` は数値（秒）1 つ、`MeetingStatus` の raw value は snake_case（`minutes_generated` など）
+- 計画 01 が追加で定義する型: `AudioChunk(track:samples:start:hostTime:)`、`TrackTranscription`、`TranscriptFinalizer`（raw ＝ 結合と重複除去まで、final ＝ 置換とフィラー除去まで）、`SummaryInput`、`Job`、`StageContext`、`StageName`
+- 取り込んだ音声（§10）は 1 トラックで `Track.mic`、話者は `source == .imported` を見て `unknown` にする（計画 02・04・05 はこれに合わせる）
+- `Settings` の項目は計画 01 が**全計画分をまとめて**定義する（02: `voiceProcessing`、03: `countdownSeconds` `disconnectGraceSeconds` `startOnModelMatch` `defaultLanguage`、04: `liveEngine` `finalEngine` とモデル名、`fillerRemoval`、05: `claudePath` `claudeModel` `summarizerKind` `audioRetentionDays`（0 で削除しない）、06: `launchAtLogin`（既定 true）`shortcuts`（ブックマーク ⌃⌥B、開始/停止 ⌃⌥R、一時停止 ⌃⌥P）`consentNoticeShown` `outputFolder`）。各計画は自分の項目を Consumes に書き、01 の表と一致させる
+- 通知の種類 `UserNotice` / `UserNoticeAction` は計画 03 が**全計画分の case をまとめて**宣言し、計画 06 が `UNUserNotificationCenter` で実装する。通知に音は付けない（自アプリを tap から除外しても OS が鳴らす通知音は除外できないため。計画 02 の指摘）
+
 ## 4. 共有するプロトコル（定義する計画と、使う計画）
 
 ```swift
@@ -113,7 +122,7 @@ protocol QueueStage: Sendable {
 
 ## 5. 保存場所と設定
 
-- アプリのデータ領域: `~/Library/Application Support/AutoNote/`。テストでは `AppPaths(root:)` で差し替える。`recordings/<meeting-id>/manifest.json` と `tracks/*.wav`、`transcripts/<meeting-id>/{live,raw,final}.json`、`queue/jobs/*.json`、`settings.json`、`automations.json`、`logs/`、`portable-mirror/`（`_autonote/` の写し）、`autonote.sock`
+- アプリのデータ領域: `~/Library/Application Support/AutoNote/`。テストでは `AppPaths(root:)` で差し替え、開発・E2E では環境変数 `AUTONOTE_DATA_DIR` で差し替える（設定中は CLI がアプリを自動起動しない）。`recordings/<meeting-id>/manifest.json` と `tracks/*.wav`、`transcripts/<meeting-id>/{live,raw,final,minutes}.json`、`vault-state/<meeting-id>.json`（書き出した内容のハッシュ）、`queue/jobs/*.json`、`models/`（ggml モデル）、`settings.json`、`automations.json`、`logs/`、`portable-mirror/`（`_autonote/` の写し）、`autonote.sock`
 - `settings.json` は `struct Settings: Codable` 一つ。欠けたキーは既定値で埋める（`decodeIfPresent`）。読み書きは `actor SettingsStore`
 - 出力フォルダ（Vault）: `Settings.outputFolder`。中の `_autonote/` は `PortableConfigStore` が読み書きし、アプリ領域に写しを持つ（要件書 §9.5）
 - ログ: `os.Logger`（サブシステム `com.yutaokoshi.autonote`）＋ `logs/autonote.log` へのテキスト追記。文字起こし本文は書かない
@@ -129,6 +138,7 @@ protocol QueueStage: Sendable {
 ## 7. 開発用サブコマンドと E2E（利用者の指示: 実装したら自動で動作確認し、E2E に残す）
 
 - 各計画は `autonote dev <名前>` を足し、`scripts/e2e-check.sh` に項目を追加する。`dev` 配下は利用者向けではないので使い方には出さない
+- E2E の項目名は計画番号で付ける: `01.1 render-fixture` `02.1 dev record` のように「計画番号.連番 名前」。計画 00 の 1〜15b はそのまま。計画 04 が Spikes を消すとき 8・14・15・15b を外す（10 は `tools/whisper.cpp` の確認なので残す）
   - 01: `autonote dev render-fixture --out <dir>` フィクスチャから会議ファイルと `_index.md` を一時フォルダに書き、期待ファイルと比較
   - 02: `autonote dev record --seconds 5 --out <dir>` マイクとシステム音を 5 秒録って WAV と manifest を出す（E2E では許可があるときだけ、無ければ SKIP）
   - 03: `autonote dev devices` 接続中の入力デバイス一覧 JSON
@@ -144,7 +154,17 @@ protocol QueueStage: Sendable {
 - 03: `AudioDeviceID` は保存しない。一致は入力側 `DeviceUID` 完全一致。3.5mm は `BuiltInHeadphoneInputDevice` の追加・削除。項目 5・10（VPIO、組み直し）は未実施なので、該当機能は「仮の方式＋👤 実機確認タスク」で書く
 - 04: 発話の区切り（`finalize(through:)` / `.frequentFinalization` / 沈黙）を決めるタスクを置く。SpeechTranscriber は `isAvailable && !supportedLocales.isEmpty` で判定。Apple Silicon の確認は 👤 タスク（計画 00 Task 8 の内容を引き継ぐ。AppleSpeechProbe の transcriber live/file 経路を足してから）。whisper は `max-context 0` と繰り返し除去。Intel の既定: リアルタイム Dictation、確定版 large-v3-turbo、whisper リアルタイムなら small
 - 05: `claude -p` のコマンドラインは要件書 §8.1 を一字一句使う。`project` での長い会議の確認を最初の 👤 タスクに。成功判定は `structured_output`・`is_error`・`subtype`。分割閾値 200k は仮
-- 06: Bundle ID と証明書名の一本化（`scripts/config.sh`。計画 00 最終レビューの M4）
+- 06: Bundle ID と証明書名の一本化（`scripts/config.sh`。計画 00 最終レビューの M4）。辞書ファイルの外部編集の読み直し（§7.2）は 06 が担当
+
+## 8b. Lead の裁定（草稿の突き合わせで決めたこと。2026-10-26）
+
+- 猶予中の「取り消す」は出さない。要件書 §15.1 と §5.9 が矛盾しており §5.9 を採る。計画 06 の最初のタスクで要件書 §15.1 を「カウントダウン中のみ」に直す
+- `RecordingSession` の状態は計画 02 の `events()`（`AsyncStream<RecordingEvent>`）一本で公開する。計画 03・05・06 はこれを購読する。計画 05 の `RecordingActivity`（録音中かどうかの `AsyncStream<Bool>`。一時停止中・猶予中も「録音中」）は 05 側のアダプタで `events()` から作る
+- 確定版の組み立て（トラックごとの `BatchTranscriber` → `startOffset` 加算 → `TranscriptFinalizer` → `raw.json` / `final.json`）は計画 04 の `FinalTranscriptionRunner` が一括で行い、計画 05 の `TranscribeStage` はそれを呼ぶだけにする（05 が 01 の部品で組み直さない）
+- 分割 WAV の結合（計画 02 `SegmentMerger`）は一時停止の位置でファイルを分け、計画 04 の `TimelineMapper` が時刻の飛びを扱う。結合は停止時ではなく文字起こしの直前に 04 が行う
+- 片方の音源が開始に失敗したら残りで録音を続ける。マイク許可が無いときだけ録音を始めない（計画 02）
+- 計画 05 の Task 14 の任意 👤（Swift 実装から実の `claude` を 1 回呼ぶ）は残す。費用は 1 回分
+- 一時停止・ブックマークの印はリアルタイム表示では `Utterance`（話者 `.unknown`、`isMarker`）として流す（計画 04）。計画 06 はこれを表示する
 
 ## 9. Global Constraints（各計画の同名節にそのまま写す）
 
