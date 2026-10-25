@@ -6,6 +6,8 @@
 #   --verbose   各コマンドの出力をそのまま見せる（既定は FAIL のときだけ末尾 20 行）
 # 環境変数（FAIL 検出の確認用。副作用なしで期待値だけを変える）:
 #   E2E_EXPECT_VERSION   autonote --version の期待値（既定: Sources/AutoNoteCore/AutoNoteVersion.swift の値）
+#   E2E_MENUBAR_PROCESS  項目 7b で osascript が見るプロセス名（既定: AutoNoteApp）
+#   E2E_MENUBAR_INDEX    項目 7b で見る menu bar の番号（既定: 2 = ステータス項目のメニューバー）
 #
 # 各項目は PASS / FAIL / SKIP の 1 行を出す。最後に集計し、FAIL が 1 つでもあれば終了コード 1。
 # 機材・許可ダイアログ・ネットワーク・GUI に依存する項目は、条件がそろわなければ SKIP（失敗にしない）。
@@ -177,27 +179,32 @@ check_app_launch() {
         LAST_LOG="${WORK}/app.log"; fail "起動後 5 秒以内にプロセスが消えた"
         APP_PID=""; return
     fi
-    # メニューバー項目の名前を System Events で読む（アクセシビリティ権限が要る）
-    local names="" ok=0 n
+    # メニューバー項目の名前を System Events で読む（アクセシビリティ権限が要る）。
+    # 権限エラーのときだけ SKIP。それ以外の失敗（menu bar が無い、時間切れ等）と waveform が無いのは FAIL。
+    local proc="${E2E_MENUBAR_PROCESS:-AutoNoteApp}" idx="${E2E_MENUBAR_INDEX:-2}"
+    local names="" result="" n
     for n in 1 2 3 4 5; do
-        if run_timeout 10 osascript -e 'tell application "System Events" to tell process "AutoNoteApp" to get name of every menu bar item of menu bar 2'; then
-            names="$(cat "${LAST_LOG}")"; ok=1
-            [[ "${names}" == *waveform* ]] && break
+        if run_timeout 10 osascript -e "tell application \"System Events\" to tell process \"${proc}\" to get name of every menu bar item of menu bar ${idx}"; then
+            names="$(cat "${LAST_LOG}")"
+            if [[ "${names}" == *waveform* ]]; then result=pass; break; fi
+            result="no-waveform"
+        # -1719 は「インデックスが正しくない」（menu bar が無い）にも使われるので、コード単体では判定せず文言で見る
+        elif grep -Eqi 'assistive|補助アクセス|-25211|-1743|Not authorized to send Apple events' "${LAST_LOG}"; then
+            result=permission; break
         else
-            ok=0; break
+            result=error
         fi
-        sleep 1   # 起動直後はメニューバー項目がまだ無いことがある
+        sleep 1   # 起動直後はメニューバー項目がまだ無いことがあるので、権限エラー以外は再試行する
     done
     kill "${APP_PID}" 2>/dev/null; wait "${APP_PID}" 2>/dev/null; APP_PID=""
-    if [[ "${ok}" -ne 1 ]]; then
-        pass "生存確認のみ"
-        CURRENT="7b. メニューバー項目 waveform"
-        skip "osascript が失敗（ターミナルにアクセシビリティ権限が無い可能性）: $(tail -n 1 "${LAST_LOG}")"
-        return
-    fi
     pass "生存確認"
-    CURRENT="7b. メニューバー項目 waveform"
-    if [[ "${names}" == *waveform* ]]; then pass "「${names}」"; else LAST_LOG=""; fail "メニューバー項目「${names}」に waveform が無い"; fi
+    CURRENT="7b. メニューバー項目 waveform（process ${proc} / menu bar ${idx}）"
+    case "${result}" in
+        pass) pass "「${names}」" ;;
+        permission) skip "アクセシビリティ（または Apple Events）の権限が無い: $(tail -n 1 "${LAST_LOG}")" ;;
+        no-waveform) LAST_LOG=""; fail "メニューバー項目「${names}」に waveform が無い" ;;
+        *) fail "osascript が失敗（5 回試行）" ;;
+    esac
 }
 
 check_spikes_build() {
@@ -235,12 +242,15 @@ check_whisper() {
     [[ -f "${wav}" ]] || { skip "${wav} が無い（scripts/make-sample-audio.sh）"; return; }
     local out="${WORK}/whisper.txt"
     # stdout（文字起こし）だけを out に、ログは LAST_LOG に分ける
-    if ! run_timeout 30 sh -c '"$1" -m "$2" -l ja -t 4 -d 5000 -nt -np -f "$3" >"$4"' _ "${cli}" "${model}" "${wav}" "${out}"; then
-        fail "whisper-cli が失敗または時間切れ"; return
-    fi
+    local t0=${SECONDS} code
+    run_timeout 10 sh -c '"$1" -m "$2" -l ja -t 4 -d 5000 -nt -np -f "$3" >"$4"' _ "${cli}" "${model}" "${wav}" "${out}"
+    code=$?
+    if [[ ${code} -eq 124 ]]; then fail "10 秒以内に終わらない"; return; fi
+    if [[ ${code} -ne 0 ]]; then fail "whisper-cli が exit ${code}"; return; fi
+    local elapsed=$((SECONDS - t0))
     local text
     text="$(tr -d '[:space:]' <"${out}")"
-    if [[ -n "${text}" ]]; then pass "「$(head -c 60 <<<"${text}")」"; else fail "文字起こしが空"; fi
+    if [[ -n "${text}" ]]; then pass "${elapsed} 秒「$(head -c 60 <<<"${text}")」"; else fail "文字起こしが空"; fi
 }
 
 check_results_doc() {
