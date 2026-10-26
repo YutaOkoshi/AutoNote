@@ -311,4 +311,35 @@ import AutoNoteTestSupport
         let names = try FileManager.default.contentsOfDirectory(atPath: root.path).filter { $0.hasPrefix("devices.json.corrupt-") }
         #expect(names.count == 2)
     }
+
+    /// I1 / Y25: a register that overlaps a reload must neither see an empty interim list nor be lost.
+    @Test func registerDuringReloadKeepsExistingEntries() async throws {
+        let storage = InMemoryRegistryStorage()
+        let (seed, _) = makeRegistry(storage: storage)
+        let existing = try await seed.register(Self.bt)
+        let (registry, _) = makeRegistry(storage: storage)
+        await registry.reload()
+        await storage.holdLoads()
+        let reload = Task { await registry.reload() }
+        try await waitUntil { await storage.parkedLoadCount == 1 }
+        #expect(await registry.entries() == [existing])
+        let register = Task { try await registry.register(Self.jack) }
+        try await waitUntil { await registry.queuedOperations == 1 }
+        await storage.releaseLoads()
+        await reload.value
+        let added = try await register.value
+        #expect(await registry.entries() == [existing, added])
+        let saved = try AutoNoteJSON.decoder().decode(DeviceRegistryFile.self, from: try #require(await storage.data))
+        #expect(saved.devices == [existing, added])
+    }
+
+    private struct WaitTimedOut: Error {}
+
+    private func waitUntil(_ condition: () async -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while await !condition() {
+            guard ContinuousClock.now < deadline else { throw WaitTimedOut() }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+    }
 }

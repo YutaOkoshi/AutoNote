@@ -10,6 +10,11 @@ public actor InMemoryRegistryStorage: DeviceRegistryStorage {
     public var failLoad = false
     public var failSave = false
     public var failBackup = false
+    /// While true, `load()` parks until `releaseLoads()` (tests interleave a reload with other calls).
+    private var holdingLoads = false
+    private var parkedLoads: [CheckedContinuation<Void, Never>] = []
+    /// Loads currently parked by `holdLoads()`.
+    public var parkedLoadCount: Int { parkedLoads.count }
 
     public init(initial: Data? = nil) { data = initial }
 
@@ -17,7 +22,17 @@ public actor InMemoryRegistryStorage: DeviceRegistryStorage {
         failLoad = load; failSave = save; failBackup = backup
     }
 
+    public func holdLoads() { holdingLoads = true }
+
+    public func releaseLoads() {
+        holdingLoads = false
+        let parked = parkedLoads
+        parkedLoads = []
+        for continuation in parked { continuation.resume() }
+    }
+
     public func load() async throws -> Data? {
+        if holdingLoads { await withCheckedContinuation { parkedLoads.append($0) } }
         if failLoad { throw Failure() }
         return data
     }
