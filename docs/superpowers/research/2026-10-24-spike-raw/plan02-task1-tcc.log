@@ -1,0 +1,90 @@
+# 計画 02 Task 1 の TCC 確認（scripts/tcc-check.sh の出力。Bluetooth の UID は下 3 オクテットを伏せる）
+
+# ===== [2026-10-26 17:39:16] tcc-check.sh audio-persist 26.6.2 x86_64 =====
+
+## [2026-10-26 17:39:16] audio-persist: 初回（AudioCapture=none）
+### TCC.db (before)
+kTCCServiceMicrophone|com.yutaokoshi.autonote|2|2|2026-10-25 23:40:04
+AutoNoteApp quit
+Successfully reset AudioCapture approval status for com.yutaokoshi.autonote
+### TCC.db (after tccutil reset)
+kTCCServiceMicrophone|com.yutaokoshi.autonote|2|2|2026-10-25 23:40:04
+afplay loop started (Submarine.aiff)
+AutoNoteApp running (pid 26315 )
+
+## [2026-10-26 17:41:26] audio-persist: 1 回目（許可前）
+screen locked: Yes（ロック中は許可ダイアログが見えず、System Events の窓一覧も空になる）
+click 開発 > システム音声を確認（15 秒）: menu item システム音声を確認（15 秒） of menu 開発 of menu item 開発 of menu 1 of menu bar item waveform of menu bar 2 of application process AutoNoteApp
+### windows appeared after click (System Events)
+（なし）
+dev-checks.log: 'system end' が 90 秒以内に出なかった
+### dev-checks.log
+2026-10-26 17:41:36.513 system start seconds=15
+2026-10-26 17:41:36.613 system layout=tapOnly format sampleRate=48000.0 channels=2 bits=32 nonInterleaved=false
+2026-10-26 17:41:36.616 system layout=tapOnly output_uid=BuiltInSpeakerDevice
+2026-10-26 17:43:06.648 system layout=tapOnly AudioDeviceStart status=0
+show --start 2026-10-26 17:41:33 --style compact --predicate process == "tccd" OR process == "coreaudiod" OR process == "AutoNoteApp"
+### log show (tccd/coreaudiod/AutoNoteApp since 2026-10-26 17:41:33, filtered)
+show --start 2026-10-26 17:41:33 --style compact --predicate process == "tccd" OR process == "coreaudiod" OR process == "AutoNoteApp"
+dialog shown: unknown
+### TCC.db (after 1st check)
+kTCCServiceMicrophone|com.yutaokoshi.autonote|2|2|2026-10-25 23:40:04
+afplay loop stopped
+### 利用者待ち
+- 「システム オーディオ録音」の許可ダイアログで AutoNote を許可する（ダイアログが無ければ システム設定 > プライバシーとセキュリティ > 画面とシステムオーディオ録音 で AutoNote の「システムオーディオ録音のみ」をオン）。画面ロック中なら解除してから。
+- 許可したら AutoNote は終了せずに: scripts/tcc-check.sh audio-persist
+
+# ===== [2026-10-26 17:46:23] tcc-check.sh dictation 26.6.2 x86_64 =====
+
+## [2026-10-26 17:46:23] dictation: 音声認識の許可なしで DictationTranscriber
+screen locked: Yes（ロック中は許可ダイアログが見えず、System Events の窓一覧も空になる）
+### TCC.db (before)
+kTCCServiceMicrophone|com.yutaokoshi.autonote|2|2|2026-10-25 23:40:04
+Successfully reset SpeechRecognition approval status for com.yutaokoshi.autonote
+say -> /tmp/autonote-dictation.aiff (192984 bytes)
+click 開発 > Dictation を確認（/tmp/autonote-dictation.aiff）: menu item Dictation を確認（/tmp/autonote-dictation.aiff） of menu 開発 of menu item 開発 of menu 1 of menu bar item waveform of menu bar 2 of application process AutoNoteApp
+### windows appeared after click (System Events)
+（なし）
+### dev-checks.log
+2026-10-26 17:46:35.541 dictation start file=/tmp/autonote-dictation.aiff authorizationStatus=0（0=未決定 1=拒否 2=制限 3=許可）
+2026-10-26 17:46:35.649 dictation 資産の取得を開始
+2026-10-26 17:46:38.373 dictation ok locale=ja_JP elapsed_s=2.83 chars=21 authorizationStatus_after=0 text=本日の定例会議を始めます議題は3つあります
+### log show (tccd since 2026-10-26 17:46:32, filtered)
+2026-10-26 17:46:35.574 Df tccd[441:7cdec8] [com.apple.TCC:access] AUTHREQ_CTX: msgID=26315.4, function=<private>, service=kTCCServiceSpeechRecognition, preflight=yes, query=1, client_dict=(null), daemon_dict=<private>
+### TCC.db (after)
+kTCCServiceMicrophone|com.yutaokoshi.autonote|2|2|2026-10-25 23:40:04
+kTCCServiceSpeechRecognition row: none
+dialog shown: no
+
+## [2026-10-26 17:46:57] 補足: audio-persist 初回（17:39 の実行）の後半
+（初版の tcc-check.sh は自前の log 関数が /usr/bin/log を隠して log show が空振りし、'system end' 待ちも 90 秒で打ち切った。修正版の抽出条件で取り直したもの）
+### dev-checks.log（17:41:36〜17:45:26 の全行）
+2026-10-26 17:41:36.513 system start seconds=15
+2026-10-26 17:41:36.613 system layout=tapOnly format sampleRate=48000.0 channels=2 bits=32 nonInterleaved=false
+2026-10-26 17:41:36.616 system layout=tapOnly output_uid=BuiltInSpeakerDevice
+2026-10-26 17:43:06.648 system layout=tapOnly AudioDeviceStart status=0
+2026-10-26 17:43:31.654 system layout=tapOnly teardown timeout
+2026-10-26 17:43:31.656 system layout=tapOnly callbacks=0 frames=0 peak_dbfs=-inf per_second=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0] gaps=[]
+2026-10-26 17:43:31.657 system tapOnly callbacks=0 → withOutputClock で取り直す
+2026-10-26 17:43:31.665 system layout=withOutputClock format sampleRate=48000.0 channels=2 bits=32 nonInterleaved=false
+2026-10-26 17:43:31.667 system layout=withOutputClock output_uid=BuiltInSpeakerDevice
+2026-10-26 17:44:51.708 system teardown stop=0 destroyIOProc=0 destroyAggregate=0 destroyTap=0
+2026-10-26 17:45:01.718 system layout=withOutputClock AudioDeviceStart status=0
+2026-10-26 17:45:26.721 system layout=withOutputClock teardown timeout
+2026-10-26 17:45:26.722 system layout=withOutputClock callbacks=0 frames=0 peak_dbfs=-inf per_second=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0] gaps=[]
+2026-10-26 17:45:26.723 system end
+### log show (tccd/coreaudiod 17:41:33〜17:45:30, filtered)
+2026-10-26 17:41:36.608 Df tccd[441:7cbba6] [com.apple.TCC:access] AUTHREQ_CTX: msgID=232.496, function=<private>, service=kTCCServiceAudioCapture, preflight=yes, query=1, client_dict=(null), daemon_dict=<private>
+2026-10-26 17:41:36.667 Df coreaudiod[232:7cbd04] (CoreAudio)           HALS_Device.cpp:190    HALS_Device::Activate: activating device 2706: com.yutaokoshi.autonote.tap.93D7225E-A5EC-40EF-BD13-C161FA0A92AD Transport Type: <private> Clock Domain: 0
+2026-10-26 17:41:36.678 Df tccd[441:7cbc9f] [com.apple.TCC:access] AUTHREQ_CTX: msgID=232.497, function=<private>, service=kTCCServiceAudioCapture, preflight=no, query=1, client_dict=(null), daemon_dict=<private>
+2026-10-26 17:41:36.683 Df tccd[441:7cbc9f] [com.apple.TCC:access] AUTHREQ_PROMPTING: msgID=232.497, service=kTCCServiceAudioCapture, subject=Sub:{com.yutaokoshi.autonote}Resp:{TCCDProcess: identifier=com.yutaokoshi.autonote, pid=26315, auid=501, euid=501, binary_path=/Users/yuta.okoshi/orca/workspaces/AutoNote/monkfish/build/AutoNote.app/Contents/MacOS/AutoNoteApp},
+2026-10-26 17:43:31.721 Df coreaudiod[232:7cbd3b] (CoreAudio)           HALS_Device.cpp:190    HALS_Device::Activate: activating device 3163: com.yutaokoshi.autonote.tap.5B7F9B69-D3F6-48DA-88DF-2D48FF394FA1 Transport Type: <private> Clock Domain: 1228034925
+2026-10-26 17:44:51.744 Df coreaudiod[232:7cced0] (CoreAudio)           HALS_Device.cpp:273    HALS_Device::_Deactivate: deactivating device 2706: com.yutaokoshi.autonote.tap.93D7225E-A5EC-40EF-BD13-C161FA0A92AD
+dialog shown: yes（tccd AUTHREQ_PROMPTING 17:41:36.683。画面ロック中で、ダイアログは開いたまま利用者待ち）
+### TCC.db (17:46:58)
+kTCCServiceMicrophone|com.yutaokoshi.autonote|2|2|2026-10-25 23:40:04
+### 補足の続き（17:47 確認）
+2026-10-26 17:46:46.747 system teardown stop=0 destroyIOProc=0 destroyAggregate=0 destroyTap=0   ← withOutputClock の破棄。10 秒で打ち切った後、約 80 秒遅れて完了（tapOnly の破棄も 17:44:51 に同様に完了）
+tccd: プロンプトの要求 msgID=232.497（kTCCServiceAudioCapture, preflight=no）に AUTHREQ_RESULT / REPLY が出ていない → ダイアログは応答待ちのまま（17:47 時点）
+読み: 問い合わせが保留中の間、AudioDeviceStart が約 90 秒止まってから status 0 を返し、callbacks=0。破棄も約 90 秒止まる。
+      この 2 回の callbacks=0 は「許可が未決定」によるもので、tapOnly / withOutputClock の構成差の測定にはならない。

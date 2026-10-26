@@ -89,6 +89,7 @@
   - 用語辞書（contextual strings）は造語（AutoNote）には効かなかったので、造語の表記揺れは議事録生成側（Claude への用語指定）で直す前提にする
   - **権限: DictationTranscriber は音声認識の TCC 許可（`SFSpeechRecognizer.requestAuthorization`）なしで動く。SFSpeechRecognizer は起動元アプリの Info.plist に `NSSpeechRecognitionUsageDescription` が無いと TCC が SIGABRT で落とす**（ターミナル等から起動したときは、TCC が許可を確かめる「責任プロセス」である起動元アプリの Info.plist が見られる。実行ファイルに埋め込んでも効かない）。SF を予備に残すなら AutoNote.app の Info.plist にこのキーを足す
   - 根拠: DictationTranscriber は、音声認識の許可が未決定（`SFSpeechRecognizer.authorizationStatus` が 0）の状態で認識結果を返した。責任プロセスは起動元の Orca.app。許可ダイアログは SF を実行したときに初めて出た（[2026-10-24-spike-raw/task-6-raw-output.md](2026-10-24-spike-raw/task-6-raw-output.md)）
+  - **計画 02 Task 1 の再確認（2026-10-26、AutoNote.app 単体を `open` で起動、`scripts/tcc-check.sh dictation`）**: `tccutil reset SpeechRecognition com.yutaokoshi.autonote` の後、開発メニュー「Dictation を確認」で `say -v Kyoko` の合成音声（約 4 秒）を認識。`SFSpeechRecognizer.authorizationStatus` は前後とも 0（未決定）、tccd には preflight の問い合わせ（`AUTHREQ_CTX ... kTCCServiceSpeechRecognition, preflight=yes`）だけが出て `AUTHREQ_PROMPTING`（ダイアログ）は無し、TCC.db に `kTCCServiceSpeechRecognition` の行は作られなかった。本文「本日の定例会議を始めます議題は3つあります」（21 字、2.83 秒）。**AutoNote.app 単体でも DictationTranscriber は音声認識の許可なしで動く**。`Resources/Info.plist` に `NSSpeechRecognitionUsageDescription` は足さない（画面ロック中の測定だが、ダイアログの有無は tccd のログで判定した）。ログは [2026-10-24-spike-raw/plan02-task1-tcc.log](2026-10-24-spike-raw/plan02-task1-tcc.log)
   - §6.2 の SFSpeechRecognizer の「1 分制限」は「60 秒ごとに結果が区切られ、isFinal は最後の区間だけ」と書き換え、使うなら区間の連結が要ると明記する。DictationTranscriber と同じモデルと見られるので、予備としての価値は「macOS 26 未満でも動く」ことだけ（最低 OS は 26.0 なので実質なし）
 
 ## 項目 3: Intel 機で process tap から実際に音声データが届くこと（作成・破棄は確認済み）
@@ -106,6 +107,11 @@
     - つまりこの環境（未署名の CLI、責任プロセスが Orca.app）では拒否が受信を止めなかった。拒否が効かない理由は未特定（Orca を再起動していないことや、未署名バイナリであることが影響している可能性がある）。
   - Terminal.app から実行（利用者、Orca の許可をオンに戻した後）: 許可ダイアログは出ず、全 API が ok、callbacks=460、frames=235520（4.91 s）、rms=-31.71 dBFS。Terminal.app に以前から許可が付いていたかは未確認（TCC.db が読めなかった）。
   - 以上から、許可なし時の挙動（エラーになるか、無音になるか、届いてしまうか）は**未確定**。
+- 計画 02 Task 1 の再確認（2026-10-26、自己署名 AutoNote.app を `open` で起動、開発メニュー「システム音声を確認（15 秒）」、`scripts/tcc-check.sh audio-persist`。ログは [2026-10-24-spike-raw/plan02-task1-tcc.log](2026-10-24-spike-raw/plan02-task1-tcc.log)）:
+  - 許可が未決定（`tccutil reset AudioCapture` 後、TCC.db に行なし）・Submarine ループ中・内蔵スピーカー・画面ロック中: tccd が `AUTHREQ_PROMPTING ... kTCCServiceAudioCapture` を出した（**ダイアログ表示、応答待ち**。その要求に `AUTHREQ_RESULT` は出ていない）。応答待ちの間、**`AudioDeviceStart` が約 90 秒止まってから status 0 を返し**（スパイクでは開始は止まらず、止まったのは破棄だけだった）、`tapOnly` で callbacks=0 frames=0 peak_dbfs=-inf。破棄は 10 秒で打ち切り（`teardown timeout`）、約 80 秒後に全 status 0 で完了。callbacks=0 なので `withOutputClock` で取り直したが、同じく開始が約 90 秒止まり callbacks=0、破棄も打ち切り後に完了。**この callbacks=0 は許可が未決定なことによるもので、`tapOnly` / `withOutputClock` の構成差の測定にはならない**
+  - 許可ありで `tapOnly` が受信できるか（callbacks・frames・peak）: 未測定（利用者待ち: 許可ダイアログで AutoNote を許可 → `scripts/tcc-check.sh audio-persist`）
+  - 自己署名 `.app` 単体・再起動後の許可なしの挙動: 未測定（利用者待ち: システム設定で「システムオーディオ録音のみ」をオフ → 再起動 → `scripts/tcc-check.sh audio-denied`）
+  - BT 出力（Shokz）で無音時に IOProc が止まるか・`mSampleTime` が無音中も進むか: 未測定（利用者待ち: Shokz を接続して出力に選ぶ → `scripts/tcc-check.sh bt-silence`、内蔵スピーカーでもう 1 回）
 - 手順（`Spikes/Sources/TapCapture/main.swift` 冒頭コメントに同じ内容）:
   1. `CATapDescription(stereoGlobalTapButExcludeProcesses: [])`、`isPrivate = true`、`muteBehavior = .unmuted`
   2. `AudioHardwareCreateProcessTap(desc, &tapID)`、tap の UID は `desc.uuid.uuidString`
@@ -121,6 +127,7 @@
   - 許可なしは API エラーからも検知できない前提で設計する（status はすべて 0 だった）。「許可なし→無音になる」とも決めつけない。UI は「60 秒コールバックなし → 許可または音源を確認するよう案内」に留める。
   - 許可なし時の挙動は、計画 02 の最初のタスクで自己署名 `.app`（`AutoNote Dev`）単体、再起動後に再確認する。
   - 初回の許可ダイアログに応答していない間は、全 API が成功したまま何も届かず、停止時に `AudioDeviceDestroyIOProcID` が数分ブロックする。計画 02 では停止処理をメインスレッドで同期的に呼ばない。
+  - 計画 02 Task 1 で、応答待ちの間は `AudioDeviceStart` も約 90 秒止まることが分かった（`open` 起動の AutoNote.app）。開始もメインスレッドで同期的に呼ばない。
   - 録音ファイルの時間軸: 無音区間はコールバック自体が来ないので、受信フレームをそのまま連結するとマイク側とずれる。計画 02 で AudioTimeStamp（`mHostTime`/`mSampleTime`）による穴埋めが要る。
 
 ## 項目 4: 利用者が実際に使う機材を一つずつつなぎ、`DeviceUID` `ModelUID` `TransportType` 名前を記録する。Bluetooth は切断・再接続で UID が変わらないか、3.5mm は入力ソースの値がどう変わるかを見る
@@ -209,7 +216,7 @@
 
 ## 項目 9: 自己署名証明書で署名し直したビルドで、マイクとシステム音声の TCC 許可が保たれるか
 
-- 結論: **マイク許可は確認済み（2026-10-25 再測定）**。自己署名（`AutoNote Dev`、Bundle ID 固定）で `CFBundleVersion` を 2 → 3 にして再ビルドしても、`open` で起動した AutoNote.app のマイク許可は保たれた（許可ダイアログが出ず、TCC.db の行も更新されなかった）。システム音声録音（`NSAudioCaptureUsageDescription`）の許可の持続は未確認で、計画 02 の最初の TCC まとめ確認タスクで確かめる。
+- 結論: **マイク許可は確認済み（2026-10-25 再測定）**。自己署名（`AutoNote Dev`、Bundle ID 固定）で `CFBundleVersion` を 2 → 3 にして再ビルドしても、`open` で起動した AutoNote.app のマイク許可は保たれた（許可ダイアログが出ず、TCC.db の行も更新されなかった）。システム音声録音（`NSAudioCaptureUsageDescription`）の許可の持続は未測定（利用者待ち: 計画 02 Task 1 で許可ダイアログを出したところ。許可した後に `scripts/tcc-check.sh audio-persist` を回すと、2 回目の確認 → TCC.db → `CFBundleVersion` を上げて再ビルド → ダイアログが出ないか・`last_modified` が変わらないかまで自動で記録する）。
 - 測定値:
   - 署名（codesign の出力）: `Identifier=com.yutaokoshi.autonote` / `Authority=AutoNote Dev` / `TeamIdentifier=not set`。designated requirement は `identifier "com.yutaokoshi.autonote" and certificate leaf = H"c7f68fcb3afa065151260b113948ac6485837825"` で、cdhash などビルドごとに変わる値を含まない。
   - 再測定 1（利用者、2026-10-25）: `open build/AutoNote.app`（`CFBundleVersion` 2）→ メニュー「マイク許可を確認」→ 許可。TCC.db の行は `com.yutaokoshi.autonote|2|2|2026-10-25 23:40:04`（auth_value 2 = allowed、auth_reason 2 = user consent）。この時点まで AutoNote の行は存在しなかった（下の注意の裏付け）。

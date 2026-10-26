@@ -114,11 +114,11 @@ Rust + TypeScript（Tauri）案も検討したが、macOS 26 の音声認識 API
 - macOS のマイクとシステム音声録音の許可（TCC）はアプリの署名識別子に結び付く。アドホック署名のままビルドし直すと識別子が変わり、許可が外れて「録ったつもりで無音」になり得る
 - 対策として、キーチェーンに自己署名のコード署名証明書 `AutoNote Dev` を一度作り、ビルドのたびに同じ証明書と同じ Bundle ID（`com.yutaokoshi.autonote`）で署名する。ビルド手順（`scripts/make-dev-cert.sh`、`scripts/build-app.sh`）にこれを組み込む
   - マイクの許可が再ビルド後も保たれることは確認済み（スパイク項目 9、再測定）。designated requirement が識別子と証明書ハッシュだけで決まり、cdhash などビルドごとに変わる値を含まないため。`open` で起動した AutoNote.app で許可した後、`CFBundleVersion` を上げて再ビルドしても許可ダイアログが出ず、TCC.db の行も変わらなかった（最初の測定は実行ファイルの直接起動で Terminal.app の許可を見ていたので、`open` 起動と TCC.db の行で測り直した）
-  - システム音声録音の許可が再ビルド後も保たれるかは未確認。計画 02 の最初のタスクで確かめる
+  - システム音声録音の許可が再ビルド後も保たれるかは未測定（利用者待ち: 計画 02 Task 1 で許可ダイアログを出した。許可後に `scripts/tcc-check.sh audio-persist`。スパイク項目 9）
 - アプリは起動時と録音開始前に、マイクとシステム音声録音の許可状態を確かめ、足りなければ録音を始める前に設定アプリへの導線を出す
   - マイクは許可状態を照会できる。許可が未決定のまま `AVAudioEngine` を組むと、ダイアログへの応答待ちで十数分止まり、エラーも返らない（スパイク項目 10 の自己確認）。エンジンを組む前に許可を確かめる
-  - システム音声録音は事前照会の公開 API が見つかっていない。さらに process tap は、許可を拒否しても作成・開始・停止の全 API が成功を返し、本スパイクでは拒否時に無音になることも再現できなかった（拒否しても音が届いた。スパイク項目 3）。そこで、許可なしは API エラーから検知できない前提で設計し、第 5.7 節の「コールバックが来ない時間」で許可または音源の確認を案内するに留める。拒否時の挙動は計画 02 の最初のタスクで、自己署名 `.app` 単体・再起動後に再確認する
-  - 初回の許可ダイアログに応答していない間は、全 API が成功したまま何も届かず、停止時の `AudioDeviceDestroyIOProcID` が数分止まる（スパイク項目 3）。停止処理をメインスレッドで同期的に呼ばない
+  - システム音声録音は事前照会の公開 API が見つかっていない。さらに process tap は、許可を拒否しても作成・開始・停止の全 API が成功を返し、本スパイクでは拒否時に無音になることも再現できなかった（拒否しても音が届いた。スパイク項目 3）。そこで、許可なしは API エラーから検知できない前提で設計し、第 5.7 節の「コールバックが来ない時間」で許可または音源の確認を案内するに留める。自己署名 `.app` 単体・再起動後の拒否時の挙動は未測定（利用者待ち: 許可をオフにして再起動 → `scripts/tcc-check.sh audio-denied`。スパイク項目 3）
+  - 初回の許可ダイアログに応答していない間は、全 API が成功したまま何も届かず、停止時の `AudioDeviceDestroyIOProcID` が数分止まる（スパイク項目 3）。`open` 起動の AutoNote.app では `AudioDeviceStart` も約 90 秒止まってから成功を返し、破棄も約 90 秒止まった（計画 02 Task 1）。開始と停止をメインスレッドで同期的に呼ばない
 - 2 台目の Mac へは、リポジトリを clone して同じ手順でビルドする。公証は不要（自分でビルドしたアプリは Gatekeeper の対象外）
 
 ---
@@ -262,7 +262,7 @@ Claude Code の設定（`CLAUDE.md` など）に「会議の記録は `<Vault>/M
 - マイクとシステム音の二本を別々のセッションで同時に認識する
 - 結果は発話単位で「時刻・話者（自分 / 相手）・本文」として積み上げ、確定前の部分は薄い色で表示する
 - ウィンドウは自動で最下部に追従するが、利用者がスクロールして上を読んでいる間は追従を止め、「最新へ」ボタンを出す
-- DictationTranscriber は音声認識の TCC 許可（`SFSpeechRecognizer.requestAuthorization`）なしで動く（スパイク項目 2。起動元 Orca.app の音声認識許可が未決定の状態で確認。AutoNote.app 単体では計画 02 の最初の TCC まとめ確認タスクで、`open` 起動で再確認する）。SFSpeechRecognizer を候補から外したので、`NSSpeechRecognitionUsageDescription` は再確認で要ると分かった場合だけ足す
+- DictationTranscriber は音声認識の TCC 許可（`SFSpeechRecognizer.requestAuthorization`）なしで動く（スパイク項目 2。`open` で起動した AutoNote.app 単体でも、音声認識の許可が未決定のまま認識でき、許可ダイアログも TCC.db の行も出なかった。計画 02 Task 1）。SFSpeechRecognizer を候補から外したので、`NSSpeechRecognitionUsageDescription` は足さない
 - DictationTranscriber（`.progressiveLongDictation`）は約 70 秒の連続発話を確定 1 件にまとめ、それまで部分結果が伸び続けた（スパイク項目 2）。発話単位の区切りを沈黙での確定、`finalize(through:)`、`.frequentFinalization` のどれで作るかは計画 04 で決める
 - リアルタイムの出力は固有名詞・英単語の読み・数字が崩れ、句読点が付かない（スパイク項目 2）。目安表示と割り切り、議事録には確定版を使う
 
@@ -719,13 +719,13 @@ autonote: "0.1.0"
 
 1. Intel 機で `whisper-bench` を回し、base / small / medium / large-v3-turbo（量子化版を含む）の実時間比を測る — 済（結果表参照）。Apple Silicon 側は未（Apple Silicon 機）
 2. Intel 機で DictationTranscriber の日本語リアルタイム認識の遅延と精度を、whisper small と比べる — 済（結果表参照）
-3. Intel 機で process tap から実際に音声データが届くこと（作成・破棄は確認済み） — 済（結果表参照）。許可なし時の挙動は再現できず、計画 02 の最初のタスクで再確認
+3. Intel 機で process tap から実際に音声データが届くこと（作成・破棄は確認済み） — 済（結果表参照）。計画 02 Task 1 で、許可が未決定の間は開始が約 90 秒止まり callbacks=0 と確認。許可ありの `tapOnly` 受信、再起動後の許可なしの挙動、BT 出力の無音時の挙動は未測定（利用者待ち: `scripts/tcc-check.sh audio-persist` / `audio-denied` / `bt-silence`）
 4. 利用者が実際に使う機材を一つずつつなぎ、`DeviceUID` `ModelUID` `TransportType` 名前を記録する。Bluetooth は切断・再接続で UID が変わらないか、3.5mm は入力ソースの値がどう変わるかを見る — 済（結果表参照、付録 A）。USB は機材が無く未測定
 5. `AVAudioEngine` のボイスプロセッシングを有効にしたまま process tap と同時に録音できるか、エコー除去が効くか — 後回し（結果表に再開手順）
 6. `claude -p --output-format json --json-schema` に 1 時間分の文字起こしを流し、`structured_output` が期待どおり返ること — 済（結果表参照）
 7. Apple Silicon 機で SpeechTranscriber の日本語が使えること（`supportedLocales`） — 未（Apple Silicon 機）
 8. whisper.cpp の公式 XCFramework に x86_64 スライスが含まれるか — 済（結果表参照）
-9. 自己署名証明書で署名し直したビルドで、マイクとシステム音声の TCC 許可が保たれるか — 済（結果表参照、再測定）。マイクのみ。システム音声の許可の持続は計画 02 の最初の TCC まとめ確認タスクで確認
+9. 自己署名証明書で署名し直したビルドで、マイクとシステム音声の TCC 許可が保たれるか — 済（結果表参照、再測定）。マイクのみ。システム音声の許可の持続は未測定（利用者待ち: 計画 02 Task 1 で出した許可ダイアログへの応答 → `scripts/tcc-check.sh audio-persist`）
 10. 録音中にマイク機材を抜き、戻したときに `AVAudioEngine` を組み直して同じ録音を続けられるか（第 11.5 節） — 後回し（結果表に再開手順）
 11. `claude -p` で会話履歴を残さない方法（オプションの有無）と、`--strict-mcp-config` で MCP が読み込まれないこと — 済（結果表参照）
 12. SpeechTranscriber に contextual strings 相当の機能があるか — Intel 側は済（結果表参照）。効きの確認は未（Apple Silicon 機）
