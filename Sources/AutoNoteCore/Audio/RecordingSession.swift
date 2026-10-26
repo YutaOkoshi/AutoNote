@@ -18,6 +18,12 @@ public actor RecordingSession {
     }
 
     public static let minimumDurationSeconds: Double = 60
+    /// Below this much free space on the recordings volume, `.diskSpaceLow` is sent (once per meeting).
+    public static let diskWarningBytes: Int64 = 1_000_000_000
+    /// Below this, a meeting does not start and a running one stops with `.diskFull` (the audio so far is kept).
+    public static let diskStopBytes: Int64 = 500_000_000
+    /// Disk checks happen at most this often on the meeting timeline.
+    public static let diskCheckEverySeconds: Double = 10
 
     private static let logger = Logger(subsystem: "com.yutaokoshi.autonote", category: "RecordingSession")
 
@@ -41,6 +47,9 @@ public actor RecordingSession {
     var writers = TrackWriters()
     var monitor: SilenceMonitor?
     private var silenceWarning = false
+    private var lastDiskCheck: TimelineTime?
+    private var diskLowReported = false
+    private var diskStopRequested = false
     var stats: [Track: TrackStatistics] = [:]
     private var micSource: (any AudioSource)?
     private var systemSource: (any AudioSource)?
@@ -114,12 +123,14 @@ public actor RecordingSession {
             await waitUntilIdle()                       // chunks that arrived before the pause are still written
             state = .paused(id)
             let (changes, failures) = writers.transition { try $0.close(at: at) }
+            await reportWriterFailures(failures)        // before the save, so a save failure cannot skip the report
             try await persist { $0.pauses.append(PauseInterval(start: at)); $0.apply(changes) }
             broadcaster.yield(.paused(at))
-            await reportWriterFailures(failures)
         }
     }
 
+    /// May throw after the session is already back in `.recording`, continuing with the tracks that reopened
+    /// (a track whose new segment could not be created is reported with `.sourceFailed` and stays silent).
     public func resume() async throws {
         try await serialized {
             let (id, clock) = try active()
@@ -127,13 +138,14 @@ public actor RecordingSession {
             let at = clock.now()
             let (changes, failures) = writers.transition(skippingFailed: true) { try $0.open(at: at) }
             state = .recording(id)
+            // Reported before the save, so a save failure cannot skip it.
+            await reportWriterFailures(failures)
             try await persist { m in
                 if let i = m.pauses.lastIndex(where: { $0.end == nil }) { m.pauses[i].end = at }
                 m.apply(changes)
             }
             broadcaster.yield(.resumed(at))
             // The recording goes on with the tracks that opened; the caller still learns that resume was incomplete.
-            await reportWriterFailures(failures)
             if let (_, error) = failures.first { throw error }
         }
     }
@@ -190,19 +202,50 @@ public actor RecordingSession {
 
     // MARK: - Test hooks
 
-    /// Periodic work while recording (silence warnings; Task 11 adds disk checks).
+    /// Periodic work while recording: silence warnings and, every `diskCheckEverySeconds` of meeting time, free space.
     ///
     /// Rule: `tick()` never calls `stop` inline (it runs inside the ticker task, which `stop` cancels). When a tick must
-    /// end the recording it spawns `Task { try? await self.stop(reason: …) }` and returns.
+    /// end the recording it spawns a `Task` that stops this meeting (`stop(meeting:reason:)`) and returns.
+    /// Everything up to the first `await` runs in one actor turn, so a `stop` that has already begun (it clears
+    /// `monitor`) is never followed by a tick's events or saves.
     func tick() async {
         guard state != .idle, var monitor else { return }
+        let now = elapsed()
         let paused = if case .paused = state { true } else { false }
-        let warnings = monitor.tick(now: elapsed(), paused: paused)
+        let warnings = monitor.tick(now: now, paused: paused)
         self.monitor = monitor
         for warning in warnings { broadcaster.yield(.silenceWarning(warning)) }
+        checkDiskSpace(at: now)
         if !warnings.isEmpty, !silenceWarning {
             silenceWarning = true
             do { try await persist { $0.silenceWarning = true } } catch { Self.log("silence flag save", error) }
+        }
+    }
+
+    private func checkDiskSpace(at now: TimelineTime) {
+        guard !diskStopRequested else { return }
+        if let last = lastDiskCheck, now.seconds - last.seconds < Self.diskCheckEverySeconds { return }
+        lastDiskCheck = now
+        let available: Int64
+        do { available = try disk.availableBytes(for: paths.recordingsDirectory) } catch {
+            Self.log("disk space check", error)
+            return
+        }
+        if available < Self.diskWarningBytes, !diskLowReported {
+            diskLowReported = true
+            broadcaster.yield(.diskSpaceLow(availableBytes: available))
+        }
+        if available < Self.diskStopBytes, let id = meetingID {
+            diskStopRequested = true
+            Task { await self.stop(meeting: id, reason: .diskFull) }
+        }
+    }
+
+    /// `stop` for a stop requested by `tick()`: it waits its turn at the gate, so it must not end a later meeting.
+    private func stop(meeting id: MeetingID, reason: StopReason) async {
+        _ = try? await serialized { () -> Manifest? in
+            guard meetingID == id else { return nil }
+            return try await performStop(reason: reason)
         }
     }
 
@@ -210,6 +253,14 @@ public actor RecordingSession {
 
     private func performStart(_ configuration: Configuration) async throws -> MeetingID {
         guard state == .idle else { throw RecordingError.alreadyRecording }
+        do {
+            let available = try disk.availableBytes(for: paths.recordingsDirectory)
+            if available < Self.diskStopBytes { throw RecordingError.insufficientDiskSpace(availableBytes: available) }
+        } catch let error as RecordingError {
+            throw error
+        } catch {
+            Self.log("disk space check at start", error)   // unknown free space does not block a recording
+        }
         let startedAt = now()
         let id = MeetingID.make(start: startedAt, timeZone: timeZone)
         let clock = MeetingClock(origin: host.hostTime(), host: host)
@@ -223,6 +274,7 @@ public actor RecordingSession {
         meetingID = id; self.clock = clock; self.startedAt = startedAt
         saver = ManifestSaver(store: manifests, initial: initial)
         monitor = SilenceMonitor(start: .zero); silenceWarning = false
+        lastDiskCheck = nil; diskLowReported = false; diskStopRequested = false
         stats = [.mic: TrackStatistics(), .system: TrackStatistics()]
         writers = TrackWriters(meetingDirectory: paths.meetingDirectory(id))
         do {
@@ -291,6 +343,7 @@ public actor RecordingSession {
             for source in running { group.addTask { await source.stop() } }
         }
         ticker?.cancel()   // not awaited: a tick in flight re-checks the meeting after its awaits (see `tick()`)
+        monitor = nil      // a tick landing during the final save must not queue `silenceWarning = true` after it
         await drainPipeline()
 
         let (changes, failures) = writers.transition { try $0.close(at: end) }
