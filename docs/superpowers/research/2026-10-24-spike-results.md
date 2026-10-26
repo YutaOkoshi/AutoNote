@@ -62,6 +62,7 @@
 - 要件書への影響（§6.2 の起動時の既定、Intel 列）:
   - 確定版: 「whisper.cpp medium（ベンチ次第で large-v3-turbo）」→ **whisper.cpp large-v3-turbo**（medium より速く、CER も低い）
   - リアルタイム: **DictationTranscriber のまま**（比較は項目 2）。whisper.cpp をリアルタイムに選ぶ場合の既定モデルは、会議アプリが動いている状態で RTF < 0.8 に収まる **small**（large-v3-turbo は無負荷なら収まるが負荷ありで 0.85 になり余裕が無い）。なお今回の RTF は 5 beams のバッチ処理の値で、ストリーミング（greedy・短いチャンク）では別に測る必要がある
+- ヒントの渡し方（計画 04 Task 5 Step 1）: whisper.cpp に `carry_initial_prompt` があるので、`no_context = true`・`carry_initial_prompt = true`・`n_max_text_ctx` は既定のまま（過去の文字起こしは渡さず、ヒントだけ毎回の窓に渡す）
 
 ## 項目 2: Intel 機で DictationTranscriber の日本語リアルタイム認識の遅延と精度を、whisper small と比べる
 
