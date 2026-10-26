@@ -12,8 +12,9 @@ enum DevCommands {
         case "render-fixture": return await renderFixture(rest)
         case "record": return await DevRecord.run(rest)
         case "import": return await DevImport.run(rest)
+        case "auto-record": return await DevAutoRecord.run(rest)
         default:
-            return usageError([renderFixtureUsage, DevRecord.usage, DevImport.usage].joined(separator: "\n"))
+            return usageError([renderFixtureUsage, DevRecord.usage, DevImport.usage, DevAutoRecord.usage].joined(separator: "\n"))
         }
     }
 
