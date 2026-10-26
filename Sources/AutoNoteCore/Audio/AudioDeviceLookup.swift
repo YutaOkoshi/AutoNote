@@ -39,14 +39,7 @@ public struct CoreAudioDeviceLookup: AudioDeviceLookup {
     }
 
     static func transport(_ type: UInt32?) -> String {
-        switch type {
-        case kAudioDeviceTransportTypeBuiltIn: "builtin"
-        case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE: "bluetooth"
-        case kAudioDeviceTransportTypeUSB: "usb"
-        case kAudioDeviceTransportTypeAggregate: "aggregate"
-        case kAudioDeviceTransportTypeVirtual: "virtual"
-        default: "unknown"
-        }
+        CoreAudioHardware.transport(coreAudio: type).rawValue
     }
 
     private static func address(_ selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
