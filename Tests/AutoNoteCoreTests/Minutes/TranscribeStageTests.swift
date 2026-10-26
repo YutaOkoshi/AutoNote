@@ -112,6 +112,28 @@ import Testing
         #expect(final.engine == label)
     }
 
+    @Test func cancelledJobNeverTakesLiveFallback() async throws {
+        let f = try await setUp()
+        try writeLive(f, [u(1, .me, "はじめます")])
+        // No tracks: the runner throws TranscriptionError.noTracks (not CancellationError) before any
+        // cancellation check, like a killed whisper process mapped to trackFailed.
+        var manifest = f.manifest
+        manifest.tracks = []
+        try await f.manifests.save(manifest)
+        let stage = stage(FakeBatchTranscriber(results: [:]), f)
+        let ctx = context(f)
+        let job = job(f)
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            var j = job
+            try await stage.run(&j, context: ctx)
+            return j
+        }
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(try await f.manifests.load(f.manifest.id).status != .transcribed)
+        #expect(!FileManager.default.fileExists(atPath: f.paths.transcriptFile(f.manifest.id, .final).path))
+    }
+
     @Test func failsWithoutLiveTranscript() async throws {
         let f = try await setUp()
         let fake = FakeBatchTranscriber(results: [:], failure: FakeError(message: "x"))

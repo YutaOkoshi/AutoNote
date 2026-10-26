@@ -28,6 +28,8 @@ public struct TranscribeStage: QueueStage {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
+            // A cancelled run can fail with another error (e.g. a killed whisper process); never fall back then.
+            try Task.checkCancellation()
             let failure = String(describing: type(of: error))
             guard let live = readLive(id, context.paths), !live.utterances.isEmpty else {
                 Self.logger.error("\(id.rawValue, privacy: .public): final transcription failed (\(failure, privacy: .public)), no live transcript")
