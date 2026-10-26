@@ -95,7 +95,10 @@ enum DevRecord {
             defer { source.cancel() }
 
             _ = try await session.start(.init(language: .ja, microphoneUID: micUID))
-            let sleeper = Task<Void, Never> { _ = try? await Task.sleep(for: .seconds(seconds)) }
+            // The meeting timeline starts before the sources do (starting them takes ~0.7 s on real hardware) and the
+            // tracks span the whole timeline, so wait until the timeline reaches `seconds`, not `seconds` after start.
+            let remaining = max(0, seconds - (await session.elapsed()).seconds)
+            let sleeper = Task<Void, Never> { _ = try? await Task.sleep(for: .seconds(remaining)) }
             waiter.withLock { $0 = sleeper }
             if interrupted.withLock({ $0 }) { sleeper.cancel() }
             await sleeper.value
