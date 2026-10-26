@@ -23,12 +23,13 @@ public enum HintBudget {
         return total
     }
 
-    /// Takes terms from the front while they fit (each costs its tokens plus 1 for the ", " separator);
-    /// stops at the first term that overflows, even if later ones are smaller.
-    public static func fit(_ terms: [String], limit: Int = whisperLimit) -> (included: [String], dropped: [String]) {
+    /// Takes terms from the front while they fit. The cost of n terms is the sum of their tokens plus
+    /// (n − 1) × `estimateTokens(separator)`; stops at the first term that overflows, even if later ones are smaller.
+    public static func fit(_ terms: [String], limit: Int = whisperLimit, separator: String = ", ") -> (included: [String], dropped: [String]) {
+        let separatorCost = estimateTokens(separator)
         var used = 0, count = 0
         for term in terms {
-            let cost = estimateTokens(term) + 1
+            let cost = estimateTokens(term) + (count == 0 ? 0 : separatorCost)
             if used + cost > limit { break }
             used += cost; count += 1
         }
