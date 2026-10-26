@@ -1,11 +1,11 @@
 import Foundation
 @preconcurrency import AVFoundation
 
-/// Single-use input supplier for one AVAudioConverter pull; the block runs synchronously.
+/// Reusable input supplier for one AVAudioConverter pull; the block runs synchronously on the caller's thread.
 private final class InputFeed: @unchecked Sendable {
     private var buffer: AVAudioPCMBuffer?
-    private let isFlush: Bool
-    init(_ buffer: AVAudioPCMBuffer?) { self.buffer = buffer; isFlush = buffer == nil }
+    private var isFlush = false
+    func arm(_ buffer: AVAudioPCMBuffer?) { self.buffer = buffer; isFlush = buffer == nil }
     func next(_ status: UnsafeMutablePointer<AVAudioConverterInputStatus>) -> AVAudioBuffer? {
         if let b = buffer { buffer = nil; status.pointee = .haveData; return b }
         status.pointee = isFlush ? .endOfStream : .noDataNow
@@ -38,6 +38,10 @@ public struct SampleConverter {
     private let inputFormat: AVAudioFormat
     private let outputFormat: AVAudioFormat
     private var mono: [Float] = []
+    private var inBuf: AVAudioPCMBuffer?
+    private var outBuf: AVAudioPCMBuffer?
+    private let feed = InputFeed()
+    private static let initialInputFrames = 48_000
 
     public init(inputSampleRate: Double, inputChannels: Int) throws {
         guard inputChannels > 0, inputSampleRate > 0, inputSampleRate.isFinite,
@@ -56,6 +60,8 @@ public struct SampleConverter {
             }
             conv.sampleRateConverterQuality = AVAudioQuality.high.rawValue
             converter = conv
+            inBuf = AVAudioPCMBuffer(pcmFormat: inFmt, frameCapacity: AVAudioFrameCount(max(Self.initialInputFrames, Int(inputSampleRate))))
+            outBuf = AVAudioPCMBuffer(pcmFormat: outFmt, frameCapacity: Self.outputCapacity(forInputFrames: max(Self.initialInputFrames, Int(inputSampleRate)), inputRate: inputSampleRate))
         }
     }
 
@@ -74,18 +80,23 @@ public struct SampleConverter {
             }
         }
         guard let converter else { return Self.toInt16(mono) }
-        guard let inBuf = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: AVAudioFrameCount(frames)) else { return [] }
+        if inBuf == nil || Int(inBuf!.frameCapacity) < frames {   // grow once for a larger chunk
+            inBuf = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: AVAudioFrameCount(frames))
+            outBuf = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: Self.outputCapacity(forInputFrames: frames, inputRate: inputRate))
+        }
+        guard let inBuf, let outBuf else { return [] }
         inBuf.frameLength = AVAudioFrameCount(frames)
         mono.withUnsafeBufferPointer { src in
             inBuf.floatChannelData![0].update(from: src.baseAddress!, count: frames)
         }
-        return run(converter, input: inBuf, expectedFrames: frames)
+        return run(converter, input: inBuf, output: outBuf)
     }
 
     /// Drains the resampler's tail, then resets it so the converter can be reused.
     public mutating func flush() -> [Int16] {
         guard let converter else { return [] }
-        let out = run(converter, input: nil, expectedFrames: 0)
+        guard let outBuf else { return [] }
+        let out = run(converter, input: nil, output: outBuf)
         converter.reset()
         return out
     }
@@ -95,10 +106,14 @@ public struct SampleConverter {
         mono.removeAll(keepingCapacity: true)
     }
 
-    private func run(_ converter: AVAudioConverter, input: AVAudioPCMBuffer?, expectedFrames: Int) -> [Int16] {
-        let capacity = AVAudioFrameCount(Double(expectedFrames) * Self.outputRate / inputRate) + 4096
-        guard let outBuf = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else { return [] }
-        let feed = InputFeed(input)
+    private static func outputCapacity(forInputFrames n: Int, inputRate: Double) -> AVAudioFrameCount {
+        AVAudioFrameCount(Double(n) * outputRate / inputRate) + 4096
+    }
+
+    private func run(_ converter: AVAudioConverter, input: AVAudioPCMBuffer?, output outBuf: AVAudioPCMBuffer) -> [Int16] {
+        let capacity = outBuf.frameCapacity
+        let feed = self.feed
+        feed.arm(input)
         var result: [Int16] = []
         while true {
             outBuf.frameLength = 0
@@ -118,6 +133,6 @@ public struct SampleConverter {
     }
 
     private static func toInt16<S: Sequence>(_ x: S) -> [Int16] where S.Element == Float {
-        x.map { Int16((max(-1, min(1, $0)) * 32767).rounded()) }
+        x.map { $0.isFinite ? Int16((max(-1, min(1, $0)) * 32767).rounded()) : 0 }
     }
 }

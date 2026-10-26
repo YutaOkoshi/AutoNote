@@ -48,6 +48,30 @@ private func zeroCrossings(_ x: [Int16]) -> Int {
         #expect(abs(out.count - 32_000) <= 64)
     }
 
+    @Test func clipsThroughResamplerPath() throws {
+        var c = try SampleConverter(inputSampleRate: 48_000, inputChannels: 1)
+        let src = AudioFixtures.sine(frequency: 300, amplitude: 1.5, seconds: 1, sampleRate: 48_000, channels: 1)
+        let out = c.convert(src) + c.flush()
+        #expect(out.max() == 32_767)
+        #expect((out.min() ?? 0) <= -32_000)
+        #expect(abs(zeroCrossings(out) - 600) <= 6)
+    }
+
+    @Test func reuseAfterFlush() throws {
+        var c = try SampleConverter(inputSampleRate: 48_000, inputChannels: 1)
+        let src = AudioFixtures.sine(frequency: 1000, amplitude: 0.5, seconds: 1, sampleRate: 48_000, channels: 1)
+        for _ in 0..<2 {
+            let out = c.convert(src) + c.flush()
+            #expect(abs(out.count - 16_000) <= 32)
+            #expect(abs(AudioLevel.peakDBFS(out) - (-6.02)) < 0.5)
+        }
+    }
+
+    @Test func nonFiniteSamplesBecomeZero() throws {
+        var c = try SampleConverter(inputSampleRate: 16_000, inputChannels: 1)
+        #expect(c.convert([.nan, .infinity, -.infinity, 0.5]) == [0, 0, 0, 16_384])
+    }
+
     @Test func resetClearsState() throws {
         var c = try SampleConverter(inputSampleRate: 48_000, inputChannels: 1)
         let src = AudioFixtures.sine(frequency: 1000, amplitude: 0.5, seconds: 0.5, sampleRate: 48_000, channels: 1)
