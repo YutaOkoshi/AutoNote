@@ -102,6 +102,25 @@ import AutoNoteTestSupport
         #expect(r.status == .recorded)
     }
 
+    @Test func dropsFileWithCorruptHeader() async throws {
+        let env = try makeEnv()
+        var m = manifest("iiii")
+        let dir = env.paths.meetingDirectory(m.id)
+        var w = WAVSegmentWriter(track: .mic, meetingDirectory: dir)
+        _ = try w.open(at: .init(seconds: 0)); _ = try w.write(AudioFixtures.tone(start: 0, seconds: 70))
+        _ = try w.close(at: .init(seconds: 70))
+        try Data(repeating: 0xAB, count: 100).write(to: dir.appending(path: "tracks/mic-001.wav"))
+        m.tracks = [
+            TrackFile(track: .mic, relativePath: "tracks/mic-000.wav", startOffset: .init(seconds: 0)),
+            TrackFile(track: .mic, relativePath: "tracks/mic-001.wav", startOffset: .init(seconds: 70)),
+        ]
+        try await env.store.save(m)
+        let r = try await env.recovery.recover(m.id)
+        #expect(r.tracks.map(\.relativePath) == ["tracks/mic-000.wav"])
+        #expect(r.tracks[0].durationSeconds == 70)
+        #expect(r.status == .recorded)
+    }
+
     @Test func closesOpenPause() async throws {
         let env = try makeEnv()
         var m = manifest("ffff", pauses: [PauseInterval(start: .init(seconds: 30))])

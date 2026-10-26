@@ -1,9 +1,11 @@
 import Foundation
+import os
 
 /// Finds recordings left in `.recording` by a crash, repairs their WAV headers and manifest, or discards them.
 public struct CrashRecovery: Sendable {
     private let paths: AppPaths
     private let manifests: ManifestStore
+    private static let logger = Logger(subsystem: "com.yutaokoshi.autonote", category: "CrashRecovery")
 
     public init(paths: AppPaths, manifests: ManifestStore) {
         self.paths = paths
@@ -22,8 +24,15 @@ public struct CrashRecovery: Sendable {
         var survivors: [TrackFile] = []
         for var file in manifest.tracks {
             let url = directory.appending(path: file.relativePath)
-            guard FileManager.default.fileExists(atPath: url.path),
-                  let info = try WAVFile.repairHeader(url), info.dataBytes > 0 else { continue }
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            let repaired: WAVInfo?
+            do {
+                repaired = try WAVFile.repairHeader(url)
+            } catch is WAVFileError {
+                Self.logger.error("dropping track file with corrupt header: \(file.relativePath, privacy: .public)")
+                continue
+            }
+            guard let info = repaired, info.dataBytes > 0 else { continue }
             file.durationSeconds = info.durationSeconds
             survivors.append(file)
         }
