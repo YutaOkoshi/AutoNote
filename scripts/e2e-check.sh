@@ -459,8 +459,9 @@ check_dev_devices() {
     [[ "${lines}" -ge 1 ]] || { fail "出力が空"; return; }
     if ! python3 -I -c 'import json,sys
 rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
-assert rows and all("device_uid" in r for r in rows)' "${LAST_LOG}" 2>/dev/null; then
-        fail "JSON として読めない、または device_uid が無い行がある"; return
+keys={"name","device_uid","model_uid","transport","input_channels","uid_kind","candidate"}
+assert rows and all(set(r)==keys for r in rows)' "${LAST_LOG}" 2>/dev/null; then
+        fail "JSON として読めない、またはキー集合が違う行がある"; return
     fi
     pass "${lines} 行"
 }
@@ -487,6 +488,7 @@ check_dev_devices_watch() {
     if ! python3 -I -c 'import json,sys; [json.loads(l) for l in open(sys.argv[1]) if l.strip()]' "${LAST_LOG}" 2>/dev/null; then
         fail "JSON として読めない行がある"; return
     fi
+    if grep '"event":"present"' "${LAST_LOG}" | grep -q '"at"'; then fail "present の行に at がある"; return; fi
     if [[ ${code} -ne 0 ]]; then fail "SIGINT 後の終了コードが ${code}（期待 0）"; return; fi
     pass "present ${present} 行、exit 0"
 }
@@ -494,9 +496,12 @@ check_dev_devices_watch() {
 check_dev_auto_record_quit() {
     CURRENT="03.3 dev auto-record が quit で終わる"
     cli_or_skip || return
-    # stdin は run_timeout の背景ジョブでは /dev/null になるので EOF = quit で終わる（quit 行と同じ経路）。何も録音を始めないので許可は不要
-    run_timeout 20 "${AUTONOTE_CLI}" dev auto-record --vault "${WORK}/ar-vault" --data "${WORK}/ar-data" <<<'quit'; local code=$?
-    [[ ${code} -eq 124 ]] && { fail "hang: 20 秒で終わらない"; return; }
+    new_log
+    ( printf 'quit\n' | "${AUTONOTE_CLI}" dev auto-record --vault "${WORK}/ar-vault" --data "${WORK}/ar-data" ) >"${LAST_LOG}" 2>&1 &
+    local pid=$! code waited=0
+    while kill -0 "${pid}" 2>/dev/null && (( waited < 200 )); do sleep 0.1; waited=$((waited + 1)); done
+    if kill -0 "${pid}" 2>/dev/null; then pkill -P "${pid}" 2>/dev/null; kill -9 "${pid}" 2>/dev/null; wait "${pid}" 2>/dev/null; fail "quit から 20 秒で終わらない"; return; fi
+    wait "${pid}"; code=$?
     [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
     local first; first="$(head -n 1 "${LAST_LOG}")"
     grep -q '"kind":"status"' <<<"${first}" && grep -q '"state":"idle"' <<<"${first}" || { fail "1 行目が status/idle でない: ${first}"; return; }

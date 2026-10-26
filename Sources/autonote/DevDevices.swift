@@ -28,6 +28,13 @@ enum DevDevices {
         let encoder = AutoNoteJSON.compactEncoder()
         let monitor = DeviceMonitor(hardware: CoreAudioHardware(), power: WorkspaceSleepWakeObserver(),
                                     timer: TaskTimerScheduler())
+        // SIGINT ends the stream: ignore the default action, then stop the monitor from a dispatch source.
+        signal(SIGINT, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
+        source.setEventHandler { Task { await monitor.stop() } }
+        source.resume()
+        defer { source.cancel() }
+
         let events: AsyncStream<DeviceEvent>
         do {
             events = try await monitor.events()
@@ -35,13 +42,6 @@ enum DevDevices {
             DevCommands.printError("error: device monitor: \(error)")
             return 1
         }
-
-        // SIGINT ends the stream: ignore the default action, then stop the monitor from a dispatch source.
-        signal(SIGINT, SIG_IGN)
-        let source = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
-        source.setEventHandler { Task { await monitor.stop() } }
-        source.resume()
-        defer { source.cancel() }
 
         for await event in events {
             switch event {
