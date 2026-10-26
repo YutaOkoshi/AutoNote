@@ -404,6 +404,12 @@ check_dev_record() {
     [[ "${status}" == "too_short" ]] || { fail "status=${status}（期待 too_short）"; return; }
     [[ -f "${manifest}" ]] || { fail "manifest が無い: ${manifest}"; return; }
     [[ "$(plutil -extract status raw -o - "${manifest}" 2>/dev/null)" == "${status}" ]] || { fail "manifest の status が JSON と違う"; return; }
+    # System source failed (e.g. permission dialog pending: start gives up after its 10 s timeout and the mic records
+    # alone, so the 5 s length cannot hold). The command returned without hanging; the length check needs the permission.
+    if grep -q 'sourceFailed(system)' <<<"${json}"; then
+        skip "システム音声の開始に失敗（許可が未応答なら 10 秒で timeout してマイクのみ録音: mic=$(printf '%s' "${json}" | plutil -extract tracks.0.seconds raw -o - - 2>/dev/null)s）。Terminal.app から scripts/e2e-check.sh を実行するか、許可ダイアログに応答してください"
+        return
+    fi
     local i seconds
     for i in 0 1; do
         seconds="$(printf '%s' "${json}" | plutil -extract "tracks.${i}.seconds" raw -o - - 2>/dev/null)"
