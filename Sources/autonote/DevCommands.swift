@@ -7,8 +7,14 @@ enum DevCommands {
         "usage: autonote dev render-fixture --out <dir> [--fixtures <dir>] [--no-compare]"
 
     static func run(_ args: [String]) async -> Int32 {
-        guard args.first == "render-fixture" else { return usageError(renderFixtureUsage) }
-        return await renderFixture(Array(args.dropFirst()))
+        let rest = Array(args.dropFirst())
+        switch args.first {
+        case "render-fixture": return await renderFixture(rest)
+        case "record": return await DevRecord.run(rest)
+        case "import": return await DevImport.run(rest)
+        default:
+            return usageError([renderFixtureUsage, DevRecord.usage, DevImport.usage].joined(separator: "\n"))
+        }
     }
 
     private static func renderFixture(_ args: [String]) async -> Int32 {
@@ -52,12 +58,12 @@ enum DevCommands {
         }
     }
 
-    private static func usageError(_ message: String) -> Int32 {
+    static func usageError(_ message: String) -> Int32 {
         printError(message)
         return 2
     }
 
-    private static func printError(_ message: String) {
+    static func printError(_ message: String) {
         FileHandle.standardError.write(Data((message + "\n").utf8))
     }
 }

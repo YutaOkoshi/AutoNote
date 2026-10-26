@@ -13,6 +13,13 @@ public enum AutoNoteJSON {
         return e
     }
 
+    /// Same strategies as `encoder()` but a single line (no pretty printing), for line-oriented CLI output.
+    public static func compactEncoder() -> JSONEncoder {
+        let e = encoder()
+        e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return e
+    }
+
     public static func decoder() -> JSONDecoder {
         let d = JSONDecoder()
         d.keyDecodingStrategy = .convertFromSnakeCase
