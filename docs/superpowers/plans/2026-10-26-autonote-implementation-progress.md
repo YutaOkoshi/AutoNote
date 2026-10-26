@@ -18,7 +18,7 @@
 | 03 機材と自動録音 | plan-03 | **完了**（2026-10-26、HEAD 974aeee） | 基点 9a0fd64。11 タスク（Task 10 Step 4〜7 👤 は利用者待ち）、実行前スキャンで 22 件を裁定（Y1〜Y21）、最終レビュー（opus）で Important 2・Minor 9 → 修正波 1 回 + 再レビュー clean。swift test 348 件、E2E 24 PASS / 0 FAIL / 1 SKIP（02.1 は許可未応答） |
 | 04 文字起こし | plan-04 | 完了（2026-10-27、HEAD 0a76f1f、487 テスト、E2E 25/0/0） | 裁定 Z1〜Z29（下の写し）。ローカル AVX2 xcframework（Z20）、`.silenceFinalize` 採用（Task 9 計測）。Task 12 👤（Apple Silicon）は利用者待ち |
 | 05 議事録と待ち行列 | plan-05 | 完了（2026-10-27、HEAD e121609、630 テスト、E2E 27/0/0） | 裁定 P1・Y1〜Y35（下の写し）。Task 1 👤 と Task 14 Step 6 👤（claude -p の実測）は利用者待ち。計画 06 は Step 6 を配線前の関門にする |
-| 06 UI・CLI・Automations | plan-06 | 未着手 | |
+| 06 UI・CLI・Automations | plan-06 | 進行中（2026-10-27 開始、基点 68bd1e3） | 16 タスク。実行前スキャン（R1〜R36、C1〜C29、U1〜U20）と裁定 X1〜X42 は `.superpowers/sdd/…/rulings.md`（計画を閉じるときに下へ写す）。Task 1〜10 完了（HEAD 423cbeb、746 テスト）。計画 05 Task 14 Step 6 の関門は 2026-10-27 に実行して機能面は合格（X41 で projects の条件を緩和） |
 
 ## 裁定の写し（計画完了時に台帳から転記）
 
