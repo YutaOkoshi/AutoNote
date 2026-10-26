@@ -17,14 +17,14 @@ public struct TimelineTime: Codable, Comparable, Hashable, Sendable {
 
     public static let zero = TimelineTime(seconds: 0)
 
-    /// Parses `HH:MM:SS` (hours may exceed two digits; minutes and seconds below 60).
+    /// Parses `HH:MM:SS` (hours may exceed two digits but not 99_999; minutes and seconds below 60).
     public init?(hhmmss: String) {
         let parts = hhmmss.split(separator: ":", omittingEmptySubsequences: false)
         guard parts.count == 3,
               parts[0].count >= 2, parts[1].count == 2, parts[2].count == 2,
               parts.allSatisfy({ $0.allSatisfy { $0.isASCII && $0.isNumber } }),
               let h = Int(parts[0]), let m = Int(parts[1]), let s = Int(parts[2]),
-              m < 60, s < 60 else { return nil }
+              h <= 99_999, m < 60, s < 60 else { return nil }
         self.init(seconds: Double(h * 3600 + m * 60 + s))
     }
 

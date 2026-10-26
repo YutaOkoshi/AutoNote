@@ -20,3 +20,10 @@ import AutoNoteTestSupport
     #expect([Speaker.me, .other, .unknown].map(\.displayName) == ["自分", "相手", "不明"])
     #expect(Transcript.fallbackEngineLabel(live: "Dictation") == "Dictation（確定版の失敗によりリアルタイム版で代用）")
 }
+
+@Test func hhmmssRejectsHugeHours() {
+    #expect(TimelineTime(hhmmss: "12345678901234567890:00:00") == nil)   // 20 digits
+    #expect(TimelineTime(hhmmss: "9000000000000000000:00:00") == nil)    // fits Int, but h * 3600 would overflow
+    #expect(TimelineTime(hhmmss: "100000:00:00") == nil)
+    #expect(TimelineTime(hhmmss: "99999:59:59")?.seconds == 359_999_999)
+}
