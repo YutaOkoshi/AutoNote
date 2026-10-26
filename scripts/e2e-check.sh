@@ -395,6 +395,7 @@ check_dev_record() {
     grep -q '"mic_permission":"authorized"' "${LAST_LOG}" || { skip "マイク許可がない（責任プロセス: ターミナル）"; return; }
     local out="${WORK}/rec" code
     run_timeout 40 "${AUTONOTE_CLI}" dev record --seconds 5 --out "${out}"; code=$?
+    [[ ${code} -eq 124 ]] && { skip "システム音声の録音許可が未応答（責任プロセス: ターミナル）。Terminal.app から scripts/e2e-check.sh を実行するか、許可ダイアログに応答してください"; return; }
     [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
     local json; json="$(grep '^{' "${LAST_LOG}" | tail -n 1)"
     local status manifest
