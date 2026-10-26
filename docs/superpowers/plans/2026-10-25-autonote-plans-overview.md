@@ -199,6 +199,19 @@ protocol QueueStage: Sendable {
 - `AutoNoteJSON.compactEncoder()`（1 行、キー順固定、ミリ秒付き日付）を計画 02 Task 14 が足し、`dev` サブコマンドの 1 行 JSON 出力に使う
 - `SettingsStore.init(paths:timeZone: TimeZone = .current)`。`autonote` CLI は `AutoNoteTestSupport` に依存する（`dev render-fixture` のため）
 
+## 8d. 計画 02 の実装で確定した変更（2026-10-26。以後の計画はこれに従う）
+
+- `RecordingSession.events()` の購読はアプリ寿命。`.stopped` でストリームは終わらず、購読者の取り消しだけで外れる（計画 03・06 は 1 回購読すればよい）。`audio(for:)` は会議ごとで、`stop` と `start` 失敗時に終わる
+- `RecordingSession.init` は末尾に `timeZone: TimeZone = .current` を持つ（`MeetingID.make` に渡す）。`AudioImporter.init` も同じ。`startedAt` / `endedAt` はミリ秒に切り詰めて保存する（返す manifest と保存した manifest が等しい）
+- `RecordingSession.tick()` は `stop` を inline で呼ばない（ticker の自己待ちを防ぐ）。停止が要るときは `Task { stop(reason:) }` を起こす。`resume()` は失敗しても state が `.recording` に戻ることがある（開けたトラックだけで続く）。writer の失敗は `.sourceFailed(track, …)` を 1 回出して `silenceWarning = true`
+- `ProcessTapSource.init` に `startTimeout: Duration = .seconds(10)`、`MicrophoneSource.init` に `stopTimeout: Duration = .seconds(5)`。`AudioSourceError` に `timedOut(call: String)` を追加。許可未応答などで開始が止まっても `RecordingSession.start` は約 10 秒で戻り、システム音は `.sourceFailed(.system, …)` としてマイクだけで続く
+- `AggregateLayout` の既定は `.tapOnly` のまま（許可ありでの受信は未測定、利用者待ち）。`withOutputClock` は出力機器に入力がある場合にタップ音声を捨てる既知の問題があり、既定を変える前に直す
+- `SegmentMerger` の出力 `merged/<track>-<n>.wav` は返り値の `[TrackFile]` だけを信じる（ディレクトリ走査はしない。前回の残骸が残りうる）
+- `AutoNoteJSON.compactEncoder()`（1 行 JSON、snake_case、sortedKeys、スラッシュを逃がさない）を CLI の出力に使う。`RecordingReport` の `peak_dbfs` は −∞ のとき明示の `null`
+- `autonote dev record` は `--tap-layout tapOnly|withOutputClock` を持つ。E2E 02.1 は `sourceFailed(system)` のとき（許可未応答）SKIP、40 秒ハングは FAIL
+- `CrashRecovery.recover` は壊れたヘッダのファイルを除外して続ける（throw しない）。生きているファイルは全部 `repairHeader` して `durationSeconds` を埋め直す
+- TestSupport の fake は `public` + 明示の `public init`。`FakeDiskSpace(bytes:)`（`calls`・`error` あり）、`FakeAudioSourceFactory`（`microphoneUIDs`・`nextMicrophone`）、`FakeTapHardware`（`startDelay`・`teardownDelay`）、`FakeMicrophoneEngine`、`FakeDeviceLookup(devices:)`、`FakeMicrophonePermission(_:)`
+
 ## 9. Global Constraints（各計画の同名節にそのまま写す）
 
 - 最低 OS: macOS 26.0。`Package.swift` の platforms は `.macOS("26.0")`、`swift-tools-version: 6.2`、`swiftLanguageModes: [.v6]`。ツールチェーンは Swift 6.3（計画 00 と同じ）
