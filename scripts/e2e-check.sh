@@ -388,6 +388,59 @@ check_render_fixture_detects_diff() {
     pass
 }
 
+check_dev_record() {
+    CURRENT="02.1 dev record で 5 秒の WAV と manifest"
+    cli_or_skip || return
+    run "${AUTONOTE_CLI}" dev record --check-permission
+    grep -q '"mic_permission":"authorized"' "${LAST_LOG}" || { skip "マイク許可がない（責任プロセス: ターミナル）"; return; }
+    local out="${WORK}/rec" code
+    run_timeout 40 "${AUTONOTE_CLI}" dev record --seconds 5 --out "${out}"; code=$?
+    [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
+    local json; json="$(tail -n 1 "${LAST_LOG}")"
+    local status manifest
+    status="$(printf '%s' "${json}" | plutil -extract status raw -o - - 2>/dev/null)"
+    manifest="$(printf '%s' "${json}" | plutil -extract manifest raw -o - - 2>/dev/null)"
+    [[ "${status}" == "too_short" ]] || { fail "status=${status}（期待 too_short）"; return; }
+    [[ -f "${manifest}" ]] || { fail "manifest が無い: ${manifest}"; return; }
+    [[ "$(plutil -extract status raw -o - "${manifest}" 2>/dev/null)" == "${status}" ]] || { fail "manifest の status が JSON と違う"; return; }
+    local i seconds
+    for i in 0 1; do
+        seconds="$(printf '%s' "${json}" | plutil -extract "tracks.${i}.seconds" raw -o - - 2>/dev/null)"
+        awk -v s="${seconds}" 'BEGIN { exit !(s >= 4.5 && s <= 5.5) }' || { fail "tracks.${i}.seconds=${seconds}（期待 5.0±0.5）"; return; }
+    done
+    local wav info
+    for wav in "$(dirname "${manifest}")"/tracks/*.wav; do
+        info="$(afinfo "${wav}" 2>&1)"
+        grep -q '16000 Hz' <<<"${info}" && grep -q '1 ch' <<<"${info}" && grep -q '16-bit' <<<"${info}" \
+            || { LAST_LOG=""; fail "${wav##*/} が 16 kHz / 1 ch / 16 bit でない"; return; }
+    done
+    pass "system chunks=$(printf '%s' "${json}" | plutil -extract tracks.1.chunks raw -o - - 2>/dev/null)"
+}
+
+check_dev_import() {
+    CURRENT="02.2 dev import で m4a / wav を 16k mono WAV に"
+    command -v say >/dev/null 2>&1 || { skip "say が無い"; return; }
+    cli_or_skip || return
+    local dir="${WORK}/imp-src"; mkdir -p "${dir}"
+    run say -o "${dir}/s.aiff" "テストです" || { fail "say が失敗"; return; }
+    run afconvert -f m4af -d aac "${dir}/s.aiff" "${dir}/s.m4a" || { fail "afconvert (m4a) が失敗"; return; }
+    run afconvert -f WAVE -d LEI16@44100 "${dir}/s.aiff" "${dir}/s.wav" || { fail "afconvert (wav) が失敗"; return; }
+    local f json manifest wav info
+    for f in s.m4a s.wav; do
+        run "${AUTONOTE_CLI}" dev import "${dir}/${f}" --out "${WORK}/imp" --start 2026-10-20T10:00:00+09:00 || { fail "${f}: dev import が 0 以外で終了"; return; }
+        json="$(tail -n 1 "${LAST_LOG}")"
+        manifest="$(printf '%s' "${json}" | plutil -extract manifest raw -o - - 2>/dev/null)"
+        wav="$(printf '%s' "${json}" | plutil -extract wav raw -o - - 2>/dev/null)"
+        [[ -f "${manifest}" ]] || { fail "${f}: manifest が無い"; return; }
+        [[ "$(plutil -extract source raw -o - "${manifest}")" == "imported" ]] || { fail "${f}: source != imported"; return; }
+        [[ "$(plutil -extract device.name raw -o - "${manifest}")" == "import" ]] || { fail "${f}: device.name != import"; return; }
+        [[ "$(plutil -extract tracks.0.relative_path raw -o - "${manifest}")" == "tracks/import-000.wav" ]] || { fail "${f}: tracks.0.relative_path が違う"; return; }
+        info="$(afinfo "${wav}" 2>&1)"
+        grep -q '16000 Hz' <<<"${info}" && grep -q '1 ch' <<<"${info}" || { LAST_LOG=""; fail "${f}: WAV が 16 kHz / 1 ch でない"; return; }
+    done
+    pass "m4a / wav とも imported・16 kHz mono"
+}
+
 # ---------------------------------------------------------------- 実行
 
 CHECKS=(
@@ -410,6 +463,8 @@ CHECKS=(
     check_apple_speech_probe_guard
     check_render_fixture
     check_render_fixture_detects_diff
+    check_dev_record
+    check_dev_import
 )
 
 START=${SECONDS}
