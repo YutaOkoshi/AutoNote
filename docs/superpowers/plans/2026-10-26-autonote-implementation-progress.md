@@ -79,6 +79,12 @@
 4. BT 出力: Shokz を接続して出力に切り替え `scripts/tcc-check.sh bt-silence`、内蔵スピーカーに戻してもう一度。
 結果が出たら `docs/superpowers/research/2026-10-24-spike-results.md` の「未測定（利用者待ち）」を埋める。`tapOnly` で callbacks=0 なら計画 02 Task 8 の既定を `.withOutputClock` に変える。
 
+### 計画 02 Task 14/16（E2E 02.1 と実機の録音）— 2026-10-26
+実測: この Claude Code セッション（責任プロセス Orca Helper `com.stablyai.orca.helper`、TCC に AudioCapture の行なし）から `autonote dev record --seconds 3` を実行すると、`tapOnly` でも `withOutputClock` でも `RecordingSession.start` が coreaudiod 内で約 90 秒止まり、system の chunks は 0（音を鳴らしていても）。スパイク `TapCapture` も同じ環境で frames=0・破棄が約 3 分ブロック。Task 1 で記録した「AudioCapture 許可ダイアログ未応答」の症状と一致するので、集約デバイスのレイアウトではなく許可の状態が原因と判断し、`.tapOnly` の既定は変えていない。E2E 02.1 はこの状態（40 秒タイムアウト）を SKIP として報告する。
+1. Terminal.app（スパイクで AudioCapture 許可があった）から `scripts/e2e-check.sh` を実行し、02.1 が PASS になること（mic と system の `seconds` が 5±0.5、`status` が `too_short`）を確認する。SKIP のままなら、表示される「システムオーディオ録音」の許可ダイアログに応答してから再実行。
+2. 許可ありで `tapOnly` が受信できるか（system の `chunks` > 0）を確認する。0 のままなら `.build/debug/autonote dev record --seconds 10 --tap-layout withOutputClock --out /tmp/an-rec`（音を鳴らしながら）と比較し、`withOutputClock` だけ受信できる場合は `ProcessTapSource.init` の `layout` 既定を `.withOutputClock` に変える（裁定 X6）。
+3. 計画 02 Task 15（後回し可）: `docs/superpowers/plans/2026-10-25-autonote-02-audio-capture.md` の Task 15 Step 1〜4 のとおり、内蔵スピーカー / Shokz での穴埋め、`--voice-processing` の有無、手元の mp3 の `dev import` を実機で確かめ、結果表と要件書 §5.6・§19 を更新してコミットする。
+
 ## 再開手順
 1. この表で進行中の計画を見る。そのブランチに checkout。
 2. `.superpowers/sdd/<計画ファイル名>/progress.md` の台帳で `Task N: complete` を数え、次のタスクから再開。台帳が無ければ `git log` で判断。
