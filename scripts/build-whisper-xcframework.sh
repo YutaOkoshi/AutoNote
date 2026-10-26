@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# whisper.cpp（tools/whisper.cpp）から macOS 用の tools/whisper.xcframework を作る。
+# whisper.cpp（tools/whisper.cpp。v1.9.5 = commit d1be6fd でなければ止まる）から macOS 用の tools/whisper.xcframework を作る。
 #
 # 使い方: scripts/build-whisper-xcframework.sh [--force]
 #   --force   tools/whisper.xcframework があっても作り直す（既定は作成済みならスキップ）
@@ -25,7 +25,8 @@ done
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WHISPER_DIR="${ROOT}/tools/whisper.cpp"
-WHISPER_TAG="v1.9.5"   # = b5454（commit d1be6fd）。scripts/setup-whisper.sh と同じタグ
+WHISPER_TAG="v1.9.5"      # = b5454。scripts/setup-whisper.sh と同じタグ
+WHISPER_COMMIT="d1be6fd"  # WHISPER_TAG が指すコミット。既存の tools/whisper.cpp がこれでなければ止まる
 OUTPUT="${ROOT}/tools/whisper.xcframework"
 MACOS_MIN_OS_VERSION=26.0
 JOBS="${JOBS:-$(sysctl -n hw.logicalcpu)}"
@@ -46,6 +47,13 @@ if [[ ! -f "${WHISPER_DIR}/CMakeLists.txt" ]]; then
     log "clone: ${WHISPER_TAG}"
     mkdir -p "${ROOT}/tools"
     git clone --depth 1 --branch "${WHISPER_TAG}" https://github.com/ggml-org/whisper.cpp "${WHISPER_DIR}"
+fi
+# 既存の checkout が別のコミットなら止まる（利用者の作業があるかもしれないので checkout し直さない）
+head="$(git -C "${WHISPER_DIR}" rev-parse HEAD 2>/dev/null || echo unknown)"
+if [[ "${head}" != "${WHISPER_COMMIT}"* ]]; then
+    echo "tools/whisper.cpp のコミットが ${head} で、期待する ${WHISPER_COMMIT}（${WHISPER_TAG}）と違う。" >&2
+    echo "git -C tools/whisper.cpp checkout ${WHISPER_COMMIT} で合わせるか、tools/whisper.cpp を消して再実行する" >&2
+    exit 1
 fi
 cd "${WHISPER_DIR}"
 
