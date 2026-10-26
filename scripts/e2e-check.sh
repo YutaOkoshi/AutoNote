@@ -7,6 +7,7 @@
 # 環境変数（FAIL 検出の確認用。副作用なしで期待値だけを変える）:
 #   E2E_EXPECT_VERSION   autonote --version の期待値（既定: Sources/AutoNoteCore/AutoNoteVersion.swift の値）
 #   E2E_MENUBAR_PROCESS  項目 7b で osascript が見るプロセス名（既定: AutoNoteApp）
+#   AUTONOTE_CLI         項目 01.x が使う autonote の場所（既定: .build/debug/autonote）
 #   E2E_MENUBAR_INDEX    項目 7b で見る menu bar の番号（既定: 2 = ステータス項目のメニューバー）
 #
 # 各項目は PASS / FAIL / SKIP の 1 行を出す。最後に集計し、FAIL が 1 つでもあれば終了コード 1。
@@ -26,7 +27,7 @@ for arg in "$@"; do
     case "${arg}" in
         --quick) QUICK=1 ;;
         --verbose) VERBOSE=1 ;;
-        -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+        -h|--help) sed -n "2,17p" "$0"; exit 0 ;;
         *) echo "不明な引数: ${arg}（使えるのは --quick と --verbose）" >&2; exit 2 ;;
     esac
 done
@@ -87,6 +88,17 @@ run_timeout() {
 
 have_cert() { security find-identity -v -p codesigning 2>/dev/null | grep -q "\"${CERT_NAME}\""; }
 have_gui() { [[ -z "${CI:-}" ]] && pgrep -x WindowServer >/dev/null 2>&1; }
+
+# 共通の補助（計画 01 が足し、後の計画の項目も使う。overview §7）
+AUTONOTE_CLI="${AUTONOTE_CLI:-${ROOT}/.build/debug/autonote}"   # 環境変数で差し替え可
+AUTONOTE_CLI_BUILT=0
+need_autonote_cli() {   # 0: 使える / 1: 無い（呼び手が skip）/ 2: ビルド失敗（呼び手が fail）。--quick でなければ最初の 1 回だけ swift build
+    if [[ "${QUICK}" -eq 0 && "${AUTONOTE_CLI_BUILT}" -eq 0 ]]; then run swift build --product autonote || return 2; AUTONOTE_CLI_BUILT=1; fi
+    [[ -x "${AUTONOTE_CLI}" ]] || return 1
+}
+cli_or_skip() {   # 項目の先頭で呼ぶ。使えなければ skip / fail を出して 1 を返す
+    need_autonote_cli; case $? in 0) return 0 ;; 1) skip "autonote が無い（swift build で作る）" ;; *) fail "swift build --product autonote が失敗" ;; esac; return 1
+}
 
 # ---------------------------------------------------------------- 確認項目
 
@@ -357,6 +369,25 @@ check_apple_speech_probe_guard() {
     pass "--live / --file とも exit 2"
 }
 
+check_render_fixture() {
+    CURRENT="01.1 render-fixture が golden と一致"
+    cli_or_skip || return
+    local out="${WORK}/render-fixture"
+    run "${AUTONOTE_CLI}" dev render-fixture --out "${out}" --fixtures "${ROOT}/Tests/Fixtures" || { fail "render-fixture が 0 以外で終了"; return; }
+    [[ -f "${out}/_index.md" ]] || { LAST_LOG=""; fail "_index.md が書かれていない"; return; }
+    pass "$(tail -n 1 "${LAST_LOG}")"
+}
+
+check_render_fixture_detects_diff() {
+    CURRENT="01.2 render-fixture が golden との差を検出して exit 1"
+    cli_or_skip || return
+    local fx="${WORK}/fixtures-tampered"; cp -R "${ROOT}/Tests/Fixtures" "${fx}"; printf '改ざん\n' >>"${fx}/expected/_index.md"
+    run "${AUTONOTE_CLI}" dev render-fixture --out "${WORK}/render-tampered" --fixtures "${fx}"; local code=$?
+    [[ ${code} -eq 1 ]] || { fail "exit ${code}（期待 1）"; return; }
+    grep -q '差分: _index.md' "${LAST_LOG}" || { fail "「差分: _index.md」が出ていない"; return; }
+    pass
+}
+
 # ---------------------------------------------------------------- 実行
 
 CHECKS=(
@@ -377,6 +408,8 @@ CHECKS=(
     check_device_probe
     check_apple_speech_probe
     check_apple_speech_probe_guard
+    check_render_fixture
+    check_render_fixture_detects_diff
 )
 
 START=${SECONDS}

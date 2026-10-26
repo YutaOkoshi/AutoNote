@@ -8,5 +8,9 @@ if arguments == ["--version"] {
     exit(0)
 }
 
+if arguments.first == "dev" {
+    exit(await DevCommands.run(Array(arguments.dropFirst())))
+}
+
 FileHandle.standardError.write(Data("usage: autonote --version\n".utf8))
 exit(1)
