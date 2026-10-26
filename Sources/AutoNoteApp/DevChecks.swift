@@ -190,7 +190,7 @@ nonisolated enum DevChecks {
         if st == noErr { try? await Task.sleep(for: .seconds(seconds)) }
 
         // 8. 破棄は専用キューで行い、10 秒で打ち切る
-        let finished = await teardown(aggID: aggID, procID: procID, tapID: tapID, started: st == noErr, timeout: 10)
+        let finished = await teardown(layout: layout, aggID: aggID, procID: procID, tapID: tapID, started: st == noErr, timeout: 10)
         if !finished { log("system layout=\(layout.rawValue) teardown timeout") }
 
         let callbacks = stats.callbacks.load(ordering: .relaxed)
@@ -210,7 +210,7 @@ nonisolated enum DevChecks {
     }
 
     /// 破棄を専用キューで行う。`timeout` 秒で終わらなければ false（破棄はキュー上で続く）。
-    static func teardown(aggID: AudioObjectID, procID: AudioDeviceIOProcID, tapID: AudioObjectID,
+    static func teardown(layout: AggregateLayout, aggID: AudioObjectID, procID: AudioDeviceIOProcID, tapID: AudioObjectID,
                          started: Bool, timeout: Double) async -> Bool {
         let once = Once()
         let queue = DispatchQueue(label: "com.yutaokoshi.autonote.devchecks.teardown")
@@ -221,7 +221,7 @@ nonisolated enum DevChecks {
                 steps.append("destroyIOProc=\(fourCC(AudioDeviceDestroyIOProcID(aggID, procID)))")
                 steps.append("destroyAggregate=\(fourCC(AudioHardwareDestroyAggregateDevice(aggID)))")
                 steps.append("destroyTap=\(fourCC(AudioHardwareDestroyProcessTap(tapID)))")
-                log("system teardown \(steps.joined(separator: " "))")
+                log("system layout=\(layout.rawValue) teardown \(steps.joined(separator: " "))")
                 if once.fire() { c.resume(returning: true) }
             }
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
