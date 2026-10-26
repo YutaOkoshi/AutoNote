@@ -49,4 +49,31 @@ import Testing
         #expect(await collect(s).isEmpty)
         #expect(core.runCount == 0)
     }
+
+    @Test func decodeFailureStillEmitsEmptyFinal() async throws {
+        let t = WhisperLiveTranscriber(core: FakeWhisperCore(failure: TranscriptionError.whisperFailed(-1)))
+        let s = try await t.start(language: .ja, hints: [])
+        await feed(t, tone(3) + silence(1), at: 0)
+        await t.finish()
+        let all = await collect(s)
+        #expect(all == [Utterance(start: TimelineTime(seconds: 0), end: TimelineTime(seconds: 3), speaker: .unknown, text: "", isFinal: true)])
+    }
+
+    @Test func secondStartThrows() async throws {
+        let t = WhisperLiveTranscriber(core: FakeWhisperCore(fixedText: "テスト"))
+        _ = try await t.start(language: .ja, hints: [])
+        await #expect(throws: TranscriptionError.engineUnavailable("already started")) { try await t.start(language: .ja, hints: []) }
+    }
+
+    @Test func finishIsIdempotent() async throws {
+        let core = FakeWhisperCore(fixedText: "テスト"); let t = WhisperLiveTranscriber(core: core)
+        let s = try await t.start(language: .ja, hints: [])
+        await feed(t, tone(3) + silence(1), at: 0)
+        async let first: Void = t.finish()
+        async let second: Void = t.finish()
+        _ = await (first, second)
+        await t.finish()
+        let finals = await collect(s).filter(\.isFinal)
+        #expect(finals.map(\.text) == ["テスト"])
+    }
 }

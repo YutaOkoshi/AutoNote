@@ -35,6 +35,31 @@ import Testing
         #expect(p.ingest(silence(2) + tone(3) + silence(1)).contains(.commit(from: 2, to: 5, nextFrom: 5)))
     }
 
+    @Test func shortUtteranceCommitsAtSilence() {
+        var p = ChunkPlanner()
+        #expect(p.ingest(tone(0.6) + silence(1.5)) == [.commit(from: 0, to: 0.6, nextFrom: 0.6)])
+    }
+
+    /// The utterance ends 0.4 s before the hard cut: its boundary (reported at 8.4) lands in the next window,
+    /// whose only speech is the overlap that `OverlapTrimmer` drops anyway — so that window is skipped.
+    @Test func boundaryAfterHardCutClosesOverlapWindow() {
+        var p = ChunkPlanner()
+        let closes = p.ingest(tone(7.6) + silence(2.0)).filter { if case .partial = $0 { false } else { true } }
+        #expect(closes == [.commit(from: 0, to: 8, nextFrom: 7), .skip(from: 7, to: 7.6)])
+    }
+
+    @Test func overlapSpeechAloneNeverMakesLongWindow() {
+        var p = ChunkPlanner()
+        let actions = p.ingest(tone(7.6) + silence(8)) + p.flush()
+        let spans: [Double] = actions.map {
+            switch $0 {
+            case let .partial(from, to), let .commit(from, to, _), let .skip(from, to): to - from
+            }
+        }
+        #expect(spans.allSatisfy { $0 <= 8 })
+        #expect(actions.filter { if case .commit = $0 { true } else { false } } == [.commit(from: 0, to: 8, nextFrom: 7)])
+    }
+
     @Test func flushCommitsRemainder() {
         var p = ChunkPlanner(); _ = p.ingest(tone(1.5)); #expect(p.flush() == [.commit(from: 0, to: 1.5, nextFrom: 1.5)])
     }

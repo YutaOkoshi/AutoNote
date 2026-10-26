@@ -1,18 +1,24 @@
 import Foundation
+import os
 import Synchronization
 
 /// Realtime transcription with whisper by re-decoding a sliding window (`ChunkPlanner`).
 /// A window's partials and its final share one `start`, so consumers overwrite by `start` (overview §4).
 /// One decode runs at a time: commits run in order and are never dropped; at most one partial waits,
-/// a newer partial replacing the waiting one.
+/// a newer partial replacing the waiting one. A failed decode is logged and yields empty text
+/// (an empty final still goes out so the consumer removes that window's partial).
 public actor WhisperLiveTranscriber: LiveTranscriber {
     private struct Job: Sendable {
+        var from: Double
+        var to: Double
         var samples: [Int16]
         var start: TimelineTime
         var end: TimelineTime?
         var dropBefore: Double
         var isFinal: Bool
     }
+
+    private static let logger = Logger(subsystem: "com.yutaokoshi.autonote", category: "WhisperLiveTranscriber")
 
     private let core: any WhisperCore
     private var planner: ChunkPlanner
@@ -23,7 +29,9 @@ public actor WhisperLiveTranscriber: LiveTranscriber {
     private var language: Language = .ja
     private var prompt: String?
     private var continuation: AsyncStream<Utterance>.Continuation?
+    private var started = false
     private var accepting = false
+    private var finishing: Task<Void, Never>?
     private var jobs: [Job] = []
     private var worker: Task<Void, Never>?
 
@@ -33,6 +41,8 @@ public actor WhisperLiveTranscriber: LiveTranscriber {
     }
 
     public func start(language: Language, hints: [String]) async throws -> AsyncStream<Utterance> {
+        guard !started else { throw TranscriptionError.engineUnavailable("already started") }
+        started = true
         let (stream, continuation) = AsyncStream<Utterance>.makeStream()
         self.language = language
         prompt = WhisperPrompt.make(hints: hints)
@@ -48,13 +58,18 @@ public actor WhisperLiveTranscriber: LiveTranscriber {
         schedule(planner.ingest(chunk.samples))
     }
 
+    /// Decodes what is left and ends the stream. Later (or concurrent) calls wait for the same ending.
     public func finish() async {
-        guard accepting else { return }
-        accepting = false
-        schedule(planner.flush())
-        while let running = worker { await running.value }
-        continuation?.finish()
-        continuation = nil
+        if accepting {
+            accepting = false
+            schedule(planner.flush())
+            finishing = Task {
+                while let running = worker { await running.value }
+                continuation?.finish()
+                continuation = nil
+            }
+        }
+        await finishing?.value
     }
 
     private func schedule(_ actions: [ChunkPlanner.Action]) {
@@ -82,7 +97,7 @@ public actor WhisperLiveTranscriber: LiveTranscriber {
         let lo = min(buffer.count, max(0, sampleIndex(from) - bufferStart))
         let hi = min(buffer.count, max(lo, sampleIndex(to) - bufferStart))
         let drop = overlapWindow.map { abs($0.from - from) < 1e-9 ? $0.drop : 0 } ?? 0
-        return Job(samples: Array(buffer[lo..<hi]), start: mapper.timeline(atAudioSeconds: from),
+        return Job(from: from, to: to, samples: Array(buffer[lo..<hi]), start: mapper.timeline(atAudioSeconds: from),
                    end: isFinal ? mapper.timeline(atAudioSeconds: to) : nil, dropBefore: drop, isFinal: isFinal)
     }
 
@@ -105,6 +120,8 @@ public actor WhisperLiveTranscriber: LiveTranscriber {
             _ = try await core.run(request, onSegment: { _, t in tokens.withLock { $0.append(contentsOf: t) } },
                                    onProgress: { _ in }, shouldAbort: { false })
         } catch {
+            let kind = job.isFinal ? "final" : "partial"
+            Self.logger.error("live decode failed (\(kind, privacy: .public) window \(job.from, privacy: .public)–\(job.to, privacy: .public) s): \(String(describing: error), privacy: .public)")
             return ""
         }
         let text = OverlapTrimmer.text(tokens.withLock { $0 }, droppingBefore: job.dropBefore)

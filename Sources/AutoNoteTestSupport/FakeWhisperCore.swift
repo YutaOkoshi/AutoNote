@@ -5,10 +5,12 @@ import Synchronization
 /// Scripted `WhisperCore`. Each run emits, in order, the segments that start at or after the request's
 /// `offsetSeconds` (waiting `delay` before each, without throwing on cancellation) and checks `shouldAbort` after every one.
 /// `init(fixedText:)` is for live windows: one segment spanning the window and one token at its start.
+/// `init(failure:)` records each request and throws `failure`.
 public final class FakeWhisperCore: WhisperCore, @unchecked Sendable {
     private enum Script {
         case segments([WhisperSegment], delay: Duration)
         case fixedText(String)
+        case failure(any Error)
     }
 
     private struct State {
@@ -27,6 +29,10 @@ public final class FakeWhisperCore: WhisperCore, @unchecked Sendable {
         script = .fixedText(fixedText)
     }
 
+    public init(failure: any Error) {
+        script = .failure(failure)
+    }
+
     public var requests: [WhisperRunRequest] { state.withLock { $0.requests } }
     public var runCount: Int { state.withLock { $0.requests.count } }
     public var emittedCount: Int { state.withLock { $0.emitted } }
@@ -40,6 +46,8 @@ public final class FakeWhisperCore: WhisperCore, @unchecked Sendable {
         state.withLock { $0.requests.append(r) }
         let total = Double(r.samples.count) / PCMAudio.sampleRate
         switch script {
+        case let .failure(error):
+            throw error
         case let .fixedText(text):
             let segment = WhisperSegment(start: r.offsetSeconds, end: max(r.offsetSeconds, total), text: text)
             emit(segment, [TimedToken(start: r.offsetSeconds, end: segment.end, text: text)], onSegment)

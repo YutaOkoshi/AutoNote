@@ -1,7 +1,8 @@
 /// Decides when a live whisper window is decoded (all values are seconds of received audio).
 /// Leading silence is trimmed: while the window has no speech frame its start follows "now", so
 /// `windowStart` lands on the first speech frame. Frames are classified like `SilenceDetector`'s
-/// (20 ms, RMS ≥ 0.01 is speech). Public only so `WhisperLiveTranscriber.init` can take a `Config`.
+/// (20 ms, RMS ≥ 0.01 is speech). In a window opened by a hard cut, speech inside the overlap does not
+/// count toward `minSpeech` (`OverlapTrimmer` always drops those tokens). Public only so `WhisperLiveTranscriber.init` can take a `Config`.
 public struct ChunkPlanner: Sendable {
     public struct Config: Sendable {
         public var windowMax: Double
@@ -24,13 +25,11 @@ public struct ChunkPlanner: Sendable {
     private static let framesPerSecond = 50.0
     private static let threshold = 0.01
     private static let utteranceEndSilence = 0.8
-    private static let minBoundaryCommit = 1.0
 
     private let windowMaxFrames: Int
     private let overlapFrames: Int
     private let partialFrames: Int
     private let minSpeechFrames: Int
-    private let minBoundaryFrames: Int
 
     private var detector: SilenceDetector
     private var pending: [Int16] = []
@@ -38,6 +37,7 @@ public struct ChunkPlanner: Sendable {
     private var now = 0                 // frames classified so far
     private var windowStart = 0         // frame
     private var lastPartial = 0         // frame
+    private var overlapEnd = 0          // frame; speech before it is the previous window's overlap
     private var flags: [Bool] = []      // speech flag of each frame from `flagsBase`
     private var flagsBase = 0
 
@@ -47,7 +47,6 @@ public struct ChunkPlanner: Sendable {
         overlapFrames = frames(config.overlap)
         partialFrames = frames(config.partialEvery)
         minSpeechFrames = frames(config.minSpeech)
-        minBoundaryFrames = frames(Self.minBoundaryCommit)
         detector = SilenceDetector(threshold: Self.threshold, minSilence: Self.utteranceEndSilence, minSpeech: config.minSpeech)
     }
 
@@ -71,7 +70,7 @@ public struct ChunkPlanner: Sendable {
 
     /// Ends the stream: the remaining window (including a trailing partial frame) is committed.
     mutating func flush() -> [Action] {
-        let speech = speechFrames(windowStart..<now)
+        let speech = countedSpeech(until: now)
         let from = Self.seconds(windowStart)
         let to = Double(totalSamples) / PCMAudio.sampleRate
         pending.removeAll()
@@ -92,7 +91,7 @@ public struct ChunkPlanner: Sendable {
 
         for boundary in boundaries {
             let end = Int((boundary * Self.framesPerSecond).rounded())
-            if end - windowStart >= minBoundaryFrames {
+            if end > windowStart {
                 close(at: end, nextFrom: end, into: &actions)              // 無音で切るので重ねない
                 return
             }
@@ -102,7 +101,7 @@ public struct ChunkPlanner: Sendable {
             close(at: end, nextFrom: end - overlapFrames, into: &actions)  // 強制で切るときは重ねる
             return
         }
-        if now - max(windowStart, lastPartial) >= partialFrames, speechFrames(windowStart..<now) >= minSpeechFrames {
+        if now - max(windowStart, lastPartial) >= partialFrames, countedSpeech(until: now) >= minSpeechFrames {
             actions.append(.partial(from: Self.seconds(windowStart), to: Self.seconds(now)))
             lastPartial = now
         }
@@ -111,16 +110,23 @@ public struct ChunkPlanner: Sendable {
     private mutating func close(at end: Int, nextFrom: Int, into actions: inout [Action]) {
         let from = Self.seconds(windowStart), to = Self.seconds(end)
         var next = nextFrom
-        if speechFrames(windowStart..<end) >= minSpeechFrames {
+        if countedSpeech(until: end) >= minSpeechFrames {
             actions.append(.commit(from: from, to: to, nextFrom: Self.seconds(nextFrom)))
         } else {
             actions.append(.skip(from: from, to: to))                      // 無音を whisper に渡さない
             next = end
         }
+        overlapEnd = end                                                   // 重なりの発話は次の窓で数えない
         windowStart = next
         if speechFrames(windowStart..<now) == 0 { windowStart = now }
         lastPartial = windowStart
         trimFlags()
+    }
+
+    /// Speech frames of the current window before `end`, leaving out the previous window's overlap.
+    private func countedSpeech(until end: Int) -> Int {
+        let from = max(windowStart, overlapEnd)
+        return from < end ? speechFrames(from..<end) : 0
     }
 
     private func speechFrames(_ range: Range<Int>) -> Int {
