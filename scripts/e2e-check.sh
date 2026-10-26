@@ -524,11 +524,13 @@ check_dev_engines() {
     command -v jq >/dev/null 2>&1 || { skip "jq が無い"; return; }
     cli_or_skip || return
     # --data は空の作業ディレクトリ（利用者の設定・モデルに左右されないように）
-    run_timeout 30 "${AUTONOTE_CLI}" dev engines --data "${WORK}/engines-data"; local code=$?
+    # stdout だけを別ファイルに取り、jq はそれを読む（stderr の行で JSON が壊れないように。stderr は LAST_LOG へ）
+    local out="${WORK}/engines.json"
+    run_timeout 30 sh -c '"$1" dev engines --data "$2" >"$3"' _ "${AUTONOTE_CLI}" "${WORK}/engines-data" "${out}"; local code=$?
     [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
     if jq -e '(.machine == "intel" or .machine == "appleSilicon") and (.live | length > 0) and .defaults.batch.model == "large-v3-turbo"' \
-        "${LAST_LOG}" >/dev/null 2>&1; then
-        pass "machine $(jq -r .machine "${LAST_LOG}")、resolved.live $(jq -r '.resolved.live.kind // "null"' "${LAST_LOG}")"
+        "${out}" >/dev/null 2>&1; then
+        pass "machine $(jq -r .machine "${out}")、resolved.live $(jq -r '.resolved.live.kind // "null"' "${out}")"
     else
         fail "machine / live / defaults.batch.model が期待と違う（または JSON でない）"
     fi

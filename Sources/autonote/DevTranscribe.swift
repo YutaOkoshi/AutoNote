@@ -72,7 +72,7 @@ enum DevTranscribe {
             let finals: [String]
             let audioSeconds: Double
             let clock = ContinuousClock()
-            var startedAt = clock.now
+            let startedAt: ContinuousClock.Instant
             if engine == .whisper {
                 let batch = try await makeBatch(options)
                 let (samples, input) = try fileInput(options, truncatedCopy: true)
@@ -96,15 +96,21 @@ enum DevTranscribe {
                     }
                     return texts
                 }
-                if options.mic {
-                    audioSeconds = try await feedMic(live, seconds: options.seconds ?? 0)
-                } else {
-                    let (samples, _) = try fileInput(options, truncatedCopy: false)
-                    audioSeconds = Double(samples.count) / PCMAudio.sampleRate
-                    for chunk in PCMAudio.chunks(samples, track: .mic, chunkSeconds: 0.1, start: TimelineTime(seconds: 0)) {
-                        await live.feed(chunk)
-                        if options.realtime { try? await Task.sleep(for: .milliseconds(100)) }
+                do {
+                    if options.mic {
+                        audioSeconds = try await feedMic(live, seconds: options.seconds ?? 0)
+                    } else {
+                        let (samples, _) = try fileInput(options, truncatedCopy: false)
+                        audioSeconds = Double(samples.count) / PCMAudio.sampleRate
+                        for chunk in PCMAudio.chunks(samples, track: .mic, chunkSeconds: 0.1, start: TimelineTime(seconds: 0)) {
+                            await live.feed(chunk)
+                            if options.realtime { try? await Task.sleep(for: .milliseconds(100)) }
+                        }
                     }
+                } catch {
+                    await live.finish()   // tear the engine down before exiting non-zero
+                    _ = await printer.value
+                    throw error
                 }
                 await live.finish()
                 finals = await printer.value
@@ -125,6 +131,8 @@ enum DevTranscribe {
                 DevCommands.printError("unavailable: \(reason)"); return 3
             case .localeUnsupported(let language):
                 DevCommands.printError("unavailable: language \(language.rawValue) is not supported by \(engine.rawValue)"); return 3
+            case .modelMissing(let name) where name == options.modelPath?.path:
+                DevCommands.printError("error: model file not found: \(name)"); return 1
             case .modelMissing(let name):
                 DevCommands.printError("unavailable: model \(name) is not downloaded (autonote dev models download \(name))"); return 3
             default:
@@ -202,27 +210,26 @@ enum DevTranscribe {
         return try await factory(o, machine: machine).makeBatch(.whisper(model), gate: BatchGate())
     }
 
+    /// `engine` is a live engine (`--engine whisper` takes the batch path in `run`).
     private static func makeLive(_ engine: Engine, _ o: Options) async throws -> any LiveTranscriber {
-        switch engine {
-        case .dictation, .speech:
-            let choice: EngineChoice = engine == .dictation ? .dictation : .speech
-            let machine = MachineKind.current()
-            let catalog = EngineCatalog(machine: machine, speech: AppleSpeechCapabilities(), installedModels: { @Sendable in [] })
-            let entry = await catalog.entries(role: .live, language: o.language).first { $0.choice == choice }
-            if let entry, !entry.available { throw Unavailable(reason: entry.reason ?? "\(engine.rawValue) is not available") }
-            return try await factory(o, machine: machine).makeLive(choice)
-        case .whisper, .whisperLive:
+        if engine == .whisperLive {
             let machine = whisperMachine(o)
             if let path = try modelPath(o) { return try TranscriberFactory.whisperLive(modelURL: path, machine: machine) }
             let model = o.model ?? EngineCatalog.defaults(for: MachineKind.current()).whisperLiveModel
             return try await factory(o, machine: machine).makeLive(.whisper(model))
         }
+        let choice: EngineChoice = engine == .dictation ? .dictation : .speech
+        let machine = MachineKind.current()
+        let catalog = EngineCatalog(machine: machine, speech: AppleSpeechCapabilities(), installedModels: { @Sendable in [] })
+        let entry = await catalog.entries(role: .live, language: o.language).first { $0.choice == choice }
+        if let entry, !entry.available { throw Unavailable(reason: entry.reason ?? "\(engine.rawValue) is not available") }
+        return try await factory(o, machine: machine).makeLive(choice)
     }
 
     private static func modelPath(_ o: Options) throws -> URL? {
         guard let path = o.modelPath else { return nil }
         guard FileManager.default.fileExists(atPath: path.path) else {
-            throw TranscriptionError.invalidAudio("model file not found: \(path.path)")
+            throw TranscriptionError.modelMissing(path.path)
         }
         return path
     }
