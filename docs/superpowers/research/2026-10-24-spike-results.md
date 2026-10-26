@@ -93,16 +93,16 @@
   - **計画 02 Task 1 の再確認（2026-10-26、AutoNote.app 単体を `open` で起動、`scripts/tcc-check.sh dictation`）**: `tccutil reset SpeechRecognition com.yutaokoshi.autonote` の後、開発メニュー「Dictation を確認」で `say -v Kyoko` の合成音声（約 4 秒）を認識。`SFSpeechRecognizer.authorizationStatus` は前後とも 0（未決定）、tccd には preflight の問い合わせ（`AUTHREQ_CTX ... kTCCServiceSpeechRecognition, preflight=yes`）だけが出て `AUTHREQ_PROMPTING`（ダイアログ）は無し、TCC.db に `kTCCServiceSpeechRecognition` の行は作られなかった。本文「本日の定例会議を始めます議題は3つあります」（21 字、2.83 秒）。**AutoNote.app 単体でも DictationTranscriber は音声認識の許可なしで動く**。`Resources/Info.plist` に `NSSpeechRecognitionUsageDescription` は足さない（画面ロック中の測定だが、ダイアログの有無は tccd のログで判定した）。ログは [2026-10-24-spike-raw/plan02-task1-tcc.log](2026-10-24-spike-raw/plan02-task1-tcc.log)
   - §6.2 の SFSpeechRecognizer の「1 分制限」は「60 秒ごとに結果が区切られ、isFinal は最後の区間だけ」と書き換え、使うなら区間の連結が要ると明記する。DictationTranscriber と同じモデルと見られるので、予備としての価値は「macOS 26 未満でも動く」ことだけ（最低 OS は 26.0 なので実質なし）
 
-- 発話の区切り（計画 04 Task 9、2026-10-27、Intel、DictationTranscriber、`tools/samples/ja-segments.wav` 77.5 秒＝架空の会議発言 10 文、文の間に 1.5 秒の沈黙、`dev transcribe --engine dictation --realtime --segmentation <案>`）:
+- 発話の区切り（計画 04 Task 9、2026-10-27、Intel、DictationTranscriber、`tools/samples/ja-segments.wav` 77.5 秒＝架空の会議発言 10 文、文の間に 1.5 秒の沈黙、`dev transcribe --engine dictation --realtime --segmentation <案>`。`--realtime` は 1 チャンクごとの締め切り（開始 + 0.1 秒 × 番号）で流すよう直した後の測定。直す前は処理時間が累積して遅延が膨らんでいた）:
 
   | 案 | 確定件数 | 最長の発話 | 確定遅延の中央値（wall − end） |
   |---|---|---|---|
-  | default（エンジン任せ） | 2 | 60.01 秒 | 5.87 秒 |
-  | frequent（`.frequentFinalization`） | 2 | 60.01 秒 | 5.83 秒 |
-  | silence（自前の沈黙検出 → `finalize(through:)`） | 10 | 8.98 秒 | 4.10 秒 |
+  | default（エンジン任せ） | 2 | 60.01 秒 | 1.24 秒 |
+  | frequent（`.frequentFinalization`） | 2 | 60.01 秒 | 1.21 秒 |
+  | silence（自前の沈黙検出 → `finalize(through:)`） | 10 | 8.98 秒 | 0.01 秒 |
 
-  - 採った案: **silence**（`SegmentationStrategy.current == .silenceFinalize`）。判定基準（件数 8〜13、最長 ≤ 15 秒、遅延中央値 ≤ 3.0 秒）を 3 つとも満たす案は無く、silence だけが件数と最長を満たした。default と frequent は 60 秒で 1 件に区切られる（スパイクと同じ挙動で、frequent の効果は見えなかった）。満たさなかった基準は 3（遅延中央値 4.10 秒）。
-  - 遅延は発話ごとの遅れではなく累積のずれ: silence の確定遅延は 0.41 → 1.07 → 1.82 → … → 6.94 秒と 1 文あたり約 0.7 秒ずつ増える（総計 wall 83.2 秒 ＞ 音声 77.5 秒）。1 文目は 0.41 秒で、増え分は実時間より遅く流れる部分（送出ペース・認識の遅れの累積）で、区切りの方式ではなく実時間の再生の仕方に由来すると見られる。原因の切り分けは未実施。実マイクでは累積しない見込みだが、マイク確認は未なので未検証。
+  - 採った案: **silence**（`SegmentationStrategy.current == .silenceFinalize`）。判定基準（件数 8〜13、最長 ≤ 15 秒、遅延中央値 ≤ 3.0 秒）を 3 つとも満たしたのは silence だけ。default と frequent は 60 秒で 1 件に区切られ（スパイクと同じ挙動。frequent の効果は見えなかった）、件数と最長を満たさない。全体の壁時計は 77.5〜77.9 秒（音声 77.5 秒）で、遅延は 10 文を通して一定（累積なし）。
+  - 注意: silence の `end` は自前の沈黙検出が `finalize(through:)` に渡した時刻（発話の終わり + 沈黙判定の待ち）なので、`wall − end` は「実際に話し終えてから確定まで」より短い。話し終えてからの体感遅延はこれに沈黙判定の待ち時間（`SilenceDetector` の閾値）が加わる。
   - マイク確認は未（Step 4 は利用者が居ないので飛ばした）。SpeechTranscriber 側は計画 04 Task 12。
 
 ## 項目 3: Intel 機で process tap から実際に音声データが届くこと（作成・破棄は確認済み）

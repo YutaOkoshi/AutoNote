@@ -102,9 +102,10 @@ enum DevTranscribe {
                     } else {
                         let (samples, _) = try fileInput(options, truncatedCopy: false)
                         audioSeconds = Double(samples.count) / PCMAudio.sampleRate
-                        for chunk in PCMAudio.chunks(samples, track: .mic, chunkSeconds: 0.1, start: TimelineTime(seconds: 0)) {
+                        // --realtime: chunk i is fed at liveStart + i * 0.1 s, so processing time never accumulates.
+                        for (index, chunk) in PCMAudio.chunks(samples, track: .mic, chunkSeconds: 0.1, start: TimelineTime(seconds: 0)).enumerated() {
+                            if options.realtime { try? await clock.sleep(until: liveStart + .milliseconds(100 * index)) }
                             await live.feed(chunk)
-                            if options.realtime { try? await Task.sleep(for: .milliseconds(100)) }
                         }
                     }
                 } catch {
