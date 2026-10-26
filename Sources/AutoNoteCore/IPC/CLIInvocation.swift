@@ -46,7 +46,8 @@ public enum CLIParser {
         }
         let json = argv.contains("--json")
         var rest = argv.filter { $0 != "--json" }
-        let name = rest.removeFirst()
+        guard let name = rest.first else { throw CLIUsageError("コマンドを指定してください") }
+        rest.removeFirst()
 
         func make(_ command: IPCCommand, _ args: IPCArgs = IPCArgs()) -> CLIParseResult {
             .invocation(CLIInvocation(command: command, args: args, json: json))

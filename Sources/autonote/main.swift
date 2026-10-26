@@ -7,10 +7,6 @@ func write(_ text: String, to handle: FileHandle) {
     if !text.isEmpty { handle.write(Data(text.utf8)) }
 }
 
-if arguments.first == "dev" {
-    exit(await DevCommands.run(Array(arguments.dropFirst())))
-}
-
 if arguments.isEmpty {
     write(CLIRenderer.usage, to: .standardError)
     exit(1)

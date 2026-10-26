@@ -40,7 +40,7 @@ private func inv(_ c: IPCCommand, json: Bool = false, args: IPCArgs = IPCArgs())
     }
 
     // Bad argument shapes throw CLIUsageError.
-    @Test(arguments: [[], ["start", "--lang", "fr"], ["regenerate"], ["automations", "run", "x"], ["frobnicate"], ["stop", "extra"]] as [[String]])
+    @Test(arguments: [[], ["--json"], ["--json", "--json"], ["start", "--lang", "fr"], ["regenerate"], ["automations", "run", "x"], ["frobnicate"], ["stop", "extra"]] as [[String]])
     func usageErrors(argv: [String]) {
         #expect(throws: CLIUsageError.self) { try CLIParser.parse(argv, cwd: cwd) }
     }
@@ -144,6 +144,15 @@ private func inv(_ c: IPCCommand, json: Bool = false, args: IPCArgs = IPCArgs())
         #expect(run(code: 0, timedOut: false) == CLIOutput(stdout: "終了コード 0（1.5 秒）ログ: /logs/x\n", stderr: "", exitCode: 0))
         #expect(run(code: 2, timedOut: false).exitCode == 2)
         let t = run(code: nil, timedOut: true)
+        // --json carries the same exit code.
+        func runJSON(code: Int32?, timedOut: Bool) -> Int32 {
+            let rec = AutomationRunRecord(name: "S", event: .minutesGenerated, meetingID: "m", startedAt: Date(timeIntervalSince1970: 0),
+                                          durationSeconds: 1, exitCode: code, timedOut: timedOut, skippedReason: nil, logDirectory: "/l")
+            return CLIRenderer.render(.success(1, IPCResult(run: rec)), for: inv(.automationsRun, json: true)).exitCode
+        }
+        #expect(runJSON(code: 0, timedOut: false) == 0)
+        #expect(runJSON(code: 3, timedOut: false) == 3)
+        #expect(runJSON(code: nil, timedOut: true) == 1)
         #expect(t.stdout == "タイムアウトしました（1.5 秒）ログ: /logs/x\n" && t.exitCode == 1)
     }
 }

@@ -32,7 +32,10 @@ public enum CLIRenderer {
             return failure(r.error ?? IPCError(code: .failed, message: "不明なエラー"), json: inv.json)
         }
         let result = r.result ?? IPCResult()
-        if inv.json { return CLIOutput(stdout: jsonLine(result)) }
+        if inv.json {
+            let code = inv.command == .automationsRun ? runOutput(result.run).exitCode : 0
+            return CLIOutput(stdout: jsonLine(result), exitCode: code)
+        }
 
         switch inv.command {
         case .start: return CLIOutput(stdout: "録音を開始しました\n")
