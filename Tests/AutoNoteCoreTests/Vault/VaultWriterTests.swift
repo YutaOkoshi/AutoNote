@@ -52,3 +52,18 @@ private func url(_ o: VaultWriteOutcome) throws -> URL { guard case .written(let
     try await w.remove(Samples.manifest.id); _ = try await w.rebuildIndex()
     #expect(!(try String(contentsOf: index, encoding: .utf8)).contains("プロジェクト定例]]")); #expect(await w.record(for: Samples.manifest.id) == nil)
 }
+@Test func removeFindsAFileMovedInsideTheVault() async throws {
+    let v = try TemporaryDirectory.make(); let w = VaultWriter(outputFolder: v, paths: AppPaths(root: try TemporaryDirectory.make()))
+    let f = try url(await w.write(doc()))
+    let archive = v.appending(path: "archive", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+    let moved = archive.appending(path: "改名した定例.md"); try FileManager.default.moveItem(at: f, to: moved)
+    try await w.remove(Samples.manifest.id)
+    #expect(!FileManager.default.fileExists(atPath: moved.path)); #expect(await w.record(for: Samples.manifest.id) == nil)
+}
+@Test func removeWithoutRecordDeletesEveryCopy() async throws {
+    let v = try TemporaryDirectory.make(); let f = try url(await VaultWriter(outputFolder: v, paths: AppPaths(root: try TemporaryDirectory.make())).write(doc()))
+    let copy = v.appending(path: "copy.md"); try FileManager.default.copyItem(at: f, to: copy)
+    try await VaultWriter(outputFolder: v, paths: AppPaths(root: try TemporaryDirectory.make())).remove(Samples.manifest.id)
+    #expect(!FileManager.default.fileExists(atPath: f.path)); #expect(!FileManager.default.fileExists(atPath: copy.path))
+}

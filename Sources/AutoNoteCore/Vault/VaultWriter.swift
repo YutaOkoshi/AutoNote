@@ -77,9 +77,9 @@ public actor VaultWriter {
 
     public func remove(_ id: MeetingID) throws {
         let fm = FileManager.default
-        if let rec = record(for: id) {
-            let file = outputFolder.appending(path: rec.relativePath)
-            if fm.fileExists(atPath: file.path) { try fm.removeItem(at: file) }
+        // The recorded file, or (when it was moved/renamed in Obsidian, or no record exists) every file carrying the id.
+        if let rec = record(for: id), case let file = outputFolder.appending(path: rec.relativePath), fm.fileExists(atPath: file.path) {
+            try fm.removeItem(at: file)
         } else {
             for file in try locateAll(id) { try fm.removeItem(at: file) }
         }
