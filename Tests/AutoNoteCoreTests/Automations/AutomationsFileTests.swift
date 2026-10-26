@@ -66,6 +66,7 @@ private func mode(of url: URL) throws -> Int {
     func writableByOthersDisablesAll(mode: Int) throws {
         let r = AutomationsFile(url: try write(specExample, mode: mode)).load()
         #expect(r.disabledByPermission && r.items.count == 2 && r.items.allSatisfy { !$0.isRunnable })
+        #expect(r.items.allSatisfy { $0.problem == r.warnings.first })
         #expect(r.warnings == ["automations.json が自分以外から書き込める権限になっているため、Automations を無効にしました（chmod 600 で直せます）"])
     }
 
@@ -76,16 +77,68 @@ private func mode(of url: URL) throws -> Int {
         #expect(r.warnings.first?.hasPrefix("automations.json を読めません") == true)
     }
 
-    @Test func unknownTriggerMarksOnlyThatEntry() throws {
+    @Test func unknownTriggerIsWarnedNotListed() throws {
         let json = """
         [{"name":"bad","enabled":true,"on":"meeting_ended","command":"true"},
          {"name":"good","enabled":true,"on":"transcript_only","command":"true"}]
         """
         let r = AutomationsFile(url: try write(json, mode: 0o600)).load()
-        #expect(r.items.count == 2)
-        #expect(!r.items[0].isRunnable)
-        #expect(r.items[0].problem == "きっかけ meeting_ended は使えません")
-        #expect(r.items[1].isRunnable && r.items[1].problem == nil)
+        #expect(r.items.map(\.definition.name) == ["good"])
+        #expect(r.items[0].isRunnable && r.items[0].problem == nil)
+        #expect(r.warnings == ["entries[0]: きっかけ meeting_ended は使えません"])
+    }
+
+    @Test func missingNameIsWarnedNotListed() throws {
+        let json = #"[{"enabled":true,"on":"minutes_generated","command":"true"}]"#
+        let r = AutomationsFile(url: try write(json, mode: 0o600)).load()
+        #expect(r.items.isEmpty)
+        #expect(r.warnings == ["entries[0]: name がありません"])
+    }
+
+    @Test func nonObjectIsWarnedNotListed() throws {
+        let json = #"[{"name":"ok","on":"minutes_generated","command":"true"}, 42]"#
+        let r = AutomationsFile(url: try write(json, mode: 0o600)).load()
+        #expect(r.items.map(\.definition.name) == ["ok"])
+        #expect(r.warnings == ["entries[1]: オブジェクトではありません"])
+    }
+
+    @Test func nonBoolEnabledAndNonNumberTimeoutAreWarned() throws {
+        let json = """
+        [{"name":"a","enabled":"false","on":"minutes_generated","command":"true"},
+         {"name":"b","on":"minutes_generated","command":"true","timeout_sec":"9"}]
+        """
+        let r = AutomationsFile(url: try write(json, mode: 0o600)).load()
+        #expect(r.items.isEmpty)
+        #expect(r.warnings.count == 2)
+    }
+
+    @Test func brokenEntriesSurviveSave() throws {
+        let json = """
+        [{"name":"bad","enabled":true,"on":"meeting_ended","command":"rm -rf x"},
+         {"name":"good","enabled":true,"on":"transcript_only","command":"true"}]
+        """
+        let file = AutomationsFile(url: try write(json, mode: 0o600))
+        let first = file.load()
+        try file.save(first.items.map(\.definition))
+        let text = try String(contentsOf: file.url, encoding: .utf8)
+        #expect(text.contains("meeting_ended") && text.contains("rm -rf x"))
+        #expect(!text.contains("minutes_generated"))
+        let second = file.load()
+        // Broken entries are appended after the valid ones, so only the index moves.
+        #expect(first.warnings == ["entries[0]: きっかけ meeting_ended は使えません"])
+        #expect(second.warnings == ["entries[1]: きっかけ meeting_ended は使えません"])
+        #expect(second.items == first.items)
+    }
+
+    @Test func importReplacingKeepsEveryEntry() throws {
+        let json = #"[{"name":"bad","on":"nope","command":"true"},{"name":"g","on":"minutes_generated","command":"true"}]"#
+        let src = try write(json, mode: 0o644, name: "src.json")
+        let file = AutomationsFile(url: try tempDir().appendingPathComponent("automations.json"))
+        let r = try file.importReplacing(from: src)
+        #expect(try Data(contentsOf: file.url) == Data(contentsOf: src))
+        #expect(r.items.map(\.definition.name) == ["g"])
+        #expect(r.warnings == ["entries[0]: きっかけ nope は使えません"])
+        #expect(try mode(of: file.url) == 0o600)
     }
 
     @Test func duplicateNameMarksSecond() throws {

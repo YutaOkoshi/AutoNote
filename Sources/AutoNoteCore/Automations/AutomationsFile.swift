@@ -12,26 +12,40 @@ public struct AutomationsFile: Sendable {
 
     public func load() -> AutomationsLoadResult {
         guard FileManager.default.fileExists(atPath: url.path) else { return AutomationsLoadResult() }
-        let data: Data
-        do { data = try Data(contentsOf: url) } catch {
-            return AutomationsLoadResult(warnings: ["automations.json を読めません（\(error.localizedDescription)）"])
-        }
-        let parsed: [(item: LoadedAutomation, decoded: Bool)]
-        do { parsed = try Self.parse(data) } catch let f as ParseFailure {
+        let parsed: Parsed
+        do { parsed = try Self.parse(try Data(contentsOf: url)) } catch let f as ParseFailure {
             return AutomationsLoadResult(warnings: ["automations.json を読めません（\(f.message)）"])
         } catch {
             return AutomationsLoadResult(warnings: ["automations.json を読めません（\(error.localizedDescription)）"])
         }
-        var items = parsed.map(\.item)
+        var warnings = parsed.broken.map { "entries[\($0.index)]: \($0.reason)" }
+        var items = parsed.items
+        var disabled = false
         if !hasSafePermissions() {
-            for i in items.indices { items[i].isRunnable = false }
-            return AutomationsLoadResult(items: items, warnings: [Self.permissionWarning], disabledByPermission: true)
+            disabled = true
+            warnings.insert(Self.permissionWarning, at: 0)
+            for i in items.indices {
+                items[i].isRunnable = false
+                items[i].problem = Self.permissionWarning
+            }
         }
-        return AutomationsLoadResult(items: items)
+        return AutomationsLoadResult(items: items, warnings: warnings, disabledByPermission: disabled)
     }
 
+    /// Writes `defs` followed by the entries of the current file that cannot be decoded, verbatim, so a
+    /// load-edit-save cycle never rewrites or drops a broken entry.
     public func save(_ defs: [AutomationDefinition]) throws {
-        let data = try AutoNoteJSON.encoder().encode(defs) + Data("\n".utf8)
+        var array = try JSONSerialization.jsonObject(with: try AutoNoteJSON.encoder().encode(defs)) as? [Any] ?? []
+        if FileManager.default.fileExists(atPath: url.path),
+           let current = try? Self.parse(try Data(contentsOf: url)) {
+            array.append(contentsOf: current.broken.map(\.raw))
+        }
+        let data = try JSONSerialization.data(withJSONObject: array, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+            + Data("\n".utf8)
+        try writeAtomically(data)
+    }
+
+    private func writeAtomically(_ data: Data) throws {
         let dir = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let tmp = dir.appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
@@ -54,10 +68,11 @@ public struct AutomationsFile: Sendable {
         try data.write(to: dest, options: .atomic)
     }
 
-    /// Validates `source` first (throws on broken JSON, file untouched), then replaces this file with its entries.
+    /// Validates that `source` is a JSON array (throws otherwise, file untouched), then replaces this file with its bytes verbatim.
     public func importReplacing(from source: URL) throws -> AutomationsLoadResult {
-        let parsed = try Self.parse(try Data(contentsOf: source))
-        try save(parsed.filter(\.decoded).map(\.item.definition))
+        let data = try Data(contentsOf: source)
+        _ = try Self.parse(data)
+        try writeAtomically(data)
         return load()
     }
 
@@ -67,50 +82,51 @@ public struct AutomationsFile: Sendable {
         return st.st_mode & (S_IWGRP | S_IWOTH) == 0 && st.st_uid == getuid()
     }
 
-    /// `decoded == false` means the entry had no usable name/trigger, so only a placeholder exists.
-    private static func parse(_ data: Data) throws -> [(item: LoadedAutomation, decoded: Bool)] {
+    private struct Parsed {
+        var items: [LoadedAutomation] = []
+        var broken: [(index: Int, raw: Any, reason: String)] = []
+    }
+
+    private static func isBool(_ v: Any) -> Bool {
+        guard let n = v as? NSNumber else { return false }
+        return CFGetTypeID(n) == CFBooleanGetTypeID()
+    }
+
+    private static func parse(_ data: Data) throws -> Parsed {
         let root: Any
         do { root = try JSONSerialization.jsonObject(with: data) } catch {
             throw ParseFailure(message: "JSON の形式が正しくありません")
         }
         guard let array = root as? [Any] else { throw ParseFailure(message: "最上位が配列ではありません") }
+        var out = Parsed()
         var seen = Set<String>()
-        var out: [(LoadedAutomation, Bool)] = []
         for (index, element) in array.enumerated() {
-            let placeholder = AutomationDefinition(name: "", enabled: false, on: .minutesGenerated, command: "")
-            guard let dict = element as? [String: Any] else {
-                out.append((LoadedAutomation(definition: placeholder, isRunnable: false, problem: "\(index + 1) 件目がオブジェクトではありません"), false))
-                continue
+            func reject(_ reason: String) { out.broken.append((index, element, reason)) }
+            guard let dict = element as? [String: Any] else { reject("オブジェクトではありません"); continue }
+            guard let name = dict["name"] as? String, !name.trimmingCharacters(in: .whitespaces).isEmpty else { reject("name がありません"); continue }
+            guard let command = dict["command"] as? String else { reject("command がありません"); continue }
+            guard let rawTrigger = dict["on"] as? String else { reject("on がありません"); continue }
+            guard let trigger = AutomationTrigger(rawValue: rawTrigger) else { reject("きっかけ \(rawTrigger) は使えません"); continue }
+            var enabled = true
+            if let e = dict["enabled"] {
+                guard isBool(e), let b = e as? Bool else { reject("enabled は true か false にしてください"); continue }
+                enabled = b
             }
-            let name = dict["name"] as? String
-            let rawTrigger = dict["on"] as? String
-            var base = placeholder
-            base.name = name ?? ""
-            base.command = dict["command"] as? String ?? ""
-            base.enabled = dict["enabled"] as? Bool ?? true
-            if let t = dict["timeout_sec"] { base.timeoutSec = (t as? Int) ?? 0 } else { base.timeoutSec = AutomationDefinition.defaultTimeoutSec }
-            guard let name, !name.isEmpty else {
-                out.append((LoadedAutomation(definition: base, isRunnable: false, problem: "\(index + 1) 件目に name がありません"), false))
-                continue
+            var timeout = AutomationDefinition.defaultTimeoutSec
+            if let t = dict["timeout_sec"] {
+                guard let n = t as? NSNumber, !isBool(t), n.doubleValue == Double(n.intValue) else { reject("timeout_sec は整数にしてください"); continue }
+                timeout = n.intValue
             }
-            guard let rawTrigger else {
-                out.append((LoadedAutomation(definition: base, isRunnable: false, problem: "きっかけ（on）がありません"), false))
-                continue
-            }
-            guard let trigger = AutomationTrigger(rawValue: rawTrigger) else {
-                out.append((LoadedAutomation(definition: base, isRunnable: false, problem: "きっかけ \(rawTrigger) は使えません"), false))
-                continue
-            }
-            base.on = trigger
+            let def = AutomationDefinition(name: name, enabled: enabled, on: trigger, command: command, timeoutSec: timeout)
             var problem: String?
             if !seen.insert(name).inserted {
                 problem = "同じ名前の Automation が先にあります"
-            } else if base.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            } else if command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 problem = "command が空です"
-            } else if base.timeoutSec < 1 {
+            } else if timeout < 1 {
                 problem = "timeout_sec は 1 以上にしてください"
             }
-            out.append((LoadedAutomation(definition: base, isRunnable: problem == nil && base.enabled, problem: problem), true))
+            out.items.append(LoadedAutomation(definition: def, isRunnable: problem == nil && enabled, problem: problem))
         }
         return out
     }
