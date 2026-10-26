@@ -21,7 +21,7 @@ import AutoNoteTestSupport
                  "**[00:00:40] 自分**: はい。 ^t00-00-40-2", "**[00:02:55] 相手**: 店頭の販促物はこちらで用意します。 ^t00-02-55"] { #expect(m1.contains(line + "\n"), "\(line)") }
     #expect(m1.components(separatedBy: "**: ").count - 1 == 12)   // 15 発話から回り込み 2 とフィラーだけ 1 を除く
     let m2 = try String(contentsOf: dir.appending(path: "2026/2026-10-25_093015.md"), encoding: .utf8)
-    for line in ["title: 2026-10-25 09:30 の会議", "status: transcript_only", "device: \"import\"", "**[00:00:03] 不明**: 取り込んだ録音の確認です。 ^t00-00-03",
+    for line in [#"title: "2026-10-25 09:30 の会議""#, "status: transcript_only", "device: \"import\"", "**[00:00:03] 不明**: 取り込んだ録音の確認です。 ^t00-00-03",
                  "**[00:00:30] 不明**: this part is in English. ^t00-00-30"] { #expect(m2.contains(line + "\n"), "\(line)") }
     #expect(try String(contentsOf: dir.appending(path: "_index.md"), encoding: .utf8).contains(
         "| 2026-10-25 | 09:30 | 2026-10-25 09:30 の会議 | 2 分 | （議事録未生成） | [[2026/2026-10-25_093015]] |\n| 2026-10-24 | 14:00 | ルミナ茶発売準備会議 | 5 分 | ルミナ茶の発売日を来週金曜に確定した。 | [[2026/2026-10-24_1400_ルミナ茶発売準備会議]] |\n"))

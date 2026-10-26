@@ -27,3 +27,18 @@ import AutoNoteTestSupport
     #expect(FrontmatterTemplate(text: "---\r\ntitle: {{title}}\r\nstatus: {{status}}\rautonote_id: {{autonote_id}}\r\n---\r\n").render(values) == lf)
     #expect(!lf.contains("\r"))
 }
+
+@Test func freeTextValuesAreQuotedUnlessPlain() {
+    for t in ["議題:", "a\t#b", "123", "2026-10-24", "-x", ".x", "Null", "Q&A", "a: b"] {
+        #expect(FrontmatterTemplate.yamlScalar(t, freeText: true) == "\"" + t.replacingOccurrences(of: "\"", with: "\\\"") + "\"", "\(t)")
+    }
+    for t in ["プロジェクト定例", "Kestrel Headset 7", "whisper.cpp large-v3-turbo", "定例_v2"] { #expect(FrontmatterTemplate.yamlScalar(t, freeText: true) == t, "\(t)") }
+    #expect(FrontmatterTemplate.yamlScalar("2026-10-24") == "2026-10-24")   // structured rule unchanged
+    let t = FrontmatterTemplate(text: "title: {{title}}\ndevice: {{device}}\nnote: {{custom}}\ndate: {{date}}\nduration_min: {{duration_min}}\nautonote_id: {{autonote_id}}\nstatus: {{status}}")
+    let out = t.render(["title": "議題:", "device": "123", "custom": "a\t#b", "date": "2026-10-24", "duration_min": "5", "autonote_id": "20261024-1400-a1b2", "status": "recorded"])
+    for line in [#"title: "議題:""#, #"device: "123""#, "note: \"a\t#b\"", "date: 2026-10-24", "duration_min: 5", "autonote_id: 20261024-1400-a1b2", "status: recorded"] {
+        #expect(out.contains(line + "\n"), "\(line)")
+    }
+    let fallback = FrontmatterTemplate(text: "x: 1").render(["title": "123", "date": "2026-10-24", "status": "recorded", "autonote_id": "20261024-1400-a1b2"])
+    #expect(fallback.contains(#"title: "123""# + "\n")); #expect(fallback.contains("date: 2026-10-24\n")); #expect(fallback.contains("autonote_id: 20261024-1400-a1b2\n"))
+}

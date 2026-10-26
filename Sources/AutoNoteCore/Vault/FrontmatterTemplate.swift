@@ -33,7 +33,7 @@ public struct FrontmatterTemplate: Sendable {
             if let m = line.prefixMatch(of: /([A-Za-z0-9_]+):/) { present.insert(String(m.output.1)) }
         }
         for key in Self.requiredKeys where !present.contains(key) {
-            body.append("\(key): \(Self.yamlScalar(values[key] ?? ""))")
+            body.append("\(key): \(Self.yamlScalar(values[key] ?? "", freeText: !Self.structuredKeys.contains(key)))")
         }
         return "---\n" + body.joined(separator: "\n") + "\n---\n"
     }
@@ -55,10 +55,23 @@ public struct FrontmatterTemplate: Sendable {
         ]
     }
 
-    public static func yamlScalar(_ value: String) -> String {
+    /// App-generated variables with fixed, YAML-safe formats; they keep their YAML types (date, number) unquoted.
+    /// Every other variable (title, device, transcript_engine, custom names) is free text.
+    public static let structuredKeys: Set<String> = ["date", "start", "end", "duration_min", "status", "autonote_id", "autonote", "language"]
+
+    public static func yamlScalar(_ value: String) -> String { yamlScalar(value, freeText: false) }
+
+    /// `freeText`: also quote unless the value is only letters, digits, space, `_`, `-`, `.`, and does not start
+    /// with an ASCII digit, `-` or `.` (keeps `議題:`, `a\t#b`, `123`, `2026-10-24` as strings).
+    public static func yamlScalar(_ value: String, freeText: Bool) -> String {
         let v = singleLine(value)
-        if needsQuoting(v) { return "\"" + escape(v) + "\"" }
+        if needsQuoting(v) || (freeText && !isPlainText(v)) { return "\"" + escape(v) + "\"" }
         return v
+    }
+
+    private static func isPlainText(_ v: String) -> Bool {
+        guard let f = v.first, !(f.isASCII && f.isNumber), f != "-", f != "." else { return false }
+        return v.allSatisfy { $0.isLetter || $0.isNumber || $0 == " " || $0 == "_" || $0 == "-" || $0 == "." }
     }
 
     private static func singleLine(_ s: String) -> String {
@@ -88,7 +101,8 @@ public struct FrontmatterTemplate: Sendable {
             let rest = line[i...]
             if rest.hasPrefix("{{"), let m = rest.prefixMatch(of: /\{\{([A-Za-z0-9_]+)\}\}/) {
                 let value = values[String(m.output.1)] ?? ""
-                out += inQuote ? escape(singleLine(value)) : yamlScalar(value)
+                let name = String(m.output.1)
+                out += inQuote ? escape(singleLine(value)) : yamlScalar(value, freeText: !structuredKeys.contains(name))
                 i = m.range.upperBound
                 continue
             }
