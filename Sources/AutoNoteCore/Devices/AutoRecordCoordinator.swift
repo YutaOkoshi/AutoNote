@@ -45,6 +45,11 @@ public actor AutoRecordCoordinator {
     /// The language of the session in progress.
     private var sessionLanguage: Language?
 
+    /// Devices asked about with `deviceSeenFirstTime`, by UID, so an answer given after unplugging can still register.
+    private var askedToRegister: [String: DeviceIdentity] = [:]
+    /// Devices with a `deviceAlreadyConnected` notice up, by UID.
+    private var alreadyConnected: [String: DeviceRef] = [:]
+
     private var subscribers: [UUID: AsyncStream<RecorderSnapshot>.Continuation] = [:]
     private var lastEmitted: RecorderSnapshot?
 
@@ -93,16 +98,33 @@ public actor AutoRecordCoordinator {
             switch event {
             case .added(let device):
                 await registry.reload()
+                let match = await registry.match(device)
                 let entryID: String?
-                if case .registered(let id, _) = await registry.match(device) { entryID = id } else { entryID = nil }
+                if case .registered(let id, _) = match { entryID = id } else { entryID = nil }
                 // Unregistered devices are passed too: a returning origin in grace is recognized by its UID.
                 await applyInGate(.deviceConnected(device, autoStartEntryID: entryID))
-                // Task 9: registration notice for `.unknown` / `.reRegistrationSuggested`.
+                switch match {
+                case .unknown, .reRegistrationSuggested:   // asked whatever the state (§11.3)
+                    askedToRegister[device.deviceUID] = device
+                    await notifier.post(.deviceSeenFirstTime(device.deviceRef))
+                case .registered, .ignored:
+                    break
+                }
             case .removed(let device):
+                if let ref = alreadyConnected.removeValue(forKey: device.deviceUID) {
+                    await notifier.withdraw(id: UserNotice.deviceAlreadyConnected(ref).id)
+                }
                 await applyInGate(.deviceDisconnected(device))
-            case .present(_, let reason):
-                // Task 9: `.present` posts deviceAlreadyConnected for registered devices; never a countdown.
-                Self.logger.debug("present (\(String(describing: reason), privacy: .public)) ignored")
+            case .present(let device, let reason):
+                // Y5: only a registered device while idle gets the notice; never a countdown (§11.1). Unregistered
+                // ones (the built-in microphone every launch) get nothing.
+                await registry.reload()
+                guard case .registered = await registry.match(device), machine.state == .idle else {
+                    Self.logger.debug("present (\(String(describing: reason), privacy: .public)) without notice")
+                    break
+                }
+                alreadyConnected[device.deviceUID] = device.deviceRef
+                await notifier.post(.deviceAlreadyConnected(device.deviceRef))
             }
             handledEvents += 1
         }
@@ -125,8 +147,11 @@ public actor AutoRecordCoordinator {
     public func cancelCountdown() async { await apply(.cancelCountdown) }
 
     public func bookmark(note: String?) async throws -> Bookmark {
-        guard isInSession else { throw AutoRecordError.notRecording }
-        return try await recorder.bookmark(note: note)
+        let result = await serialized { () async -> Result<Bookmark, any Error> in
+            guard isInSession else { return .failure(AutoRecordError.notRecording) }
+            do { return .success(try await recorder.bookmark(note: note)) } catch { return .failure(error) }
+        }
+        return try result.get()
     }
 
     public func setLanguage(_ language: Language) async {
@@ -142,9 +167,62 @@ public actor AutoRecordCoordinator {
         }
     }
 
-    /// Notice buttons. Task 9 fills this in.
+    /// Notice buttons. Only the device cases are handled here; the rest belong to plan 06.
     public func handle(_ action: UserNoticeAction) async {
-        // Task 9
+        await serialized {
+            switch action {
+            case .cancelCountdown:
+                await applyInGate(.cancelCountdown)
+            case .startNow(let ref):
+                await startNow(ref)
+            case .registerDevice(let ref, let answer):
+                await answerRegistration(ref, answer)
+            case .openMeeting, .retry, .resolveOverwrite, .transcribeTooShort, .discardTooShort, .recoverInterrupted,
+                 .discardInterrupted, .openPrivacySettings:
+                break
+            }
+        }
+    }
+
+    /// The caller holds the gate. Starts on a still-connected registered device without a countdown.
+    private func startNow(_ ref: DeviceRef) async {
+        guard let device = await monitor.connected().first(where: { $0.deviceUID == ref.uid }) else {
+            Self.logger.info("start now: device no longer connected")
+            return
+        }
+        await registry.reload()
+        guard case .registered(let entryID, _) = await registry.match(device) else {
+            Self.logger.info("start now: device is not registered")
+            return
+        }
+        await applyInGate(.startForConnectedDevice(device, entryID: entryID))
+    }
+
+    /// The caller holds the gate. `.no` stores nothing, so the next connection asks again.
+    private func answerRegistration(_ ref: DeviceRef, _ answer: RegisterAnswer) async {
+        let connected = await monitor.connected().first(where: { $0.deviceUID == ref.uid })
+        let asked = askedToRegister.removeValue(forKey: ref.uid)
+        await notifier.withdraw(id: UserNotice.deviceSeenFirstTime(ref).id)
+        guard let device = connected ?? asked else {
+            Self.logger.info("registration answer for an unknown device ignored")
+            return
+        }
+        await registry.reload()
+        do {
+            switch answer {
+            case .yes:
+                let modelMatch = await config().startOnModelMatch
+                let entry = try await registry.register(device, startOnModelMatchDefault: modelMatch)
+                // Still plugged in: the table decides (idle counts down, anything else ignores it).
+                if connected != nil { await applyInGate(.deviceConnected(device, autoStartEntryID: entry.id)) }
+            case .no:
+                break
+            case .never:
+                try await registry.ignore(device)
+            }
+        } catch {
+            Self.log("register", error)
+        }
     }
 
     // MARK: Snapshots
@@ -158,15 +236,18 @@ public actor AutoRecordCoordinator {
             language: currentLanguage, banner: banner)
     }
 
-    /// A new subscription per call; it first receives the current value.
-    public func snapshots() -> AsyncStream<RecorderSnapshot> {
-        emitIfChanged()   // existing subscribers catch up first, so `lastEmitted` is the value sent below
-        let (stream, continuation) = AsyncStream<RecorderSnapshot>.makeStream()
-        continuation.yield(lastEmitted ?? current())
-        let id = UUID()
-        subscribers[id] = continuation
-        continuation.onTermination = { [weak self] _ in Task { await self?.unsubscribe(id) } }
-        return stream
+    /// A new subscription per call; it first receives the current value. Subscribing passes the gate, so it never
+    /// observes (or publishes) the middle of an `apply`.
+    public func snapshots() async -> AsyncStream<RecorderSnapshot> {
+        await serialized {
+            emitIfChanged()   // existing subscribers catch up first, so `lastEmitted` is the value sent below
+            let (stream, continuation) = AsyncStream<RecorderSnapshot>.makeStream()
+            continuation.yield(lastEmitted ?? current())
+            let id = UUID()
+            subscribers[id] = continuation
+            continuation.onTermination = { [weak self] _ in Task { await self?.unsubscribe(id) } }
+            return stream
+        }
     }
 
     private func unsubscribe(_ id: UUID) { subscribers[id] = nil }
@@ -223,6 +304,7 @@ public actor AutoRecordCoordinator {
                 "\(from.rawValue, privacy: .public) -> \(to.rawValue, privacy: .public) on \(Self.name(of: event), privacy: .public)")
         }
         if to == .idle && from != .idle && from != .countdown { endSession() }
+        if from == .idle && to != .idle { await withdrawAlreadyConnected() }
         // A grace that runs out is the only stop caused by the device; the rest use the caller's reason.
         let reason: StopReason = if from == .grace, case .timerFired = event { .deviceGone } else { stopReason }
         var startError: (any Error)?
@@ -319,6 +401,13 @@ public actor AutoRecordCoordinator {
     private func cancelReattach() {
         reattachGeneration += 1
         reattachTask?.cancel(); reattachTask = nil
+    }
+
+    /// Leaving idle: "already connected, start?" no longer applies to any device.
+    private func withdrawAlreadyConnected() async {
+        let refs = alreadyConnected.values
+        alreadyConnected = [:]
+        for ref in refs { await notifier.withdraw(id: UserNotice.deviceAlreadyConnected(ref).id) }
     }
 
     /// A recording, pause or grace just went back to idle.

@@ -3,7 +3,8 @@ import Synchronization
 @testable import AutoNoteCore
 import AutoNoteTestSupport
 
-/// Shared fixture for the coordinator tests (Tasks 8 and 9): every dependency is a fake, `A` and `B` are registered.
+/// Shared fixture for the coordinator tests (Tasks 8 and 9): every dependency is a fake, `A` and `B` are registered,
+/// `U` is not.
 /// Time is the manual timer's clock: `now()` is `base + timer.now`.
 final class CoordinatorHarness: Sendable {
     struct WaitTimedOut: Error {}
@@ -13,6 +14,18 @@ final class CoordinatorHarness: Sendable {
     static let deviceA = DeviceIdentity(raw: .fixtureBluetoothInput)!
     /// A second registered device (USB).
     static let deviceB = DeviceIdentity(raw: .fixtureUSBInput(uid: "AppleUSBAudioEngine:Fict:Head:SERIAL-B:1"))!
+    /// An unregistered USB microphone (a different model and name from `B`, so nothing matches it).
+    static let rawU = RawAudioDevice(
+        audioObjectID: 119, name: "Fictional USB Mic", deviceUID: "AppleUSBAudioEngine:Fict:Mic:SERIAL-U:1",
+        modelUID: "Fictional Mic Co", transport: .usb, inputChannels: 1, outputChannels: 0)
+    static let deviceU = DeviceIdentity(raw: rawU)!
+    static let builtInMicrophone = DeviceIdentity(raw: .fixtureBuiltInMicrophone)!
+    /// The Mac the other-Mac entries are registered on.
+    static let otherMac = MacIdentity(id: "OTHER-FAKE-MAC-ID", name: "Fictional Other Mac")
+    /// A Bluetooth headset with `A`'s name but its own address, registered on `otherMac`.
+    static let otherMacHeadset = DeviceIdentity(
+        name: deviceA.name, deviceUID: "66-77-88-99-AA-BB:input", modelUID: "0 0", transport: .bluetooth,
+        inputChannels: 1, uidKind: .individual)
 
     let recorder = FakeRecordingControl()
     let notifier = FakeUserNotifier()
@@ -28,12 +41,17 @@ final class CoordinatorHarness: Sendable {
 
     var A: DeviceIdentity { Self.deviceA }
     var B: DeviceIdentity { Self.deviceB }
+    var U: DeviceIdentity { Self.deviceU }
 
-    /// `registered` devices are stored in the registry before the coordinator exists (it reloads on every `.added`).
+    /// `registered` devices are stored in the registry before the coordinator exists (it reloads on every `.added`);
+    /// `registeredOnOtherMac` ones are stored first, as if registered on `otherMac` over the same storage.
     init(config: AutoRecordConfig = AutoRecordConfig(countdownSeconds: 5, graceSeconds: 30, language: .ja,
                                                      startOnModelMatch: false),
-         registered: [DeviceIdentity] = [deviceA, deviceB]) async throws {
+         registered: [DeviceIdentity] = [deviceA, deviceB],
+         registeredOnOtherMac: [DeviceIdentity] = []) async throws {
         configBox = ConfigBox(config)
+        let other = DeviceRegistry(storage: storage, mac: FakeMacIdentity(Self.otherMac))
+        for device in registeredOnOtherMac { _ = try await other.register(device) }
         let mac = FakeMacIdentity()
         let seed = DeviceRegistry(storage: storage, mac: mac)
         for device in registered { _ = try await seed.register(device) }
@@ -69,13 +87,14 @@ final class CoordinatorHarness: Sendable {
 
     // MARK: Driving it through `run()` and the monitor
 
-    /// Starts `run()` with `initial` connected and returns once the monitor has its subscriber
-    /// (the built-in microphone is always present so `connected()` shows the subscription exists).
+    /// Starts `run()` with `initial` connected (auto-record candidates) and returns once the coordinator has handled
+    /// the `.present(_, .launch)` of each, the built-in microphone included (it is always present).
     func startRunning(initial: [RawAudioDevice] = []) async throws {
         hardware.setDevices([.fixtureBuiltInMicrophone] + initial)
         let coordinator = self.coordinator
         runTask.withLock { $0 = Task { await coordinator.run() } }
         try await waitUntil { await !monitor.connected().isEmpty }
+        try await waitUntil { await coordinator.handledEvents >= 1 + initial.count }
     }
 
     /// Cancels `run()` and waits for it to return.
