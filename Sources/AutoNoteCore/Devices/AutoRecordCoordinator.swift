@@ -9,6 +9,12 @@ public enum AutoRecordError: Error, Equatable, Sendable { case notRecording }
 /// gate, so one `apply` and all its effects finish before the next begins, even across the recorder's `await`s.
 /// A stop therefore always waits for a start in flight (Y4). The microphone reattach retries outside the gate
 /// (`reattachTask`); only its completion re-enters.
+///
+/// The gate is not re-entrant. Effects call `UserNotifier` (`post`/`withdraw`), `RecordingControl`
+/// (`start`/`stop`/`pause`/…) and the `config` closure while holding it, so those implementations must never
+/// await a coordinator API (`handle`, `stop`, `snapshots()`, …) from inside such a call: that waits on the gate
+/// it is running under and deadlocks silently. Plan 06's UI must dispatch notice actions and other callbacks as
+/// separate `Task`s.
 public actor AutoRecordCoordinator {
     private static let logger = Logger(subsystem: "com.yutaokoshi.autonote", category: "devices")
 
