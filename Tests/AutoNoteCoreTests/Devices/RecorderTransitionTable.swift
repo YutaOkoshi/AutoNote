@@ -16,6 +16,8 @@ enum RecorderTransitionTable {
         var state: RecorderState
         var trigger: RecordingTrigger?
         var origin: DeviceIdentity?
+        var originEntryID: String?
+        var pendingTimerToken: Int?
     }
 
     struct Cell: Sendable, CustomTestStringConvertible {
@@ -28,13 +30,13 @@ enum RecorderTransitionTable {
 
     static func snapshot(of config: Config) -> Snapshot {
         switch config {
-        case .I: return Snapshot(state: .idle, trigger: nil, origin: nil)
-        case .CD: return Snapshot(state: .countdown, trigger: nil, origin: deviceA)
-        case .RA: return Snapshot(state: .recording, trigger: .auto, origin: deviceA)
-        case .RM: return Snapshot(state: .recording, trigger: .manual, origin: nil)
-        case .PA: return Snapshot(state: .paused, trigger: .auto, origin: deviceA)
-        case .PM: return Snapshot(state: .paused, trigger: .manual, origin: nil)
-        case .GR, .GP: return Snapshot(state: .grace, trigger: .auto, origin: deviceA)
+        case .I: return Snapshot(state: .idle, trigger: nil, origin: nil, originEntryID: nil, pendingTimerToken: nil)
+        case .CD: return Snapshot(state: .countdown, trigger: nil, origin: deviceA, originEntryID: "eA", pendingTimerToken: 1)
+        case .RA: return Snapshot(state: .recording, trigger: .auto, origin: deviceA, originEntryID: "eA", pendingTimerToken: nil)
+        case .RM: return Snapshot(state: .recording, trigger: .manual, origin: nil, originEntryID: nil, pendingTimerToken: nil)
+        case .PA: return Snapshot(state: .paused, trigger: .auto, origin: deviceA, originEntryID: "eA", pendingTimerToken: nil)
+        case .PM: return Snapshot(state: .paused, trigger: .manual, origin: nil, originEntryID: nil, pendingTimerToken: nil)
+        case .GR, .GP: return Snapshot(state: .grace, trigger: .auto, origin: deviceA, originEntryID: "eA", pendingTimerToken: 2)
         }
     }
 
@@ -78,6 +80,7 @@ enum RecorderTransitionTable {
     private struct Change {
         var to: Config
         var origin: DeviceIdentity?? = .none   // .none = take the destination configuration's origin
+        var entryID: String? = nil             // overrides the destination's originEntryID when set
         var effects: [RecorderEffect]
     }
 
@@ -99,7 +102,7 @@ enum RecorderTransitionTable {
 
     private static let overrides: [Config: [Int: Change]] = [
         .I: [1: Change(to: .CD, effects: [N5A, T5]),
-             2: Change(to: .CD, origin: .some(deviceB), effects: [N5B, T5]),
+             2: Change(to: .CD, origin: .some(deviceB), entryID: "eB", effects: [N5B, T5]),
              9: Change(to: .RM, effects: [SM]),
              13: Change(to: .RA, effects: [SA])],
         .CD: [4: Change(to: .I, effects: [X, D]),
@@ -138,6 +141,7 @@ enum RecorderTransitionTable {
             }
             var to = snapshot(of: change.to)
             if let origin = change.origin { to.origin = origin }
+            if let entryID = change.entryID { to.originEntryID = entryID }
             return Cell(from: from, column: column, to: to, effects: change.effects)
         }
     }

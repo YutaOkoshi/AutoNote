@@ -13,6 +13,7 @@ func transition(_ cell: Table.Cell) {
     let (state, effects) = m.apply(Table.event(cell.column, for: m))
     #expect(state == cell.to.state); #expect(m.state == cell.to.state)
     #expect(m.trigger == cell.to.trigger); #expect(m.origin == cell.to.origin)
+    #expect(m.originEntryID == cell.to.originEntryID); #expect(m.pendingTimerToken == cell.to.pendingTimerToken)
     #expect(effects == cell.effects)
 }
 

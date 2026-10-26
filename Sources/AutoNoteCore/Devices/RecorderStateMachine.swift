@@ -7,10 +7,10 @@ public enum RecordingTrigger: String, Sendable { case auto, manual }
 public enum MicrophoneChoice: Equatable, Sendable { case device(DeviceIdentity), systemDefault }
 
 public struct AutoRecordConfig: Equatable, Sendable {
-    public var countdownSeconds: Int
-    public var graceSeconds: Int
-    public var language: Language
-    public var startOnModelMatch: Bool
+    public private(set) var countdownSeconds: Int
+    public private(set) var graceSeconds: Int
+    public private(set) var language: Language
+    public private(set) var startOnModelMatch: Bool
 
     /// Clamps countdown to 0...30 (§11.4) and grace to 5...300.
     public init(countdownSeconds: Int, graceSeconds: Int, language: Language, startOnModelMatch: Bool) {
@@ -132,7 +132,7 @@ public struct RecorderStateMachine: Sendable {
 
         case (.grace, .deviceConnected(let device, let entryID)) where isOrigin(device) || (entryID != nil && entryID == originEntryID):
             origin = device
-            pendingTimerToken = nil; state = graceFromPaused ? .paused : .recording
+            pendingTimerToken = nil; state = graceFromPaused ? .paused : .recording; graceFromPaused = false
             return [.cancelTimer, .clearGraceBanner, .reattachMicrophone(device)]
         case (.grace, .timerFired(let token)) where token == pendingTimerToken:
             endSession(); return [.clearGraceBanner, .stopRecording]
