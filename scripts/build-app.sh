@@ -30,6 +30,25 @@ cp "${BIN_DIR}/AutoNoteApp" "${APP}/Contents/MacOS/AutoNoteApp"
 cp "${BIN_DIR}/autonote" "${APP}/Contents/MacOS/autonote"
 cp "${ROOT}/Resources/Info.plist" "${APP}/Contents/Info.plist"
 
+# whisper.cpp の XCFramework（macos-arm64_x86_64 スライス）を同梱し、実行ファイルから @rpath で引けるようにする
+WHISPER_FW="${BIN_DIR}/whisper.framework"
+if [[ ! -d "${WHISPER_FW}" ]]; then
+    WHISPER_FW="$(find "${ROOT}/.build/artifacts" -name whisper.framework -path '*macos-arm64_x86_64*' -print -quit)"
+fi
+if [[ -z "${WHISPER_FW}" || ! -d "${WHISPER_FW}" ]]; then
+    echo "whisper.framework が見つからない" >&2
+    exit 1
+fi
+mkdir -p "${APP}/Contents/Frameworks"
+ditto "${WHISPER_FW}" "${APP}/Contents/Frameworks/whisper.framework"
+for exe in "${APP}/Contents/MacOS/AutoNoteApp" "${APP}/Contents/MacOS/autonote"; do
+    if ! otool -l "${exe}" | grep -q "path @executable_path/../Frameworks "; then
+        install_name_tool -add_rpath @executable_path/../Frameworks "${exe}"
+    fi
+done
+
+# 中身から外へ順に署名する（--deep は使わない）。フレームワークを先に同じ証明書で署名する
+codesign --force --sign "${CERT_NAME}" --timestamp=none "${APP}/Contents/Frameworks/whisper.framework"
 # 同梱 CLI はリンカのアドホック署名のままだとバンドル署名の対象外になるので、先に同じ証明書で署名する
 codesign --force --sign "${CERT_NAME}" --identifier "${BUNDLE_ID}.cli" --timestamp=none "${APP}/Contents/MacOS/autonote"
 codesign --force --sign "${CERT_NAME}" --identifier "${BUNDLE_ID}" --timestamp=none "${APP}"
