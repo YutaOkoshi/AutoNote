@@ -98,8 +98,7 @@ private func t(_ s: Double) -> TimelineTime { TimelineTime(seconds: s) }
         #expect(m.silenceWarning)
         #expect(abs(try h.duration(m, .mic) - 2) < 0.05)
         #expect(try h.samples(m, .mic).contains(1000))
-        var received: [RecordingEvent] = []
-        for await e in events { received.append(e) }
+        let received = await eventsUntilStopped(events)
         #expect(received.contains { if case .sourceFailed(.system, _) = $0 { true } else { false } })
         #expect(received.first == .started(id) && received.last == .stopped(m, .manual))
     }
@@ -139,8 +138,7 @@ private func t(_ s: Double) -> TimelineTime { TimelineTime(seconds: s) }
         #expect(samples[(5 * sr)..<(15 * sr)].allSatisfy { $0 == 0 })
         #expect(samples[(15 * sr)..<(20 * sr)].allSatisfy { $0 == 1000 })
         #expect(h.factory.microphoneUIDs == [nil, "NEW:input"])
-        var received: [RecordingEvent] = []
-        for await e in events { received.append(e) }
+        let received = await eventsUntilStopped(events)
         #expect(received.contains(.microphoneDetached(t(5))))
         #expect(received.contains(.microphoneAttached(t(15), device: nil)))
     }
@@ -214,7 +212,11 @@ private func t(_ s: Double) -> TimelineTime { TimelineTime(seconds: s) }
         #expect(await h.session.subscriberCount == 1)
         let m = try await h.session.stop()
         #expect(await it1.next() == .stopped(m, .manual))
-        #expect(await it1.next() == nil)
+        // Event streams outlive a meeting: the surviving subscriber also sees the next one.
+        let id2 = try await h.session.start(.init(language: .en))
+        #expect(id2 != id)
+        #expect(await it1.next() == .started(id2))
+        _ = try await h.session.stop()
     }
 
     @Test func eventsBeforeSubscriptionAreNotReplayed() async throws {
@@ -222,8 +224,7 @@ private func t(_ s: Double) -> TimelineTime { TimelineTime(seconds: s) }
         let late = await h.session.events()
         h.clock.advance(1); try await h.session.pause()
         _ = try await h.session.stop()
-        var received: [RecordingEvent] = []
-        for await e in late { received.append(e) }
+        let received = await eventsUntilStopped(late)
         #expect(received.first == .paused(t(1)) && received.count == 2)
     }
 
@@ -236,8 +237,9 @@ private func t(_ s: Double) -> TimelineTime { TimelineTime(seconds: s) }
         #expect(try await h.manifests.load(id).silenceWarning)
         await h.session.tick()
         _ = try await h.session.stop()
-        var warnings: [SilenceWarning] = []
-        for await e in events { if case .silenceWarning(let w) = e { warnings.append(w) } }
+        let warnings = await eventsUntilStopped(events).compactMap { e -> SilenceWarning? in
+            if case .silenceWarning(let w) = e { w } else { nil }
+        }
         #expect(warnings == [SilenceWarning(track: .mic, message: SilenceMonitor.micMessage)])
     }
 
@@ -255,10 +257,54 @@ private func t(_ s: Double) -> TimelineTime { TimelineTime(seconds: s) }
 
     @Test func waitUntilIdleReturnsWhenNothingQueued() async throws {
         let h = try await SessionHarness.make()
+        let session = h.session
+        try await withTimeout(.seconds(2)) { await session.waitUntilIdle() }
+        #expect(await session.state == .idle)
+        let id = try await session.start(.init(language: .ja))
+        try await withTimeout(.seconds(2)) { await session.waitUntilIdle() }
+        #expect(await session.state == .recording(id))
+        #expect(await session.statistics()[.mic]?.chunks == 0)
+        _ = try await session.stop()
+    }
+
+    @Test func tickerRaisesSilenceWarningAndStopStillReturns() async throws {
+        let h = try await SessionHarness.make(tickInterval: .milliseconds(20))
+        let session = h.session
+        let events = await session.events()
+        _ = try await session.start(.init(language: .ja))
+        await h.mic.emit(AudioFixtures.zeros(start: 0, seconds: 15))
+        h.clock.advance(15)
+        try await Task.sleep(for: .milliseconds(100))
+        // Only the real ticker can have produced the warning: `tick()` is never called here.
+        let warning = try await withTimeout(.seconds(2)) { () -> SilenceWarning? in
+            for await e in events { if case .silenceWarning(let w) = e { return w } }
+            return nil
+        }
+        #expect(warning?.track == .mic)
+        let m = try await withTimeout(.seconds(2)) { try await session.stop() }
+        #expect(m.silenceWarning && m.status == .tooShort)
+    }
+
+    @Test func writerFailureIsReportedAndResumeThrows() async throws {
+        let h = try await SessionHarness.make()
+        let events = await h.session.events()
+        let id = try await h.session.start(.init(language: .ja))
+        h.clock.advance(1); try await h.session.pause()
+        let tracks = h.paths.tracksDirectory(id)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: tracks.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tracks.path) }
+        h.clock.advance(1)
+        await #expect(throws: (any Error).self) { try await h.session.resume() }   // new segments cannot be created
+        #expect(await h.session.state == .recording(id))
+        #expect(try await h.manifests.load(id).silenceWarning)
+        await h.mic.emit(AudioFixtures.tone(start: 2, seconds: 1))                 // dropped: the mic writer failed
         await h.session.waitUntilIdle()
-        _ = try await h.session.start(.init(language: .ja))
-        await h.session.waitUntilIdle()
-        _ = try await h.session.stop()
+        #expect(await h.session.statistics()[.mic]?.chunks == 0)
+        h.clock.advance(1); _ = try await h.session.stop()
+        let failed = await eventsUntilStopped(events).compactMap { e -> Track? in
+            if case .sourceFailed(let track, _) = e { track } else { nil }
+        }
+        #expect(failed.filter { $0 == .mic }.count == 1)
     }
 
     @Test func liveUsesVoiceProcessingSetting() async throws {

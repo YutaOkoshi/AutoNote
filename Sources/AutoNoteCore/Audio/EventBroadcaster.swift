@@ -20,12 +20,6 @@ final class EventBroadcaster<Element: Sendable>: Sendable {
         for continuation in subscribers.withLock({ Array($0.values) }) { continuation.yield(value) }
     }
 
-    /// Ends every current stream; later subscribers start fresh.
-    func finishAll() {
-        let all = subscribers.withLock { s in defer { s.removeAll() }; return Array(s.values) }
-        for continuation in all { continuation.finish() }
-    }
-
     private func remove(_ id: UUID) {
         _ = subscribers.withLock { $0.removeValue(forKey: id) }
     }
