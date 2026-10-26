@@ -12,19 +12,34 @@ public actor CallLog {
     public func append(_ entry: String) { entries.append(entry) }
 }
 
-/// Hands its scripted chunks to `onBuffer` on `start`.
+/// `start` hands the scripted chunks to `onBuffer`; `emit` delivers more while started.
 public actor FakeAudioSource: AudioSource {
     public nonisolated let track: Track
     private let chunks: [AudioChunk]
+    private let startError: (any Error)?
+    private var onBuffer: (@Sendable (AudioChunk) -> Void)?
+    public private(set) var isStarted = false
     public private(set) var stopCount = 0
 
-    public init(track: Track, chunks: [AudioChunk]) { self.track = track; self.chunks = chunks }
+    public init(track: Track, chunks: [AudioChunk] = [], startError: (any Error)? = nil) {
+        self.track = track; self.chunks = chunks; self.startError = startError
+    }
 
     public func start(onBuffer: @Sendable @escaping (AudioChunk) -> Void) async throws {
+        if let startError { throw startError }
+        self.onBuffer = onBuffer
+        isStarted = true
         for chunk in chunks { onBuffer(chunk) }
     }
 
-    public func stop() async { stopCount += 1 }
+    /// Calls the `onBuffer` given to `start` synchronously; ignored when not started.
+    public func emit(_ chunk: AudioChunk) { onBuffer?(chunk) }
+
+    public func stop() async {
+        stopCount += 1
+        isStarted = false
+        onBuffer = nil
+    }
 }
 
 /// Streams its script from `start`; `finish` closes the stream.
