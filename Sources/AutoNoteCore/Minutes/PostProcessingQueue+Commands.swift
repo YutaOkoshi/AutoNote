@@ -43,4 +43,26 @@ extension PostProcessingQueue {
         logger.info("acceptShortRecording \(id.rawValue, privacy: .public): recorded")
         await enqueue(id)
     }
+    /// Deletes a meeting entirely (spec §12 「この会議を削除」, §5.8・§5.9 「破棄」): cancels its running stage, then
+    /// `Retention.deleteMeeting` (Vault file and index line, app data, job file), then drops the job from the queue.
+    /// On `RetentionError.outputFolderUnavailable` nothing is deleted and the (cancelled) job stays pending.
+    public func delete(_ id: MeetingID) async throws {
+        await ensureLoaded()
+        let key = id.rawValue
+        // Held so the loop cannot start another stage of this meeting while it is being deleted.
+        rerunsInProgress.insert(key)
+        defer { rerunsInProgress.remove(key) }
+        while jobs[key]?.state == .running, let current = stepTask {
+            // The one step in flight is this job's; cancelling it puts the job back to `.pending`.
+            current.cancel()
+            await current.value
+        }
+        let outputFolder = (try? await settingsStore.load())?.outputFolder
+        try await Retention(paths: paths).deleteMeeting(id, outputFolder: outputFolder)
+        jobs[key] = nil
+        progress[key] = nil
+        rateLimitRounds[key] = nil
+        publish()
+        logger.info("delete \(key, privacy: .public): removed from queue")
+    }
 }
