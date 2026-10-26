@@ -28,6 +28,8 @@ public actor MicrophoneSource: AudioSource {
 
     private var state: State = .idle
     private var stopRequestedWhileStarting = false
+    /// Test hook: whether the last `stop` gave up waiting for `engine.stop()`.
+    private(set) var lastStopTimedOut = false
 
     public init(deviceUID: String?, clock: MeetingClock, voiceProcessing: Bool = false,
                 permission: any MicrophonePermissionChecking = AVMicrophonePermission(),
@@ -73,7 +75,7 @@ public actor MicrophoneSource: AudioSource {
         guard format.channels > 0, format.sampleRate > 0,
               let converter = try? SampleConverter(inputSampleRate: format.sampleRate, inputChannels: format.channels) else {
             state = .idle
-            await controlQueue.run(timeout: stopTimeout) { engine.stop() }
+            await controlQueue.runAwaiting(timeout: stopTimeout) { engine.stop() }
             throw AudioSourceError.unsupportedFormat
         }
         let ring = AudioRingBuffer(channels: format.channels, capacityFrames: Int(format.sampleRate * 10), recordCapacity: 4096)
@@ -83,7 +85,7 @@ public actor MicrophoneSource: AudioSource {
             try await onControlQueue { try engine.start(writingTo: ring) }
         } catch {
             state = .idle
-            await controlQueue.run(timeout: stopTimeout) { engine.stop() }
+            await controlQueue.runAwaiting(timeout: stopTimeout) { engine.stop() }
             drain.cancel()
             await drain.value
             throw error
@@ -100,7 +102,8 @@ public actor MicrophoneSource: AudioSource {
         case .running(let drain):
             state = .idle
             let engine = self.engine
-            let finished = await controlQueue.run(timeout: stopTimeout) { engine.stop() }
+            let finished = await controlQueue.runAwaiting(timeout: stopTimeout) { engine.stop() }
+            lastStopTimedOut = !finished
             if !finished { Self.logger.error("engine stop timeout") }
             drain.cancel()
             await drain.value

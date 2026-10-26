@@ -41,6 +41,7 @@ public protocol MicrophoneEngine: AnyObject, Sendable {
 }
 
 /// `AVAudioEngine` input node with a tap that copies each buffer into the ring.
+/// One instance belongs to exactly one `MicrophoneSource`; do not share it between sources.
 public final class AVMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {   // mutated only on the source's control queue
     private var engine: AVAudioEngine?
     private var format: AVAudioFormat?
@@ -97,6 +98,7 @@ public final class AVMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {  
     /// The render-thread body: copy into the ring and nothing else (no locks, allocation, logging or I/O).
     nonisolated static func makeTapBlock(ring: AudioRingBuffer) -> AVAudioNodeTapBlock {
         { buffer, when in
+            guard when.isHostTimeValid else { return }   // no timeline position; never stamp host time 0
             ring.write(buffer.audioBufferList, frameCount: Int(buffer.frameLength), hostTime: when.hostTime, sampleTime: Double(when.sampleTime))
         }
     }

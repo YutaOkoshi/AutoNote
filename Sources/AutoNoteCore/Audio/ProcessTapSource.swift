@@ -193,7 +193,7 @@ public actor ProcessTapSource: AudioSource {
     /// Runs the teardown on `controlQueue`; gives up waiting after `stopTimeout` (the teardown keeps going).
     private func teardown(_ objects: Objects) async {
         let hardware = self.hardware
-        let finished = await controlQueue.run(timeout: stopTimeout) { Self.tearDown(hardware, objects) }
+        let finished = await controlQueue.runAwaiting(timeout: stopTimeout) { Self.tearDown(hardware, objects) }
         if !finished { Self.logger.error("teardown timeout") }
     }
 

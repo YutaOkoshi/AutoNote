@@ -16,7 +16,8 @@ private final class ChunkCollector: Sendable {
     @Test(arguments: [MicrophonePermissionStatus.notDetermined, .denied, .restricted])
     func refusesWithoutPermissionAndNeverTouchesEngine(status: MicrophonePermissionStatus) async {
         let engine = FakeMicrophoneEngine()
-        let src = MicrophoneSource(deviceUID: nil, clock: .fake(), permission: FakeMicrophonePermission(status), engine: engine, lookup: FakeDeviceLookup())
+        // An unknown UID would throw .deviceNotFound if the lookup ran before the permission gate.
+        let src = MicrophoneSource(deviceUID: "GONE:input", clock: .fake(), permission: FakeMicrophonePermission(status), engine: engine, lookup: FakeDeviceLookup())
         await #expect(throws: AudioSourceError.microphonePermission(status)) { try await src.start { _ in } }
         #expect(engine.prepared == nil)
     }
@@ -95,5 +96,16 @@ private final class ChunkCollector: Sendable {
         let t0 = ContinuousClock.now; await src.stop()
         #expect(ContinuousClock.now - t0 < .seconds(1))
         #expect(!engine.isStopped)
+        #expect(await src.lastStopTimedOut)
+    }
+
+    @Test func stopDoesNotReportTimeoutWhenEngineStopsPromptly() async throws {
+        let engine = FakeMicrophoneEngine()
+        let src = MicrophoneSource(deviceUID: nil, clock: .fake(), permission: FakeMicrophonePermission(.authorized),
+                                   engine: engine, lookup: FakeDeviceLookup())
+        try await src.start { _ in }
+        await src.stop()
+        #expect(engine.isStopped)
+        #expect(await src.lastStopTimedOut == false)
     }
 }

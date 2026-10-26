@@ -2,8 +2,9 @@ import Foundation
 import Synchronization
 
 /// Resumes a checked continuation at most once, whichever of work completion and timeout comes first.
+/// The winner is recorded under the same lock as the resume, so `timedOut` is final once the continuation resumes.
 final class ResumeGate: Sendable {
-    private enum State { case waiting(CheckedContinuation<Void, Never>?), resumed }
+    private enum State { case waiting(CheckedContinuation<Void, Never>?), resumed(timedOut: Bool) }
     private let state = Mutex<State>(.waiting(nil))
 
     /// Stores the continuation, or resumes it at once if `fire` already ran.
@@ -15,16 +16,24 @@ final class ResumeGate: Sendable {
         if resumeNow { c.resume() }
     }
 
-    /// Returns true only for the first caller.
+    /// Records the outcome and resumes the continuation. Returns true only for the first caller.
     @discardableResult
-    func fire() -> Bool {
+    func fire(timedOut: Bool) -> Bool {
         let (first, c) = state.withLock { s -> (Bool, CheckedContinuation<Void, Never>?) in
             guard case .waiting(let c) = s else { return (false, nil) }
-            s = .resumed
+            s = .resumed(timedOut: timedOut)
             return (true, c)
         }
         c?.resume()
         return first
+    }
+
+    /// True when the timeout side fired first; false while waiting or when the work finished first.
+    var timedOut: Bool {
+        state.withLock { s in
+            if case .resumed(let timedOut) = s { return timedOut }
+            return false
+        }
     }
 }
 
@@ -32,22 +41,21 @@ extension DispatchQueue {
     /// Runs `work` on this queue and waits for it, giving up after `timeout` (the work keeps going).
     /// Returns false when the wait timed out.
     @discardableResult
-    func run(timeout: Duration, _ work: @Sendable @escaping () -> Void) async -> Bool {
+    func runAwaiting(timeout: Duration, _ work: @Sendable @escaping () -> Void) async -> Bool {
         let gate = ResumeGate()
-        let timedOut = Atomic<Bool>(false)
         let timer = Task {
             do { try await Task.sleep(for: timeout) } catch { return }
-            if gate.fire() { timedOut.store(true, ordering: .relaxed) }
+            gate.fire(timedOut: true)
         }
         await withCheckedContinuation { cont in
             gate.install(cont)
             self.async {
                 work()
-                gate.fire()
+                gate.fire(timedOut: false)
             }
         }
         timer.cancel()
-        return !timedOut.load(ordering: .relaxed)
+        return !gate.timedOut
     }
 }
 
