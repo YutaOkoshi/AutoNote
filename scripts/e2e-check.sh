@@ -532,6 +532,54 @@ check_dev_transcribe_whisper_live() {
     dev_transcribe_whisper_head whisper-live
 }
 
+# 05.1 / 05.2 共通: 架空の Transcript と MinutesOutput を ${WORK} に書く
+write_dev_summarize_inputs() {
+    cat >"${WORK}/summarize-transcript.json" <<'JSON'
+{"engine":"fake","language":"ja","utterances":[
+{"start":5,"end":9,"speaker":"unknown","text":"それでは定例を始めます","is_final":true},
+{"start":40,"end":45,"speaker":"unknown","text":"リリースは来週に出す方向で合意しました","is_final":true},
+{"start":80,"end":85,"speaker":"unknown","text":"ドキュメントの更新が残っています","is_final":true}]}
+JSON
+    cat >"${WORK}/summarize-minutes.json" <<'JSON'
+{"title":"架空の定例","summary":["リリースは来週","ドキュメント更新が残る","次回は来週"],
+"decisions":[{"text":"リリースは来週に出す","t":"00:00:40"}],"agenda":[],"next_actions":[],"suggested_terms":[]}
+JSON
+}
+
+check_dev_summarize() {
+    CURRENT="05.1 dev summarize --fake で議事録ファイルと _index.md ができる"
+    command -v jq >/dev/null 2>&1 || { skip "jq が無い"; return; }
+    cli_or_skip || return
+    write_dev_summarize_inputs
+    local out="${WORK}/summarize-1.json"
+    run_timeout 60 sh -c '"$1" dev summarize --fake "$2" --minutes "$3" --out "$4" >"$5"' _ "${AUTONOTE_CLI}" \
+        "${WORK}/summarize-transcript.json" "${WORK}/summarize-minutes.json" "${WORK}/s1" "${out}"; local code=$?
+    [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
+    [[ "$(jq -r .status "${out}")" == "minutes_generated" ]] || { fail "status が minutes_generated でない: $(cat "${out}")"; return; }
+    local file note
+    file="$(jq -r .file "${out}")"; note="${WORK}/s1/vault/${file}"
+    [[ -f "${note}" ]] || { fail "${note} が無い"; return; }
+    grep -q 'status: minutes_generated' "${note}" && grep -q '## 決定事項' "${note}" && grep -q '\^t00-00-05' "${note}" \
+        || { fail "議事録ファイルに status / 決定事項 / ^t00-00-05 のどれかが無い"; return; }
+    grep -qF "$(basename "${file}" .md)" "${WORK}/s1/vault/_index.md" || { fail "_index.md にファイル名の行が無い"; return; }
+    local jobs; jobs="$(find "${WORK}/s1/app/queue/jobs" -name '*.json' | wc -l | tr -d ' ')"
+    if [[ "${jobs}" -eq 1 ]]; then pass "${file}"; else fail "queue/jobs の JSON が ${jobs} 個（期待 1）"; fi
+}
+
+check_dev_summarize_failure() {
+    CURRENT="05.2 議事録生成の失敗で transcript_only の秒付きファイルになる"
+    command -v jq >/dev/null 2>&1 || { skip "jq が無い"; return; }
+    cli_or_skip || return
+    write_dev_summarize_inputs
+    local out="${WORK}/summarize-2.json"
+    run_timeout 60 sh -c '"$1" dev summarize --fake "$2" --fail-summary --out "$3" >"$4"' _ "${AUTONOTE_CLI}" \
+        "${WORK}/summarize-transcript.json" "${WORK}/s2" "${out}"; local code=$?
+    [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
+    local file; file="$(jq -r .file "${out}")"
+    [[ "$(basename "${file}")" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}\.md$ ]] || { fail "ファイル名が秒付きでない: ${file}"; return; }
+    if grep -q 'status: transcript_only' "${WORK}/s2/vault/${file}"; then pass "${file}"; else fail "本文に status: transcript_only が無い"; fi
+}
+
 # ---------------------------------------------------------------- 実行
 
 CHECKS=(
@@ -559,6 +607,8 @@ CHECKS=(
     check_dev_transcribe_dictation
     check_dev_transcribe_whisper
     check_dev_transcribe_whisper_live
+    check_dev_summarize
+    check_dev_summarize_failure
 )
 
 ensure_whisper_xcframework   # 失敗しても続ける（swift test などの項目が FAIL を出す）
