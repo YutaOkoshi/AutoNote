@@ -137,7 +137,10 @@ private func logFolders(_ fx: Fixture) throws -> [URL] {
         let second = await runner.run(def("echo run >> \(counter.path)"), context: ctx, dedupeKey: "k1")
         #expect(first.succeeded && first.skippedReason == nil)
         #expect(second.skippedReason == "already_ran" && !second.succeeded)
+        #expect(second.logDirectory == "")
         #expect(try String(contentsOf: counter, encoding: .utf8) == "run\n")
+        #expect(try logFolders(fx).count == 1)
+        #expect(await runner.recentRuns(limit: 10) == [first])
     }
 
     @Test func ledgerSurvivesNewRunner() async throws {
@@ -145,7 +148,8 @@ private func logFolders(_ fx: Fixture) throws -> [URL] {
         let counter = fx.root.appending(path: "counter.txt")
         _ = await fx.runner().run(def("echo run >> \(counter.path)"), context: ctx, dedupeKey: "k1")
         let again = await fx.runner().run(def("echo run >> \(counter.path)"), context: ctx, dedupeKey: "k1")
-        #expect(again.skippedReason == "already_ran")
+        #expect(again.skippedReason == "already_ran" && again.logDirectory == "")
+        #expect(try logFolders(fx).count == 1)
         #expect(try String(contentsOf: counter, encoding: .utf8) == "run\n")
     }
 
@@ -174,15 +178,24 @@ private func logFolders(_ fx: Fixture) throws -> [URL] {
         let rec = await fx.runner().run(def("echo hi"), context: ctx, dedupeKey: nil)
         let data = try Data(contentsOf: URL(filePath: rec.logDirectory).appending(path: "result.json"))
         #expect(try AutoNoteJSON.decoder().decode(AutomationRunRecord.self, from: data) == rec)
+        let obj = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(obj["meeting_id"] as? String == "20261024-1400-a1b2")
+        #expect(obj["exit_code"] as? Int == 0 && obj["timed_out"] as? Bool == false && obj["started_at"] is String)
         #expect(URL(filePath: rec.logDirectory).lastPathComponent.hasSuffix("-20261024-1400-a1b2-automation"))
     }
 
     @Test func recordsStreamYieldsCompletedRuns() async throws {
         let fx = try Fixture()
         let runner = fx.runner()
-        let stream = await runner.records()
+        let a = await runner.records()
+        let b = await runner.records()
+        _ = await runner.run(def("true"), context: ctx, dedupeKey: "k1")
+        _ = await runner.run(def("true"), context: ctx, dedupeKey: "k1")   // already_ran: not yielded
         let rec = await runner.run(def("exit 1"), context: ctx, dedupeKey: nil)
-        var it = stream.makeAsyncIterator()
-        #expect(await it.next() == rec)
+        var ia = a.makeAsyncIterator(), ib = b.makeAsyncIterator()
+        #expect(await ia.next()?.skippedReason == nil)
+        #expect(await ia.next() == rec)
+        #expect(await ib.next()?.skippedReason == nil)
+        #expect(await ib.next() == rec)
     }
 }

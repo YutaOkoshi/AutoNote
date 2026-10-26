@@ -1,7 +1,8 @@
 import Darwin
 import Foundation
 
-/// Runs one automation at a time under `shell + [command]` in its own process group.
+/// Runs an automation under `shell + [command]` in its own process group. Runs are not globally serialized
+/// (the actor is re-entrant across `await`); the dedupe key is recorded before the first `await`.
 /// On timeout the group gets SIGTERM, then SIGKILL after `killGrace`. Each run gets a log folder
 /// `logsDirectory/<yyyyMMdd-HHmmss>-<meeting-id>-<name>/` with `stdout.txt`, `stderr.txt`, `result.json`;
 /// only the newest `maxLogRuns` folders are kept. A non-nil `dedupeKey` is recorded in `ledgerFile` before the
@@ -16,8 +17,6 @@ public actor AutomationRunner {
     private let shell: [String]
     private let killGrace: Duration
     private let maxLogRuns: Int
-    private var busy = false
-    private var queue: [CheckedContinuation<Void, Never>] = []
     private var subscribers: [UUID: AsyncStream<AutomationRunRecord>.Continuation] = [:]
 
     public init(logsDirectory: URL, ledgerFile: URL, shell: [String] = defaultShell, killGrace: Duration = .seconds(5),
@@ -30,9 +29,6 @@ public actor AutomationRunner {
     }
 
     public func run(_ def: AutomationDefinition, context: AutomationContext, dedupeKey: String?) async -> AutomationRunRecord {
-        await acquire()
-        defer { release() }
-
         let startedAt = Date()
         if let key = dedupeKey {
             var ledger = readLedger()
@@ -42,7 +38,7 @@ public actor AutomationRunner {
                                            skippedReason: Self.alreadyRan, logDirectory: "")
             }
             ledger.append(key)
-            writeLedger(ledger)
+            writeLedger(ledger)   // before any await, so a re-entrant run with the same key sees it
         }
 
         let folder = makeLogFolder(startedAt: startedAt, meetingID: context.meetingID.rawValue, name: def.name)
@@ -98,17 +94,6 @@ public actor AutomationRunner {
     }
 
     private func removeSubscriber(_ id: UUID) { subscribers[id] = nil }
-
-    // MARK: Serial execution (the actor is re-entrant across `await`)
-
-    private func acquire() async {
-        if !busy { busy = true; return }
-        await withCheckedContinuation { queue.append($0) }
-    }
-
-    private func release() {
-        if queue.isEmpty { busy = false } else { queue.removeFirst().resume() }
-    }
 
     // MARK: Waiting and killing
 
