@@ -163,4 +163,28 @@ import Testing
         #expect(regen.completedStages.contains(StageName.automations))
         #expect(try await f.manifests.load(f.manifest.id).status == .minutesGenerated)
     }
+
+    @Test func unreadableFrontmatterRetriesWithoutPath() async throws {
+        let f = try await setUp(withMinutes: true)
+        // A directory where `_autonote/frontmatter.md` should be: it exists but cannot be read as a file.
+        let blocker = f.outputFolder.appending(path: "_autonote/frontmatter.md", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: blocker, withIntermediateDirectories: true)
+        var j = job(f)
+        var caught: StageError?
+        do {
+            try await stage().run(&j, context: context(f))
+        } catch let error as StageError {
+            caught = error
+        }
+        guard case .retry(let after, let reason) = caught else {
+            Issue.record("expected .retry, got \(String(describing: caught))")
+            return
+        }
+        #expect(after == 300)
+        #expect(!reason.isEmpty)
+        #expect(!reason.contains("/"))
+        #expect(!reason.contains(f.outputFolder.lastPathComponent))
+        #expect(!exists(f, Self.titledPath))
+        #expect(try await f.manifests.load(f.manifest.id).status == .generating)
+    }
 }

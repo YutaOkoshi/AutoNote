@@ -39,22 +39,22 @@ public struct WriteVaultStage: QueueStage {
             throw StageError.failed(reason: "final_transcript_missing")
         }
 
-        let minutes = try? AutoNoteJSON.decoder().decode(MinutesOutput.self, from: Data(contentsOf: minutesURL))
+        let minutes = decodeMinutes(at: minutesURL, id: id)
         let status: MeetingStatus = (minutes != nil && job.summaryFailure == nil) ? .minutesGenerated : .transcriptOnly
         var manifest = try await context.manifests.load(id)
         manifest.status = status
         let outputFolder = URL(filePath: folderPath, directoryHint: .isDirectory)
         let store = services.configStore(outputFolder: outputFolder, paths: context.paths)
-        let frontmatterText = try await store.read(.frontmatter).map { String(decoding: $0, as: UTF8.self) }
-            ?? FrontmatterTemplate.defaultText
-        let document = MeetingDocument(manifest: manifest, transcript: final,
-                                       minutes: minutes,
-                                       frontmatter: FrontmatterTemplate(text: frontmatterText),
-                                       appVersion: AutoNoteVersion.current, timeZone: timeZone)
-
         let writer = services.vaultWriter(outputFolder: outputFolder, paths: context.paths, now: context.now)
+
+        // Every Vault-folder I/O (frontmatter read and the write) maps to a retry whose reason carries no path.
         let outcome: VaultWriteOutcome
         do {
+            let frontmatterText = try await store.read(.frontmatter).map { String(decoding: $0, as: UTF8.self) }
+                ?? FrontmatterTemplate.defaultText
+            let document = MeetingDocument(manifest: manifest, transcript: final, minutes: minutes,
+                                           frontmatter: FrontmatterTemplate(text: frontmatterText),
+                                           appVersion: AutoNoteVersion.current, timeZone: timeZone)
             outcome = try await writer.write(document, policy: job.overwriteApproved ? .force : .ifUnchanged)
         } catch is CancellationError {
             throw CancellationError()
@@ -63,7 +63,7 @@ public struct WriteVaultStage: QueueStage {
             throw StageError.retry(after: Self.retryInterval, reason: "output_folder_unavailable")
         } catch {
             let kind = String(describing: type(of: error))
-            Self.logger.error("\(id.rawValue, privacy: .public): vault write failed (\(kind, privacy: .public))")
+            Self.logger.error("\(id.rawValue, privacy: .public): vault I/O failed (\(kind, privacy: .public))")
             throw StageError.retry(after: Self.retryInterval, reason: kind)
         }
 
@@ -76,6 +76,16 @@ public struct WriteVaultStage: QueueStage {
             Self.logger.notice("\(id.rawValue, privacy: .public): note edited, awaiting confirmation")
             throw StageError.awaitingConfirmation(path: Self.relativePath(of: url, in: outputFolder))
         }
+    }
+
+    /// `nil` when absent; an existing file that cannot be decoded is logged and treated as absent (transcript-only).
+    private func decodeMinutes(at url: URL, id: MeetingID) -> MinutesOutput? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard let minutes = try? AutoNoteJSON.decoder().decode(MinutesOutput.self, from: Data(contentsOf: url)) else {
+            Self.logger.error("\(id.rawValue, privacy: .public): minutes_unreadable, falling back to transcript_only")
+            return nil
+        }
+        return minutes
     }
 
     /// `file` relative to `folder` with `/` separators; both are resolved so `/var` and `/private/var` match.
