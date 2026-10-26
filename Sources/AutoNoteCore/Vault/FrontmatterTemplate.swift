@@ -19,7 +19,7 @@ public struct FrontmatterTemplate: Sendable {
 
     public let text: String
 
-    public init(text: String) { self.text = text }
+    public init(text: String) { self.text = text.normalizingNewlines }
 
     public func render(_ values: [String: String]) -> String {
         var lines = text.components(separatedBy: "\n")

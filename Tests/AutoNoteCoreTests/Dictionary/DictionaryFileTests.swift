@@ -28,3 +28,8 @@ private let specExample = "## 用語\n- AutoNote\n- 所沢\n- Kubernetes\n\n## �
     #expect(d.render() == "## 用語\n\n## 置換\n\n## フィラー\n")
     #expect(DictionaryFile.parse(d.render()).dictionary == d)
 }
+
+@Test func parsesCRLFAndLoneCR() {
+    let (d, issues) = DictionaryFile.parse("## 用語\r\n- A\r\n- B\r## 置換\r\n- x => y\r\n")
+    #expect(d.terms == ["A", "B"]); #expect(d.replacements.count == 1); #expect(issues.isEmpty)
+}

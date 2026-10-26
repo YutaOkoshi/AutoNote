@@ -20,3 +20,10 @@ import AutoNoteTestSupport
     #expect(FrontmatterTemplate.yamlScalar("yes") == #""yes""#); #expect(FrontmatterTemplate.yamlScalar("プロジェクト定例") == "プロジェクト定例")
     #expect(FrontmatterTemplate.yamlScalar("一行目\n二行目") == "一行目 二行目")
 }
+
+@Test func crlfTemplateRendersLikeLF() {
+    let values = ["title": "定例", "status": "recorded", "autonote_id": "x"]
+    let lf = FrontmatterTemplate(text: "---\ntitle: {{title}}\nstatus: {{status}}\nautonote_id: {{autonote_id}}\n---\n").render(values)
+    #expect(FrontmatterTemplate(text: "---\r\ntitle: {{title}}\r\nstatus: {{status}}\rautonote_id: {{autonote_id}}\r\n---\r\n").render(values) == lf)
+    #expect(!lf.contains("\r"))
+}

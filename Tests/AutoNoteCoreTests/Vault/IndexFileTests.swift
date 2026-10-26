@@ -28,3 +28,8 @@ private let e1 = IndexEntry(meetingID: .init(rawValue: "20261024-1400-a1b2"), da
     #expect(Frontmatter.parse("---\ntitle: x\n") == nil)
     #expect(Frontmatter.parse("---\ntitle: \"a\\\\b\"\n---\n") == ["title": "a\\b"])
 }
+
+@Test func frontmatterParsesCRLF() {
+    #expect(Frontmatter.parse("---\r\ntitle: 定例\r\nautonote_id: x\r\n---\r\n# h\r\n") == ["title": "定例", "autonote_id": "x"])
+    #expect(Frontmatter.parse("---\rtitle: 定例\r---\r") == ["title": "定例"])
+}

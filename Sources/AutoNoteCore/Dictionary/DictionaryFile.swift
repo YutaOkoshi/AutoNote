@@ -32,6 +32,7 @@ public struct DictionaryFile: Equatable, Sendable {
     private enum Section { case terms, replacements, fillers, other }
 
     public static func parse(_ markdown: String) -> (dictionary: DictionaryFile, issues: [DictionaryIssue]) {
+        let markdown = markdown.normalizingNewlines
         var terms: [String] = [], fillers: [String] = []
         var replacements: [Replacement] = []
         var issues: [DictionaryIssue] = []
