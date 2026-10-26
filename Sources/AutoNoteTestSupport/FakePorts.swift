@@ -101,7 +101,6 @@ public actor FakeRecorderPort: RecorderPort {
 
 public actor FakeRecordingEventsPort: RecordingEventsPort {
     public private(set) var calls: [String] = []
-    public var nextError: AppCommandError?
     private var subscribers = Subscribers<RecordingEvent>()
 
     public init() {}
@@ -287,7 +286,6 @@ public actor FakeAutomationsPort: AutomationsPort {
 
 public actor FakeLiveTranscriptPort: LiveTranscriptPort {
     public private(set) var calls: [String] = []
-    public var nextError: AppCommandError?
     private var subscribers = Subscribers<[Utterance]>()
 
     public init() {}
@@ -304,7 +302,6 @@ public actor FakeLiveTranscriptPort: LiveTranscriptPort {
 
 public actor FakeOutputFolderPort: OutputFolderPort {
     public private(set) var calls: [String] = []
-    public var nextError: AppCommandError?
     public private(set) var available: Bool
 
     public init(available: Bool = true) { self.available = available }
@@ -319,7 +316,6 @@ public actor FakeOutputFolderPort: OutputFolderPort {
 
 public actor FakeFileOpener: FileOpener {
     public private(set) var calls: [String] = []
-    public var nextError: AppCommandError?
     public private(set) var opened: [URL] = []
 
     public init() {}

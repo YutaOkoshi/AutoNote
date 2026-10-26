@@ -1,11 +1,13 @@
 import Foundation
+import os
+
+private let logger = Logger(subsystem: "com.yutaokoshi.autonote", category: "LiveAdapters")
 
 extension AppCommandError {
-    /// `AppCommandError` passes through; anything else from plans 01–05 becomes `.failed` with its description.
+    /// `AppCommandError` passes through; anything else from plans 01–05 becomes `.failed(localizedDescription)`.
     static func wrap(_ error: any Error) -> AppCommandError {
         if let e = error as? AppCommandError { return e }
-        if let e = error as? LocalizedError, let text = e.errorDescription { return .failed(text) }
-        return .failed(String(describing: error))
+        return .failed(error.localizedDescription)
     }
 
     static let outputFolderMissing = AppCommandError.failed("出力フォルダが見つかりません")
@@ -117,25 +119,38 @@ public struct QueueAdapter: QueuePort {
         mapped(await holder.queue.snapshots(), Self.status)
     }
 
-    /// Ruling X14: a failed or time-waiting job resumes where it stopped (`retry`); a job that finished with a
-    /// summary failure regenerates (`regenerate`, generation + 1). Anything else is refused (X13).
+    /// Rulings X14/X14b: a failed or time-waiting job resumes where it stopped (`retry`); a job that finished
+    /// with a summary failure regenerates (`regenerate`, generation + 1). Without a job (e.g. after a restart
+    /// dropped a finished job) a finished meeting regenerates; an in-flight or too-short one is refused.
     public func retry(_ id: MeetingID) async throws {
         let queue = await holder.queue
         try requireManifest(id, queue)
-        guard let job = await queue.snapshot().jobs.first(where: { $0.meetingID == id }) else {
-            throw AppCommandError.invalid("再試行できる処理がありません: \(id.rawValue)")
+        if let job = await queue.snapshot().jobs.first(where: { $0.meetingID == id }) {
+            switch job.state {
+            case .failed:
+                return await queue.retry(id)
+            case .waiting where job.notBefore != nil:
+                return await queue.retry(id)
+            case .waiting where job.awaitingConfirmation:
+                throw AppCommandError.invalid("上書きの確認待ちです: \(id.rawValue)")
+            case .done where job.summaryFailure != nil:
+                return try await regenerate(id, on: queue)
+            case .pending, .running, .waiting:
+                throw AppCommandError.invalid("処理中です: \(id.rawValue)")
+            case .done:
+                break  // not in snapshots in practice; treat like no job
+            }
         }
-        switch job.state {
-        case .failed:
-            await queue.retry(id)
-        case .waiting where job.notBefore != nil:
-            await queue.retry(id)
-        case .waiting where job.awaitingConfirmation:
-            throw AppCommandError.invalid("上書きの確認待ちです: \(id.rawValue)")
-        case .done where job.summaryFailure != nil:
+        let manifest = try wrappingSync {
+            try AutoNoteJSON.decoder().decode(Manifest.self, from: Data(contentsOf: queue.paths.manifestFile(id)))
+        }
+        switch manifest.status {
+        case .transcriptOnly, .failed, .minutesGenerated:
             try await regenerate(id, on: queue)
-        default:
-            throw AppCommandError.invalid("再試行できる処理がありません: \(id.rawValue)")
+        case .recording, .recorded, .transcribing, .transcribed, .generating:
+            throw AppCommandError.invalid("処理中です: \(id.rawValue)")
+        case .tooShort:
+            throw AppCommandError.invalid("短すぎる録音です: \(id.rawValue)")
         }
     }
 
@@ -148,13 +163,13 @@ public struct QueueAdapter: QueuePort {
     public func resolveOverwrite(_ id: MeetingID, overwrite: Bool) async throws {
         let queue = await holder.queue
         try requireManifest(id, queue)
-        try await mappingQueueErrors { try await queue.resolveOverwrite(id, overwrite: overwrite) }
+        try await mappingQueueErrors(id) { try await queue.resolveOverwrite(id, overwrite: overwrite) }
     }
 
     public func acceptShortRecording(_ id: MeetingID) async throws {
         let queue = await holder.queue
         try requireManifest(id, queue)
-        try await mappingQueueErrors { try await queue.acceptShortRecording(id) }
+        try await mappingQueueErrors(id) { try await queue.acceptShortRecording(id) }
     }
 
     public func delete(_ id: MeetingID) async throws {
@@ -182,11 +197,14 @@ public struct QueueAdapter: QueuePort {
         guard exists(queue.paths.manifestFile(id)) else { throw .meetingNotFound(id) }
     }
 
-    private func mappingQueueErrors(_ body: () async throws -> Void) async throws(AppCommandError) {
+    /// Ruling X13b.
+    private func mappingQueueErrors(_ id: MeetingID, _ body: () async throws -> Void) async throws(AppCommandError) {
         do {
             try await body()
+        } catch QueueError.notTooShort {
+            throw .invalid("短すぎる録音ではありません: \(id.rawValue)")
         } catch let error as QueueError {
-            throw .invalid(String(describing: error))
+            throw .invalid("\(id.rawValue): \(String(describing: error))")
         } catch {
             throw .wrap(error)
         }
@@ -285,14 +303,18 @@ public struct MeetingsAdapter: MeetingsPort {
             let document = MeetingDocument(manifest: updated, transcript: final, minutes: m,
                                            frontmatter: FrontmatterTemplate(text: text), appVersion: appVersion, timeZone: timeZone)
             outcome = try await vault.writer.write(document, policy: overwrite ? .force : .ifUnchanged, renameToMatchTitle: renameFile)
-            if case .written = outcome { _ = try await vault.writer.rebuildIndex() }
         } catch VaultError.outputFolderUnavailable {
             throw AppCommandError.outputFolderMissing
         } catch {
             throw AppCommandError.wrap(error)
         }
         switch outcome {
-        case .written(let url): return .saved(url)
+        case .written(let url):
+            // The note is saved; a stale index is fixed by the next write, so its failure is only logged.
+            do { _ = try await vault.writer.rebuildIndex() } catch {
+                logger.error("\(id.rawValue, privacy: .public): index rebuild failed (\(String(describing: type(of: error)), privacy: .public))")
+            }
+            return .saved(url)
         case .conflict(let url): return .externallyEdited(url)
         }
     }
@@ -353,7 +375,8 @@ public struct AutomationsAdapter: AutomationsPort {
     /// Runs `name` for `meetingID` with the context its trigger would carry; the dispatcher decides
     /// whether it exists and is runnable.
     public func run(name: String, meetingID: MeetingID) async throws -> AutomationRunRecord {
-        let event = file.load().items.first { $0.definition.name == name }?.definition.on ?? .minutesGenerated
+        let loaded = file.load()
+        let event = loaded.items.first { $0.definition.name == name }?.definition.on ?? .minutesGenerated
         guard exists(paths.manifestFile(meetingID)) else { throw AppCommandError.meetingNotFound(meetingID) }
         let manifest = try await wrapping { try await manifests.load(meetingID) }
         let minutesURL = paths.minutesFile(meetingID)
@@ -363,7 +386,7 @@ public struct AutomationsAdapter: AutomationsPort {
         }
         let context = AutomationContextBuilder.make(event: event, manifest: manifest, file: noteFile,
                                                     minutesJSON: exists(minutesURL) ? minutesURL : nil)
-        return try await dispatcher.runOne(name: name, context: context)
+        return try await dispatcher.runOne(name: name, context: context, loaded: loaded)
     }
 
     public func recentRuns(limit: Int) async -> [AutomationRunRecord] { await runner.recentRuns(limit: limit) }

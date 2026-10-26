@@ -29,7 +29,12 @@ public struct AutomationDispatcher: Sendable {
     /// A manual run of one automation (`autonote automations run`, the settings screen). No dedupe key, so it
     /// always runs; no failure notification, since the caller shows the returned record.
     public func runOne(name: String, context: AutomationContext) async throws -> AutomationRunRecord {
-        guard let item = file.load().items.first(where: { $0.definition.name == name }) else {
+        try await runOne(name: name, context: context, loaded: file.load())
+    }
+
+    /// `runOne` against an already loaded file (the adapter reads it once to pick the trigger).
+    func runOne(name: String, context: AutomationContext, loaded: AutomationsLoadResult) async throws -> AutomationRunRecord {
+        guard let item = loaded.items.first(where: { $0.definition.name == name }) else {
             throw AppCommandError.notFound("Automation が見つかりません: \(name)")
         }
         guard item.isRunnable else { throw AppCommandError.invalid(item.problem ?? "無効になっています") }

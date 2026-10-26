@@ -79,10 +79,50 @@ import AutoNoteTestSupport
         let unknown = MeetingID(rawValue: "20261024-1500-ffff")
         await #expect(throws: AppCommandError.notFound("会議が見つかりません: 20261024-1500-ffff")) { try await adapter.retry(unknown) }
         await #expect(throws: AppCommandError.notFound("会議が見つかりません: 20261024-1500-ffff")) { try await adapter.delete(unknown) }
-        await #expect(throws: AppCommandError.invalid("再試行できる処理がありません: \(f.id.rawValue)")) { try await adapter.retry(f.id) }
         await #expect(throws: AppCommandError.invalid("文字起こしがありません: \(f.id.rawValue)")) { try await adapter.regenerate(f.id) }
-        await #expect(throws: AppCommandError.invalid(String(describing: QueueError.notTooShort(.recorded)))) {
+        await #expect(throws: AppCommandError.invalid("短すぎる録音ではありません: \(f.id.rawValue)")) {
             try await adapter.acceptShortRecording(f.id)
         }
+    }
+
+    /// X14b: without a job, a finished meeting regenerates (generation + 1, from summarize).
+    @Test func retryWithoutJobRegeneratesFinishedMeeting() async throws {
+        let f = try await Fixture()
+        _ = try await f.manifests.update(f.id) { $0.status = .transcriptOnly }
+        try f.writeFinal()
+        // The summarize stage keeps a summaryFailure so the finished job stays visible with its generation.
+        let queue = f.queue(summaryFailure: "not_logged_in: login")
+        let adapter = QueueAdapter(holder: QueueHolder(queue))
+        #expect(await adapter.status().items.isEmpty)
+        try await adapter.retry(f.id)
+        await queue.runUntilIdle()
+        #expect(await f.count(StageName.transcribe) == 0)
+        #expect(await f.count(StageName.summarize) == 1)
+        #expect(await adapter.status().items.first?.generation == 1)
+    }
+
+    /// X14b: without a job, in-flight and too-short meetings are refused; a finished one needs final.json.
+    @Test func retryWithoutJobRefusals() async throws {
+        let f = try await Fixture()
+        let adapter = QueueAdapter(holder: QueueHolder(f.queue()))
+        let id = f.id.rawValue
+        for status in [MeetingStatus.recorded, .transcribing, .transcribed, .generating] {
+            _ = try await f.manifests.update(f.id) { $0.status = status }
+            await #expect(throws: AppCommandError.invalid("処理中です: \(id)")) { try await adapter.retry(f.id) }
+        }
+        _ = try await f.manifests.update(f.id) { $0.status = .tooShort }
+        await #expect(throws: AppCommandError.invalid("短すぎる録音です: \(id)")) { try await adapter.retry(f.id) }
+        _ = try await f.manifests.update(f.id) { $0.status = .minutesGenerated }
+        await #expect(throws: AppCommandError.invalid("文字起こしがありません: \(id)")) { try await adapter.retry(f.id) }
+    }
+
+    /// X14b: a pending job is refused as in progress.
+    @Test func retryPendingJobIsInProgress() async throws {
+        let f = try await Fixture()
+        let queue = f.queue()
+        let adapter = QueueAdapter(holder: QueueHolder(queue))
+        await queue.enqueue(f.id)
+        #expect(await adapter.status().items.first?.state == "pending")
+        await #expect(throws: AppCommandError.invalid("処理中です: \(f.id.rawValue)")) { try await adapter.retry(f.id) }
     }
 }
