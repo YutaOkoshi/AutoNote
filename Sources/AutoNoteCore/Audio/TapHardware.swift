@@ -63,11 +63,11 @@ public struct CoreAudioTapHardware: TapHardware {
     }
 
     public func defaultOutputDeviceUID() throws -> String {
-        var addr = Self.address(kAudioHardwarePropertyDefaultSystemOutputDevice)
+        var addr = Self.address(kAudioHardwarePropertyDefaultOutputDevice)
         var device = AudioObjectID(kAudioObjectUnknown)
         var size = UInt32(MemoryLayout<AudioObjectID>.size)
         try Self.check(AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &device),
-                       "AudioObjectGetPropertyData(kAudioHardwarePropertyDefaultSystemOutputDevice)")
+                       "AudioObjectGetPropertyData(kAudioHardwarePropertyDefaultOutputDevice)")
         var uidAddr = Self.address(kAudioDevicePropertyDeviceUID)
         var uid: Unmanaged<CFString>?
         size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)

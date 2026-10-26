@@ -30,8 +30,17 @@ private final class ChunkCollector: Sendable {
 
     @Test func failureMidwayTearsDownCreatedObjects() async {
         let hw = FakeTapHardware(); hw.failOn = "createAggregate"
-        await #expect(throws: AudioSourceError.self) { try await ProcessTapSource(clock: .fake(), hardware: hw).start { _ in } }
+        let error = await #expect(throws: AudioSourceError.self) { try await ProcessTapSource(clock: .fake(), hardware: hw).start { _ in } }
         #expect(hw.calls.suffix(1) == ["destroyTap"])
+        #expect(hw.calls == ["createTap", "tapFormat", "createAggregate", "destroyTap"])
+        #expect(error == .coreAudio(call: "createAggregate", status: -1))
+    }
+
+    @Test func failureAtStartTearsDownEverything() async {
+        let hw = FakeTapHardware(); hw.failOn = "start"
+        let error = await #expect(throws: AudioSourceError.self) { try await ProcessTapSource(clock: .fake(), hardware: hw).start { _ in } }
+        #expect(hw.calls == ["createTap", "tapFormat", "createAggregate", "createIOProc", "start", "destroyIOProc", "destroyAggregate", "destroyTap"])
+        #expect(error == .coreAudio(call: "start", status: -1))
     }
 
     @Test func secondStartThrowsAlreadyStarted() async throws {
@@ -77,12 +86,32 @@ private final class ChunkCollector: Sendable {
         #expect(abs(second.start.seconds - 5.0) <= 0.02)
     }
 
+    @Test func gapFlushesPreGapSamplesAtExpectedEnd() async throws {
+        let host = FakeHostClock(); let hw = FakeTapHardware(); let out = ChunkCollector()
+        let src = ProcessTapSource(clock: .fake(host), hardware: hw)
+        try await src.start(onBuffer: out.onBuffer)
+        for i in 0..<50 {
+            hw.fire(frames: 480, hostTime: host.hostTime(atSeconds: Double(i) * 0.01), sampleTime: Double(i * 480), value: 0.25)
+        }
+        for i in 0..<50 {
+            hw.fire(frames: 480, hostTime: host.hostTime(atSeconds: 5.0 + Double(i) * 0.01), sampleTime: Double((50 + i) * 480), value: 0.25)
+        }
+        await src.stop()
+        // Record chunks before the gap start at 0.00 ... 0.49; the flushed tail starts at the expected end, 0.50.
+        let gapChunk = try #require(out.all.first { $0.start.seconds > 0.495 && $0.start.seconds < 4.0 })
+        #expect(abs(gapChunk.start.seconds - 0.5) <= 0.02)
+        let total = out.all.reduce(0) { $0 + $1.samples.count }
+        #expect(abs(total - 16_000) <= 48)
+    }
+
     @Test func stopReturnsWithinTimeoutWhenTeardownBlocks() async throws {
         let hw = FakeTapHardware(); hw.teardownDelay = .seconds(3)
         let src = ProcessTapSource(clock: .fake(), hardware: hw, stopTimeout: .milliseconds(200))
         try await src.start { _ in }
         let t0 = ContinuousClock.now; await src.stop()
         #expect(ContinuousClock.now - t0 < .seconds(1))
+        let calls = hw.calls
+        #expect(calls.contains("stop") && !calls.contains("destroyTap"))
     }
 
     @Test @MainActor func stopFromMainActorDoesNotBlockMainThread() async throws {
@@ -91,6 +120,8 @@ private final class ChunkCollector: Sendable {
         try await src.start { _ in }
         let t0 = ContinuousClock.now; await src.stop()
         #expect(ContinuousClock.now - t0 < .seconds(1))
+        let calls = hw.calls
+        #expect(calls.contains("stop") && !calls.contains("destroyTap"))
     }
 
     @Test func statisticsCountCallbacksAndDrops() async throws {

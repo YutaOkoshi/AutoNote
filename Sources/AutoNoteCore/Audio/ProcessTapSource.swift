@@ -95,6 +95,15 @@ public actor ProcessTapSource: AudioSource {
         self.layout = layout; self.stopTimeout = stopTimeout
     }
 
+    /// Safety net when the owner drops a running source without `stop()`: no waiting, teardown runs in the background.
+    deinit {
+        if case .running(let objects, _, let drain) = state {
+            drain.cancel()
+            let hardware = self.hardware
+            controlQueue.async { Self.tearDown(hardware, objects) }
+        }
+    }
+
     public static func aggregateDescription(tapUUID: String, layout: AggregateLayout, outputUID: String?) -> [String: any Sendable] {
         var d: [String: any Sendable] = [
             kAudioAggregateDeviceNameKey: "AutoNote System Audio",
@@ -233,20 +242,21 @@ public actor ProcessTapSource: AudioSource {
         let bytesPerFrame = channels * MemoryLayout<Float>.size
         return { _, inInputData, inInputTime, _, _ in
             let abl = inInputData
+            counters.callbacks.add(1, ordering: .relaxed)   // every invocation, even an empty one
             guard abl.pointee.mNumberBuffers > 0 else { return }
             let first = abl.pointee.mBuffers
             // Interleaved: one buffer holds all channels; planar: each buffer holds one channel.
             let frameBytes = Int(first.mNumberChannels) == channels ? bytesPerFrame : MemoryLayout<Float>.size
             let frames = Int(first.mDataByteSize) / frameBytes
             guard frames > 0 else { return }
-            counters.callbacks.add(1, ordering: .relaxed)
             counters.frames.add(frames, ordering: .relaxed)
             ring.write(abl, frameCount: frames, hostTime: inInputTime.pointee.mHostTime, sampleTime: inInputTime.pointee.mSampleTime)
         }
     }
 
     /// Every 20 ms: read all records, convert each to a chunk stamped with its own host time.
-    /// Resets the converter when a record does not start where the previous one ended (within `TimelineAligner.tolerance`).
+    /// When a record does not start where the previous one ended (within `TimelineAligner.tolerance`), emits the
+    /// converter's tail at the end of the previous record and resets the converter.
     /// On cancellation, drains what is left and emits the converter's tail, placed at the end of the last record.
     private nonisolated static func makeDrainTask(ring: AudioRingBuffer, converter: sending SampleConverter, inputRate: Double,
                                                   clock: MeetingClock, onBuffer: @Sendable @escaping (AudioChunk) -> Void) -> Task<Void, Never> {
@@ -260,6 +270,11 @@ public actor ProcessTapSource: AudioSource {
                 while let record = ring.read(into: &buffer) {
                     let start = clock.timeline(hostTime: record.hostTime)
                     if let expected = expectedNext, abs(start.seconds - expected) > TimelineAligner.tolerance {
+                        // Emit the pre-gap samples still buffered in the resampler, then start fresh.
+                        let tail = converter.flush()
+                        if !tail.isEmpty {
+                            onBuffer(AudioChunk(track: .system, samples: tail, start: TimelineTime(seconds: expected), hostTime: lastHostTime))
+                        }
                         converter.reset()
                     }
                     expectedNext = start.seconds + Double(record.frameCount) / inputRate
