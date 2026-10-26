@@ -213,7 +213,7 @@
 
 - 結論: 未実施（Task 8）
 - 測定値:
-- 手順: Task 8 の前に AppleSpeechProbe に `--engine transcriber --file/--live`（dictation と同じ経路）を追加する必要がある（今は transcriber に `--file` / `--live` を付けると「未実装」と出して exit 2）
+- 手順: 計画 04 Task 12: `autonote dev engines` と `autonote dev transcribe --engine speech --file/--mic`（Spikes は計画 04 で削除。AppleSpeechProbe の transcriber 経路の代わり）
 - 要件書への影響:
 
 ## 項目 8: whisper.cpp の公式 XCFramework に x86_64 スライスが含まれるか
@@ -284,5 +284,5 @@
   - 効き（Intel、DictationTranscriber、マイクでの実測。項目 2）: `["AutoNote", "所沢", "Kubernetes"]` を入れて話すと、所沢と Kubernetes は正しく出たが、**AutoNote のような造語は効かなかった**（「音ノート」）。contextual なしとの比較はしていない
 - 結論（Apple Silicon 側）: 未実施（Task 8）
 - 測定値:
-- 手順: Task 8 の前に AppleSpeechProbe に `--engine transcriber --file/--live`（dictation と同じ経路）を追加する必要がある（今は transcriber に `--file` / `--live` を付けると「未実装」と出して exit 2）
+- 手順: 計画 04 Task 12: `autonote dev engines` と `autonote dev transcribe --engine speech --file/--mic`（Spikes は計画 04 で削除。AppleSpeechProbe の transcriber 経路の代わり）
 - 要件書への影響:

@@ -2,7 +2,7 @@
 # AutoNote の E2E 動作確認。リポジトリの成果物が「実際に動く」ことを人の手なしで確かめる。
 #
 # 使い方: scripts/e2e-check.sh [--quick] [--verbose]
-#   --quick     時間のかかる項目（swift test / build-app / Spikes build / 04.3・04.4 の whisper）を飛ばす（SKIP と表示）
+#   --quick     時間のかかる項目（swift test / build-app / 04.3・04.4 の whisper）を飛ばす（SKIP と表示）
 #   --verbose   各コマンドの出力をそのまま見せる（既定は FAIL のときだけ末尾 20 行）
 # 環境変数（FAIL 検出の確認用。副作用なしで期待値だけを変える）:
 #   E2E_EXPECT_VERSION   autonote --version の期待値（既定: Sources/AutoNoteCore/AutoNoteVersion.swift の値）
@@ -242,13 +242,6 @@ check_app_launch() {
     esac
 }
 
-check_spikes_build() {
-    CURRENT="8. Spikes を swift build"
-    [[ -d Spikes ]] || { skip "Spikes/ が無い"; return; }
-    [[ "${QUICK}" -eq 1 ]] && { skip "--quick"; return; }
-    if run swift build --package-path Spikes; then pass; else fail "Spikes のビルドが失敗"; fi
-}
-
 check_cer() {
     CURRENT="9. scripts/cer.py の計算"
     [[ -f scripts/cer.py ]] || { skip "scripts/cer.py が無い"; return; }
@@ -323,61 +316,6 @@ check_claude_probe_files() {
     fi
     if ! run bash -n scripts/probe-claude.sh; then fail "probe-claude.sh に構文エラー"; return; fi
     LAST_LOG=""; pass "（claude の実呼び出しは費用がかかるので E2E では行わない）"
-}
-
-check_device_probe() {
-    CURRENT="14. Spikes の DeviceProbe が起動時の一覧 JSON を出し SIGINT で終わる"
-    local bin=Spikes/.build/debug/DeviceProbe
-    [[ -x "${bin}" ]] || { skip "${bin} が無い（swift build --package-path Spikes を先に）"; return; }
-    new_log
-    "${bin}" >"${LAST_LOG}" 2>&1 &
-    local pid=$! i
-    # 起動時の present 行（入力のある機器。内蔵マイクがあれば必ず 1 行）を最大 5 秒待つ
-    for i in $(seq 1 50); do
-        grep -q '"event":"present"' "${LAST_LOG}" && break
-        kill -0 "${pid}" 2>/dev/null || break
-        sleep 0.1
-    done
-    local present
-    present=$(grep -c '"event":"present"' "${LAST_LOG}" || true)
-    kill -INT "${pid}" 2>/dev/null
-    local code waited=0
-    while kill -0 "${pid}" 2>/dev/null && (( waited < 30 )); do sleep 0.1; waited=$((waited + 1)); done
-    if kill -0 "${pid}" 2>/dev/null; then kill -9 "${pid}" 2>/dev/null; wait "${pid}" 2>/dev/null; fail "SIGINT から 3 秒で終わらない"; return; fi
-    wait "${pid}"; code=$?
-    if [[ "${present}" -lt 1 ]]; then fail "present の行が無い"; return; fi
-    if ! python3 -I -c 'import json,sys; [json.loads(l) for l in open(sys.argv[1]) if l.strip()]' "${LAST_LOG}" 2>/dev/null; then
-        fail "JSON として読めない行がある"; return
-    fi
-    if [[ ${code} -ne 0 ]]; then fail "SIGINT 後の終了コードが ${code}（期待 0）"; return; fi
-    pass "present ${present} 行、exit 0"
-}
-
-check_apple_speech_probe() {
-    CURRENT="15. Spikes の AppleSpeechProbe --engine transcriber が isAvailable を出す"
-    local bin=Spikes/.build/debug/AppleSpeechProbe
-    [[ -x "${bin}" ]] || { skip "${bin} が無い（swift build --package-path Spikes を先に）"; return; }
-    # 機材・許可は不要（SpeechTranscriber / DictationTranscriber の静的な問い合わせだけ）
-    if ! run_timeout 30 "${bin}" --engine transcriber --locale ja-JP; then fail "exit 0 で終わらない"; return; fi
-    local line
-    line="$(grep -m1 '^SpeechTranscriber.isAvailable: ' "${LAST_LOG}")"
-    [[ -n "${line}" ]] || { fail "isAvailable の行が無い"; return; }
-    grep -q '^DictationTranscriber.supportedLocales: ' "${LAST_LOG}" || { fail "DictationTranscriber.supportedLocales の行が無い"; return; }
-    pass "${line}、$(grep -m1 '^DictationTranscriber.supportedLocales: ' "${LAST_LOG}")"
-}
-
-check_apple_speech_probe_guard() {
-    CURRENT="15b. AppleSpeechProbe --engine transcriber --live / --file は未実装として exit 2"
-    local bin=Spikes/.build/debug/AppleSpeechProbe
-    [[ -x "${bin}" ]] || { skip "${bin} が無い（swift build --package-path Spikes を先に）"; return; }
-    local args code
-    for args in "--live" "--file /dev/null"; do
-        # shellcheck disable=SC2086
-        run_timeout 30 "${bin}" --engine transcriber --locale ja-JP ${args}; code=$?
-        if [[ ${code} -ne 2 ]]; then fail "${args}: exit ${code}（期待 2）"; return; fi
-        grep -q '未実装' "${LAST_LOG}" || { fail "${args}: stderr に「未実装」が無い"; return; }
-    done
-    pass "--live / --file とも exit 2"
 }
 
 check_render_fixture() {
@@ -605,15 +543,11 @@ CHECKS=(
     check_bundle_version
     check_cli
     check_app_launch
-    check_spikes_build
     check_cer
     check_whisper
     check_results_doc
     check_fake_transcript
     check_claude_probe_files
-    check_device_probe
-    check_apple_speech_probe
-    check_apple_speech_probe_guard
     check_render_fixture
     check_render_fixture_detects_diff
     check_dev_record
