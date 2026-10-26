@@ -24,15 +24,6 @@ private actor EventRecorder {
 
 private struct EventWaitTimedOut: Error {}
 
-/// Polls `condition` every 2 ms for at most 2 s.
-private func waitUntil(_ condition: () async -> Bool) async throws {
-    let deadline = ContinuousClock.now + .seconds(2)
-    while !(await condition()) {
-        guard ContinuousClock.now < deadline else { throw EventWaitTimedOut() }
-        try await Task.sleep(for: .milliseconds(2))
-    }
-}
-
 private func next(_ recorder: EventRecorder) async throws -> DeviceEvent {
     try await waitUntil { await recorder.count > 0 }
     return await recorder.take()!

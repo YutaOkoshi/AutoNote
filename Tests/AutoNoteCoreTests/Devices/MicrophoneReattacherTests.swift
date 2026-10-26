@@ -7,16 +7,6 @@ import AutoNoteTestSupport
 private let deviceA = DeviceIdentity(raw: .fixtureBluetoothInput)!.deviceRef
 private let uidA = deviceA.uid
 
-private struct WaitTimedOut: Error {}
-
-private func waitUntil(_ condition: () async -> Bool) async throws {
-    let deadline = ContinuousClock.now + .seconds(2)
-    while await !condition() {
-        guard ContinuousClock.now < deadline else { throw WaitTimedOut() }
-        try await Task.sleep(for: .milliseconds(2))
-    }
-}
-
 /// Runs `reattach` and advances the manual clock by one retry interval whenever the reattacher is sleeping.
 private func runReattach(_ control: FakeRecordingControl, _ timer: ManualTimerScheduler) async throws -> ReattachOutcome {
     let done = Mutex(false)
