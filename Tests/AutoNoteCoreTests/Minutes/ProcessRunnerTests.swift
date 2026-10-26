@@ -116,6 +116,21 @@ import AutoNoteTestSupport
         #expect(kill(pid, 0) != 0)
     }
 
+    @Test func cancellationAfterTimeoutStillThrowsCancellationError() async throws {
+        // The child ignores SIGTERM, so after the timeout fires it lives on until SIGKILL (5 s);
+        // cancelling inside that window must still surface as CancellationError, not a timed-out result.
+        let env = self.env
+        let sh = self.sh
+        let task = Task {
+            try await FoundationProcessRunner().run(
+                executable: sh, arguments: ["-c", "trap '' TERM; exec sleep 30"], stdin: Data(),
+                workingDirectory: try TemporaryDirectory.make(), environment: env, timeout: .milliseconds(200))
+        }
+        try await Task.sleep(for: .seconds(1))
+        task.cancel()
+        await #expect(throws: CancellationError.self) { try await task.value }
+    }
+
     @Test func alreadyCancelledTaskDoesNotLaunch() async throws {
         let dir = try TemporaryDirectory.make()
         let marker = dir.appending(path: "ran")

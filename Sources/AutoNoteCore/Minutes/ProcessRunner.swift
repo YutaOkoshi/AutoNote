@@ -77,6 +77,8 @@ public struct FoundationProcessRunner: ProcessRunning {
             let outcome = await run.completion()
             timer.cancel()
             if outcome.cancelled { throw CancellationError() }
+            // A cancel after the timeout already stopped the child is a no-op in `stop`; honour it here.
+            try Task.checkCancellation()
             return ProcessResult(exitCode: process.terminationStatus, stdout: outcome.stdout, stderr: outcome.stderr,
                                  timedOut: outcome.timedOut)
         } onCancel: {
