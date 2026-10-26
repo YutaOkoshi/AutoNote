@@ -13,8 +13,9 @@ private struct Fixture {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
 
-    func runner(killGrace: Duration = .seconds(5), maxLogRuns: Int = 200) -> AutomationRunner {
-        AutomationRunner(logsDirectory: logs, ledgerFile: ledger, shell: ["/bin/zsh", "-fc"],
+    func runner(killGrace: Duration = .seconds(5), maxLogRuns: Int = 200, ledgerFile: URL? = nil,
+                shell: [String] = ["/bin/zsh", "-fc"]) -> AutomationRunner {
+        AutomationRunner(logsDirectory: logs, ledgerFile: ledgerFile ?? ledger, shell: shell,
                          killGrace: killGrace, maxLogRuns: maxLogRuns)
     }
 }
@@ -119,6 +120,7 @@ private func logFolders(_ fx: Fixture) throws -> [URL] {
         let fx = try Fixture()
         let rec = await fx.runner(killGrace: .seconds(1)).run(def("trap '' TERM; sleep 30", timeout: 1), context: ctx, dedupeKey: nil)
         #expect(rec.timedOut && !rec.succeeded && rec.durationSeconds < 8)
+        #expect(rec.exitCode == nil)
     }
 
     @Test func largeOutputDoesNotBlock() async throws {
@@ -197,5 +199,51 @@ private func logFolders(_ fx: Fixture) throws -> [URL] {
         #expect(await ia.next() == rec)
         #expect(await ib.next()?.skippedReason == nil)
         #expect(await ib.next() == rec)
+    }
+
+    @Test func ledgerWriteFailureDoesNotRun() async throws {
+        let fx = try Fixture()
+        let counter = fx.root.appending(path: "counter.txt")
+        let regularFile = fx.root.appending(path: "not-a-dir")
+        try Data("x".utf8).write(to: regularFile)
+        let runner = fx.runner(ledgerFile: regularFile.appending(path: "ledger.json"))
+        let stream = await runner.records()
+        let rec = await runner.run(def("echo run >> \(counter.path)"), context: ctx, dedupeKey: "k1")
+        #expect(!rec.succeeded && rec.skippedReason == nil && rec.exitCode == nil && !rec.timedOut)
+        #expect(rec.failureMessage?.contains("ledger") == true)
+        #expect(!FileManager.default.fileExists(atPath: counter.path))
+        let stderr = try String(contentsOf: URL(filePath: rec.logDirectory).appending(path: "stderr.txt"), encoding: .utf8)
+        #expect(stderr.contains("ledger"))
+        var it = stream.makeAsyncIterator()
+        #expect(await it.next() == rec)
+    }
+
+    @Test func corruptLedgerIsMovedAside() async throws {
+        let fx = try Fixture()
+        try Data("not json".utf8).write(to: fx.ledger)
+        let rec = await fx.runner().run(def("true"), context: ctx, dedupeKey: "k1")
+        #expect(rec.succeeded)
+        let names = try FileManager.default.contentsOfDirectory(atPath: fx.root.path)
+        let aside = try #require(names.first { $0.hasPrefix("automation-ledger.json.corrupt-") })
+        #expect(try String(contentsOf: fx.root.appending(path: aside), encoding: .utf8) == "not json")
+        #expect(aside.count == "automation-ledger.json.corrupt-".count + "yyyyMMdd-HHmmss".count)
+        let keys = try AutoNoteJSON.decoder().decode([String].self, from: Data(contentsOf: fx.ledger))
+        #expect(keys == ["k1"])
+    }
+
+    @Test func spawnFailureIsReportedAndRetryable() async throws {
+        let fx = try Fixture()
+        let broken = fx.runner(shell: ["/nonexistent/autonote-shell", "-c"])
+        let stream = await broken.records()
+        let rec = await broken.run(def("true"), context: ctx, dedupeKey: "k1")
+        #expect(!rec.succeeded && rec.skippedReason == nil && rec.exitCode == nil && !rec.timedOut)
+        #expect(rec.failureMessage != nil)
+        let stderr = try String(contentsOf: URL(filePath: rec.logDirectory).appending(path: "stderr.txt"), encoding: .utf8)
+        #expect(stderr.contains("/nonexistent/autonote-shell"))
+        var it = stream.makeAsyncIterator()
+        #expect(await it.next() == rec)
+        #expect(await broken.recentRuns(limit: 10) == [rec])
+        let retry = await fx.runner().run(def("true"), context: ctx, dedupeKey: "k1")
+        #expect(retry.succeeded && retry.skippedReason == nil)
     }
 }

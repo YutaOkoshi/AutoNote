@@ -10,7 +10,6 @@ import Foundation
 public actor AutomationRunner {
     public static let defaultShell: [String] = ["/bin/zsh", "-lc"]
     static let alreadyRan = "already_ran"
-    static let spawnFailed = "spawn_failed"
 
     private let logsDirectory: URL
     private let ledgerFile: URL
@@ -30,41 +29,63 @@ public actor AutomationRunner {
 
     public func run(_ def: AutomationDefinition, context: AutomationContext, dedupeKey: String?) async -> AutomationRunRecord {
         let startedAt = Date()
+        let folder = { self.makeLogFolder(startedAt: startedAt, meetingID: context.meetingID.rawValue, name: def.name) }
         if let key = dedupeKey {
-            var ledger = readLedger()
+            // Fail closed: if the key cannot be read or persisted, do not run (avoids double posts).
+            // All of this happens before the first `await`, so a re-entrant run with the same key sees it.
+            let ledger: [String]
+            do {
+                ledger = try loadLedger()
+            } catch {
+                return finishFailure(def, context, startedAt, folder(), message: "dedupe ledger unreadable: \(error)")
+            }
             if ledger.contains(key) {
                 return AutomationRunRecord(name: def.name, event: context.event, meetingID: context.meetingID.rawValue,
                                            startedAt: startedAt, durationSeconds: 0, exitCode: nil, timedOut: false,
                                            skippedReason: Self.alreadyRan, logDirectory: "")
             }
-            ledger.append(key)
-            writeLedger(ledger)   // before any await, so a re-entrant run with the same key sees it
+            do {
+                try writeLedger(ledger + [key])
+            } catch {
+                return finishFailure(def, context, startedAt, folder(), message: "dedupe ledger not writable: \(error)")
+            }
         }
 
-        let folder = makeLogFolder(startedAt: startedAt, meetingID: context.meetingID.rawValue, name: def.name)
-        let stdoutFile = folder.appending(path: "stdout.txt")
-        let stderrFile = folder.appending(path: "stderr.txt")
+        let dir = folder()
+        let stdoutFile = dir.appending(path: "stdout.txt")
+        let stderrFile = dir.appending(path: "stderr.txt")
         var env = ProcessInfo.processInfo.environment
         env.merge(context.environment()) { _, new in new }
 
-        var exitCode: Int32?
-        var timedOut = false
-        var skippedReason: String?
+        let pid: pid_t
         do {
-            let pid = try ProcessGroupSpawner.spawn(arguments: shell + [def.command], environment: env,
-                                                    stdin: try context.stdinJSON(), stdoutFile: stdoutFile,
-                                                    stderrFile: stderrFile)
-            (exitCode, timedOut) = await wait(pid: pid, timeout: .seconds(max(def.timeoutSec, 0)))
+            pid = try ProcessGroupSpawner.spawn(arguments: shell + [def.command], environment: env,
+                                                stdin: try context.stdinJSON(), stdoutFile: stdoutFile,
+                                                stderrFile: stderrFile)
         } catch {
-            skippedReason = Self.spawnFailed
-            try? Data("\(error)\n".utf8).write(to: stderrFile)
+            // Nothing was exec'd, so the hook may run again on retry.
+            if let key = dedupeKey { forgetKey(key) }
+            return finishFailure(def, context, startedAt, dir, message: "could not start \(shell.first ?? "shell"): \(error)")
         }
+        let (exitCode, timedOut) = await wait(pid: pid, timeout: .seconds(max(1, def.timeoutSec)))
+        return finish(AutomationRunRecord(name: def.name, event: context.event, meetingID: context.meetingID.rawValue,
+                                          startedAt: startedAt, durationSeconds: Date().timeIntervalSince(startedAt),
+                                          exitCode: exitCode, timedOut: timedOut, skippedReason: nil,
+                                          logDirectory: dir.path), in: dir)
+    }
 
-        let draft = AutomationRunRecord(name: def.name, event: context.event, meetingID: context.meetingID.rawValue,
-                                        startedAt: startedAt, durationSeconds: Date().timeIntervalSince(startedAt),
-                                        exitCode: exitCode, timedOut: timedOut, skippedReason: skippedReason,
-                                        logDirectory: folder.path)
-        let record = writeResult(draft, in: folder)
+    /// A run that failed before the command could start: error text in `stderr.txt` and `failureMessage`.
+    private func finishFailure(_ def: AutomationDefinition, _ context: AutomationContext, _ startedAt: Date, _ dir: URL,
+                               message: String) -> AutomationRunRecord {
+        try? Data("autonote: \(message)\n".utf8).write(to: dir.appending(path: "stderr.txt"))
+        return finish(AutomationRunRecord(name: def.name, event: context.event, meetingID: context.meetingID.rawValue,
+                                          startedAt: startedAt, durationSeconds: Date().timeIntervalSince(startedAt),
+                                          exitCode: nil, timedOut: false, skippedReason: nil, logDirectory: dir.path,
+                                          failureMessage: message), in: dir)
+    }
+
+    private func finish(_ draft: AutomationRunRecord, in dir: URL) -> AutomationRunRecord {
+        let record = writeResult(draft, in: dir)
         pruneLogs()
         for sub in subscribers.values { sub.yield(record) }
         return record
@@ -123,26 +144,43 @@ public actor AutomationRunner {
 
     // MARK: Ledger
 
-    private func readLedger() -> [String] {
-        guard let data = try? Data(contentsOf: ledgerFile) else { return [] }
-        return (try? AutoNoteJSON.decoder().decode([String].self, from: data)) ?? []
+    /// Missing file → `[]`. Undecodable file → moved aside to `<ledger>.corrupt-<yyyyMMdd-HHmmss>` and `[]`.
+    /// Throws when the file exists but cannot be read or moved aside.
+    private func loadLedger() throws -> [String] {
+        guard FileManager.default.fileExists(atPath: ledgerFile.path) else { return [] }
+        let data = try Data(contentsOf: ledgerFile)
+        if let keys = try? AutoNoteJSON.decoder().decode([String].self, from: data) { return keys }
+        let base = ledgerFile.path + ".corrupt-" + Self.stamp(Date())
+        var aside = base
+        var n = 2
+        while FileManager.default.fileExists(atPath: aside) { aside = "\(base)-\(n)"; n += 1 }
+        try FileManager.default.moveItem(at: ledgerFile, to: URL(filePath: aside))
+        return []
     }
 
-    private func writeLedger(_ keys: [String]) {
-        try? FileManager.default.createDirectory(at: ledgerFile.deletingLastPathComponent(), withIntermediateDirectories: true)
-        guard let data = try? AutoNoteJSON.encoder().encode(keys) else { return }
-        try? data.write(to: ledgerFile, options: .atomic)
+    private func writeLedger(_ keys: [String]) throws {
+        try FileManager.default.createDirectory(at: ledgerFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try AutoNoteJSON.encoder().encode(keys).write(to: ledgerFile, options: .atomic)
     }
 
-    // MARK: Logs
+    private func forgetKey(_ key: String) {
+        guard let keys = try? loadLedger() else { return }
+        try? writeLedger(keys.filter { $0 != key })
+    }
 
-    private func makeLogFolder(startedAt: Date, meetingID: String, name: String) -> URL {
+    static func stamp(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.timeZone = .current
         formatter.dateFormat = "yyyyMMdd-HHmmss"
-        let base = "\(formatter.string(from: startedAt))-\(Self.sanitize(meetingID))-\(Self.sanitize(name))"
+        return formatter.string(from: date)
+    }
+
+    // MARK: Logs
+
+    private func makeLogFolder(startedAt: Date, meetingID: String, name: String) -> URL {
+        let base = "\(Self.stamp(startedAt))-\(Self.sanitize(meetingID))-\(Self.sanitize(name))"
         var folder = logsDirectory.appending(path: base)
         var n = 2
         while FileManager.default.fileExists(atPath: folder.path) {

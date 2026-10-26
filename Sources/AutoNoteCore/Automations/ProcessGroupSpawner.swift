@@ -18,6 +18,8 @@ public enum ProcessGroupSpawner {
         var fds: [Int32] = [-1, -1]
         guard pipe(&fds) == 0 else { throw SpawnError(call: "pipe", code: errno) }
         let readFD = fds[0], writeFD = fds[1]
+        // Keep both ends out of any concurrent spawn elsewhere in the app (dup2 onto fd 0 clears it in the child).
+        _ = fcntl(readFD, F_SETFD, FD_CLOEXEC)
         _ = fcntl(writeFD, F_SETFD, FD_CLOEXEC)
         // A child that exits without reading stdin must not SIGPIPE the app.
         _ = fcntl(writeFD, F_SETNOSIGPIPE, 1)
