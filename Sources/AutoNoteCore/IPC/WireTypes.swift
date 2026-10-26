@@ -79,6 +79,19 @@ public enum MeetingRowState: String, Codable, Sendable {
     case transcriptOnly = "transcript_only"
     case failed
     case tooShort = "too_short"
+
+    /// The Japanese state word shown in the CLI list and the meeting list UI.
+    public func displayText(progressLabel: String?) -> String {
+        switch self {
+        case .recording: "録音中"
+        case .processing: progressLabel ?? "処理中"
+        case .minutesGenerated: "完了"
+        case .transcriptOnly: "議事録 未生成"
+        case .failed: "失敗"
+        case .tooShort: "短すぎる録音"
+        case .recorded: "録音済み"
+        }
+    }
 }
 
 public struct MeetingRow: Codable, Equatable, Sendable, Identifiable {
