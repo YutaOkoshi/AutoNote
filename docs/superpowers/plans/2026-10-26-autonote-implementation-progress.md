@@ -16,7 +16,7 @@
 | 01 中核モデルと保存形式 | plan-01 | **完了**（2026-10-26、HEAD 652df47） | 基点 5fd0a64。14 タスク、最終レビュー（opus）で Critical 1・Important 4・Minor 5 を修正し再レビュー clean。swift test 80 件、E2E 20 項目 PASS |
 | 02 音声取り込み | plan-02 | **完了**（2026-10-26、HEAD 9a0fd64） | 基点 4441130。16 タスク（Task 15 👤 は利用者待ち）、最終レビュー（opus）で Important 1・Minor 7 → 修正波 1 回 + 再レビュー clean。swift test 206 件、E2E 21 PASS / 0 FAIL / 1 SKIP（02.1 は許可未応答）。Task 1 と 14/16 の 👤 手順は「利用者への依頼」参照 |
 | 03 機材と自動録音 | plan-03 | **完了**（2026-10-26、HEAD 974aeee） | 基点 9a0fd64。11 タスク（Task 10 Step 4〜7 👤 は利用者待ち）、実行前スキャンで 22 件を裁定（Y1〜Y21）、最終レビュー（opus）で Important 2・Minor 9 → 修正波 1 回 + 再レビュー clean。swift test 348 件、E2E 24 PASS / 0 FAIL / 1 SKIP（02.1 は許可未応答） |
-| 04 文字起こし | plan-04 | 進行中（2026-10-26 開始、基点 3de330f） | 実行前スキャンで API の読み替え 5 件と裁定 Z1〜Z16（台帳）。Task 12 👤（Apple Silicon）は利用者待ち |
+| 04 文字起こし | plan-04 | 完了（2026-10-27、HEAD 0a76f1f、487 テスト、E2E 25/0/0） | 裁定 Z1〜Z29（下の写し）。ローカル AVX2 xcframework（Z20）、`.silenceFinalize` 採用（Task 9 計測）。Task 12 👤（Apple Silicon）は利用者待ち |
 | 05 議事録と待ち行列 | plan-05 | 未着手 | |
 | 06 UI・CLI・Automations | plan-06 | 未着手 | |
 
@@ -159,6 +159,88 @@
 - Critical 0 / Important 2（I1 レジストリの reload 再入、I2 USB 別ポート復帰）/ Minor 9。修正波 1 回: 38bd152（I1）・08d8a7c（I2）・ba0199e（M1+M5）・974aeee（M9）。限定再レビュー（opus）: 5 件すべて ADDRESSED、新規の Critical/Important なし。残った Minor「quit ループ後も SIGINT が無視されたまま（遅い stop 中の 2 回目の Ctrl-C が効かない）」は保留（stop は有界、dev 専用 CLI。計画 06 のアプリ終了経路はこのハンドラを使わない）。
 - 繰り越した Minor（未対応・次の計画で該当箇所を触るときに拾う）: ManualTimerScheduler の doc summary の順序（Task 3）、Task 7 のゲート付きテストでの `defer { mic.release() }`、willSleep〜didWake 間の切断が `.removed` として出る件（裁定どおり現状維持）。
 
+### 計画 04（台帳から転記、2026-10-27）
+- 実行前スキャン（基点 3de330f）: API の読み替え 5 件 — ① 共有プロトコルのファイル名は `Transcription/TranscriptionProtocols.swift`（計画の `Protocols.swift` を読み替え、Z1）、② TestSupport のヘルパ配置（`u()` は Samples.swift、`TemporaryDirectory` は別ファイル、Fakes.swift の fake は actor なので `await` が要る、`FakeError(message:)`、Z2）、③ `DevCommands` は internal enum で `Dev*.swift` は `Sources/autonote/` 直下（Z3）、④ `OperationGate` は `tryEnter/wait/leave` の struct で `withGate` ではない（BatchGate は計画どおり Mutex、再利用しない）、⑤ `HintBudget.fit` は `separator` 引数を持つ（Z4）。そのほか `TranscriptFinalizer` の既定付き `deduplicator:` は無害。
+- 実行前スキャン（タスク間）: Task 2 の `waitUntil` が Devices テストのファイル private 版と衝突（Z5）、Task 6 の `timelineGapAfterPause` / `silenceOnlyNeverDecodes` が先頭無音の扱いと矛盾（Z6）、Task 8 の `batchRejectsAppleEngines` が非 throws で `try`（Z11）、Task 11 の `progressWeightedByDuration` は fake が進捗を呼ばない場合がある（Z7）、Task 12 は Apple Silicon が要る（Z9）。それ以外のタスク対（MachineKind、PCMAudio 系、EngineCatalog、WhisperCore、BatchGate、LiveFeed.make、FinalTranscriptionRunner の署名）は整合。
+- Ruling Z1: プロトコルのファイルは `Transcription/TranscriptionProtocols.swift`（概要 §8c）。計画の `Protocols.swift` はそう読み替える。
+- Ruling Z2: TestSupport の配置はそのまま（`u()` は Samples.swift、TemporaryDirectory.swift、Fakes.swift）。fake は actor なのでテストは `await fedChunks/startedWith/calls`。Task 10 が編集するのは Fakes.swift だけ。
+- Ruling Z3: 新しい CLI ファイルは `Sources/autonote/` 直下（DevEngines / DevTranscribe / DevModels / DevMicCapture.swift）。`Dev/` サブディレクトリは作らない — 既存の配置に合わせる。コスト: ファイルの移動。
+- Ruling Z4: `WhisperPrompt.make(hints:)` は `HintBudget.fit(hints, separator: "、").included.joined(separator: "、")`。`longDictionaryIsTrimmed` も同じ呼び出しと比べる。
+- Ruling Z5: Task 2 の TestAudio.swift がモジュール直下の `waitUntil(_ condition: () async -> Bool) async throws`（10 ms ポーリング、約 5 秒でタイムアウトして throw）を 1 つだけ持ち、Devices/MicrophoneReattacherTests.swift と Devices/DeviceMonitorTests.swift のファイル private 版 2 つを消す（スイート内のメソッドは残す）。理由: 同じ署名の private と internal の自由関数は呼び出し側で曖昧になる。
+- Ruling Z6（Task 6 ChunkPlanner）: 先頭の無音は削る — 窓に発話フレームが無い間は `windowStart` を最初の発話フレームまで進める。窓内の発話が minSpeech 未満なら `partial` を出さず、境界・強制切りでの確定も発話が minSpeech 未満なら `.skip`。理由: `timelineGapAfterPause` は 2 つ目の final を 60±0.05 に期待し（削らないと窓の開始が音声 3.0 になる）、`silenceOnlyNeverDecodes` も要る。コスト: 発話の開始が最大 1 フレーム（20 ms）遅れる。
+- Ruling Z7（Task 11）: ランナー自身がファイル境界ごとに時間重み付きの累積進捗を報告し（最後に 1.0）、ファイル内のコールバックはそのファイルの重みの中に縮めて渡す。理由: `progressWeightedByDuration` は fake が `progress` を呼ばなくても 0.25 を見る。
+- Ruling Z8（Task 8 E2E 04.2）: 声は `scripts/make-sample-audio.sh` と同じ選び方（`JA_VOICE`、既定 Kyoko、無ければ最初の ja_JP、無ければ SKIP）。Kyoko を直書きしない。
+- Ruling Z9: Task 12（👤 Apple Silicon）は利用者に回す — この Mac は Intel。「利用者への依頼」に記録済み。Task 13 は計画どおり先へ進む。
+- Ruling Z10: Task 9 Step 4（👤 マイク、任意）は飛ばし、結果表に「マイク確認は未」と書く。
+- Ruling Z11: Task 8 の `batchRejectsAppleEngines` は `async throws`。
+- Ruling Z12（Task 1 Step 8）: `whisper.framework` は `.build` 配下（bin パスか artifacts の `macos-arm64_x86_64` スライス）から探し、スライスのフレームワークをコピーして計画どおり otool / lipo で検証する。
+- Ruling Z16（Task 5 Step 1）: プロンプトの持ち込みは実装者が計画の規則で (a)/(b) を決め、WhisperContext.swift と結果表の項目 1 に書く。結果は (a) `carry_initial_prompt`。
+- Ruling Z17（Z20 で置換）: SwiftPM のバイナリターゲット取得が keychain で止まる件（`swift package --disable-keychain resolve`）。URL ターゲットをやめたので不要になった。
+- Ruling Z18: ggml / whisper のログ — `WhisperRuntime` が `whisper_log_set` / `ggml_log_set` で静かなコールバック（エラーだけ stderr）を入れ、テストと CLI の出力を汚さない。Task 5 で実施。
+- Ruling Z19: `WhisperContext` は UTF-8 の文字を途中で割るバイト単位の BPE トークンを 1 つの `TimedToken` にまとめる（有効な UTF-8 になるまでバイトを貯め、スパンは最初の t0〜最後の t1）。理由: ライブの `OverlapTrimmer` がトークン文字列を連結するので、U+FFFD が日本語の途中結果を壊す。コスト: トークン境界が数 ms 粗くなる。
+- Ruling Z20: 公式の URL バイナリターゲット（b5454）をやめ、ローカルでビルドした `tools/whisper.xcframework` に置き換える（同じ commit d1be6fd、x86_64 スライスは AVX/AVX2/FMA/F16C を明示、arm64 は上流の Metal / Core ML フラグ）。`scripts/build-whisper-xcframework.sh` が作り、build-app.sh / e2e-check.sh が無ければ呼ぶ。`Package.swift` は `.binaryTarget(path:)`。理由: 公式の x86_64 スライスは AVX なしで small が RTF 1.5 以上、spec §6.2/§17 の Intel 既定（large-v3-turbo の一括）が成り立たない。Intel の macOS 26 機はすべて AVX2 を持つ。コスト: 新しいクローンで最初に数分のビルドが要る。Task 1b として追加。
+- Ruling Z21（Task 6 規則 1）: 無音境界では窓内の発話合計が minSpeech（0.3 秒）以上なら確定する。ブリーフの「b − windowStart ≥ 1.0」の下限は外す（発話の少ない窓は Z6 で skip）。理由: spec §17（体感 5 秒以内）— 短い返事のあとに無音が続いても 8 秒の強制切りまで待たされる。コスト: 途切れがちな発話で短い whisper 窓が増える。
+- Ruling Z22: 強制切りから始まる窓の 1.0 秒の重なり部分にある発話は minSpeech に数えない（どのみちトークンは捨てられる）。理由: レビュアの Important #2（確定が 7 秒遅れ、whisper に無音を食わせる）。コスト: 強制切りの直後の skip が少し増える。
+- Ruling Z23: E2E 02.1 の失敗は計画 02 の挙動（システムタップを畳む間もマイクが書き続け、停止の遅れが約 0.65 秒）。Lead 追加の Task 8b で扱う。原因は `DevRecord` が `session.start` の戻り（マイクエンジン起動で約 0.7 秒）のあとに `--seconds` まるごと待っていたこと。`seconds − session.elapsed()` だけ待つように直した（4 行）。02.1 の長さは 5.003〜5.006 秒。計画 02 の 👤 項目（上の追記）もこれで片付く。
+- Ruling Z24: 計画 02 の 2 つのタイミングテスト（`SourceDrainTests.runAwaitingReturnsFalseWhenWorkOutlastsTimeout`、`ProcessTapSourceTests.startTimesOutWhenHardwareStartBlocks`）は負荷がかかると不安定になり、E2E の項目 1 を赤くしうる（単独実行では通る）。計画の最後に Lead が静かな状態で再実行し、まだ不安定なら最終の修正波でタイミングの余裕を広げる（テストのみの変更）。
+- Ruling Z25: Task 9 の遅延の増加は `dev transcribe --realtime` のペース配分の漂い（処理のあとに sleep していた）。修正ラウンドで締め切り（開始 + 0.1 秒 × チャンク番号）方式に直し、3 案を測り直して再判定。
+- Ruling Z26: Task 9 レビューの指摘（SegmentationStrategyTests.swift:8-10 の doc コメントと `@Test` が struct 内でカラム 0）は修正ラウンドにせず最終の修正波へ回す — 3 行の空白だけで、走っている Task 10 の実装者と衝突させない（実装者は同時に 1 人）。
+- 追加の裁定（番号なし）: Task 1b は RTF 0.345（目標 ≤ 0.33 に対し実質達成と判定。0.218 の参照値は `-nt`＝タイムスタンプなしだった）、DispatchQueue の QoS は `.utility` のまま、`xcodebuild -create-xcframework` が失敗する環境（Xcode プラグインの問題。`xcodebuild -runFirstLaunch` で直る）向けに手組み xcframework のフォールバックを持つ、`WhisperRuntime.systemInfo()` は静的バッファなので Mutex で守る。Task 5 の `waitIfPaused` は非 throws のまま（概要 §8b）でキャンセルされたら返り、transcriber 側が throw する。
+- タスクごとの結果（最終コミット、レビュー判定、修正ラウンド）:
+  - Task 1 af16591 — 仕様 ✅ / 品質 承認（sonnet）、修正 0。350 テスト
+  - Task 1b c346d09 — 仕様 ✅ / 品質 承認（opus）、修正 1（コミット固定の検証と結果表の記述）。419 テスト
+  - Task 2 586918d — 仕様 ✅ / 品質 承認（sonnet）、修正 1（未使用の `EventWaitTimedOut` を削除）
+  - Task 3 d1773d5 — 初回は品質 不承認（再ダウンロードで正常なファイルを先に消す）→ 修正 1（`replaceItemAt`）で承認。374 テスト
+  - Task 4 099a630 — 仕様 ✅ / 品質 承認（sonnet）、修正 0。388 テスト
+  - Task 5 377fa62 — 仕様 ✅ / 品質 承認（opus）、修正 1（キャンセルのテスト強化、`waitIfPaused` のキャンセル対応、Z19）。418 テスト
+  - Task 6 d89363b — 初回は品質 不承認（デコード失敗の握りつぶし、窓末尾 0.8 秒の発話の取りこぼし）→ 修正 1（ログ、Z21、Z22、`finish` の冪等性）で承認。437 テスト
+  - Task 7 6615f68 — 初回は品質 不承認（変換エラーでストリームが終わらず無言で止まる、変換前に mapper へ追記）→ 修正 1 で承認。457 テスト
+  - Task 8 ac6b980 — 仕様 ✅ / 品質 承認（opus）、修正 1（エラー経路の `live.finish()`、到達しない分岐の削除、04.1 を stdout だけ読む、`--model-path` の不在は `modelMissing`）。Lead が diff stat と `bash -n` で確認
+  - Task 8b 538a26d — Lead が 4 行の diff を確認（Z23）。フル E2E 29/0/0
+  - Task 9 be8189c — 仕様 ✅、品質は空白 1 件のみ（Z26 で最終波へ）。修正 1（Z25 のペース配分と再測定）
+  - Task 10 0776470 — 仕様 ✅ / 品質 承認（opus）、修正 0。472 テスト
+  - Task 11 cfce6f6 — 仕様 ✅ / 品質 承認（opus）、修正 0。481 テスト
+  - Task 12 — 👤 保留（下記）
+  - Task 13 54efaf5 — 仕様 ✅ / 品質 承認（sonnet）、修正 0。Spikes モジュールと E2E 8/14/15/15b を削除
+- 計測:
+  - small（ja、実音声 60 秒、beam 5）: ソースビルドの whisper-cli は RTF 0.218（`-nt`、4 スレッド）/ 0.311（2 スレッド）。公式 xcframework（AVX なし）を `WhisperContext` 経由は 1.576 / 3.119 で 7〜10 倍遅い。Task 1b 後の自前 xcframework は 0.345（タイムスタンプ付きの同条件 whisper-cli の 1.05 倍）。
+  - Task 8（ja-5min、small、`dev transcribe`、一括）: RTF 0.335、CER 0.2712（`--no-punct` 0.2218）。`--hints "AutoNote,所沢,Kubernetes"` で CER 0.2671、`--lang auto` は ja と同じ出力（差 0）。
+  - Task 9（Intel、DictationTranscriber、`tools/samples/ja-segments.wav` 77.5 秒＝10 文、`--realtime`、締め切り方式で再測定）:
+
+    | 案 | 確定件数 | 最長の発話 | 確定遅延の中央値（wall − end） |
+    |---|---|---|---|
+    | default | 2 | 60.01 秒 | 1.24 秒 |
+    | frequent | 2 | 60.01 秒 | 1.21 秒 |
+    | silence | 10 | 8.98 秒 | 0.01 秒 |
+
+    判定基準（件数 8〜13、最長 ≤ 15 秒、遅延中央値 ≤ 3.0 秒）を満たしたのは silence だけ → `SegmentationStrategy.current == .silenceFinalize`。silence の `end` は `finalize(through:)` に渡した時刻なので、体感の遅れは沈黙判定の待ち約 0.8 秒に処理時間を足したもの。直す前は 60 秒で 2 件・遅延が 1 文ごとに約 0.7 秒増えていた（Z25）。
+- 保留した Minor（次に該当箇所を触るときに拾う）:
+  - Task 1: build-app の `find` が artifacts ディレクトリ無しで pipefail に当たる、`MachineKind.current()` がテストされていない
+  - Task 1b: スクリプトの libtool 警告を捨てている、`DTSDKName`、`.tmp` の残骸
+  - Task 2: リサンプルのアサーションが弱い、`chunks()` に 0 以下の `chunkSeconds`
+  - Task 3: 共有ダウンロードタスクは非構造化（呼び出し側のキャンセルでは止まらない。他の呼び出し側が使うので許容）、インストール済みの近道なし（ブリーフどおり）
+  - Task 4: ライブのフォールバックが一括の順序を使う、カタログ外のモデル、地域の完全一致、`displayName` の nil モデル
+  - Task 5: モデル読み込み中のキャッシュのロック、actor 上のファイル読み、`@unchecked Sendable` のコメント、最後のセグメントの終端クランプ、`WhisperTokenAssembler` が不正なバイトで flush まで貯める（4 バイトで打ち切れば直る）、実 `WhisperContext` のキャンセルが未テスト
+  - Task 6: 他の Minor 8 件、強制切りの先の 0.3 秒未満の発話の末尾は skip（規則 4）
+  - Task 7: コンバータの flush が 64 フレームの 1 回呼び（`endOfStream` まで繰り返すのが正確）、他に #5〜#9
+  - Task 8: ダウンロード進捗の粒度、`--realtime` のずれ
+  - Task 9: `--realtime` の `try? clock.sleep(until:)`（キャンセル時）、silence の遅延指標の意味（`wall − end` は構造上ほぼ 0）
+  - Task 10: 定期保存のエラーは `finish()` まで握りつぶされる、`finish()` 以外に中断経路がない、`start` の二重呼びが無防備、`saveInterval` 内の 2 回目の保存スキップのテストが無い
+  - Task 11: 2 つ目の書き込みが失敗したとき raw.json が残る、`WAVFile.info` のフォールバックが到達しない、進捗コールバックがロックの外、system トラック失敗のテストが無い、キャンセルのテストが transcriber 内の再 throw 経路を通らない
+  - Task 12: 下記
+  - Task 13: 歴史的な「Spikes」のコメントが 2 か所（DevChecks.swift:7-8、CoreAudioHardware.swift:84）、フル E2E は計画の最後に Lead が実行
+- Task 12 👤 保留: Apple Silicon 機が要る（この Mac は Intel）。`EngineCatalog.defaults(for: .appleSilicon)` の「仮」（`.speech` / large-v3-turbo / small）は未確定。手順は「利用者への依頼」の計画 04 Task 12。
+- 台帳に番号のない欠番: Z13〜Z15 は台帳に記載が無い（Z12 の次は Z16）。
+
+**最終レビュー（ブランチ全体、opus、BASE 3de330f..54efaf5）**: 判定「修正後マージ可」。Critical 0、Important 4、Minor 7（保留。M3/M4/M5 と Task 5 のプール負荷の注意は計画 05 の実行前スキャンへ持ち越す）。「判断しなかった事項」は台帳アーカイブの final-review.md §Declined を参照。
+- Z27（I1）: RepetitionFilter 規則 (4) が数字列を壊す（10000円→10円）。数字（半角/全角）と区切り（, . 、）だけの繰り返し単位は縮約の対象外にし、計画 04 の規則 (4) の文面も修正。外れた場合の損失は数字の吃音がそのまま残る程度。
+- Z28（I2）: バッチ経路に無音ゲートが無く、無音区間の幻覚が final.json に入りうる。復号後、区間内の発話が 0.3 秒未満（SilenceDetector と同じ RMS 規則・20 ms フレーム）のセグメントを捨てる。既存のバッチテストはトーン音声に差し替え（無音 WAV だと全セグメントが落ちるため）。
+- Z29（I3）: ライブのトラックが finish() 前に終わっても failures に残らなかった。ストリームが早期終了したトラックを failures に記録し、finish() は失敗トラックの transcriber.finish() を飛ばす。
+- I4（Z24 の恒久化）: SourceDrainTests / ProcessTapSourceTests の時間余裕を広げた（timeout 1.0 秒、ブロック 3 秒、上限 2.5 秒未満）。Z26 の字下げも同コミット。
+- 修正波: 5c15ee7（I1）、bb03cb5（I2）、2da35f2（I3）、0a76f1f（I4+Z26）。再レビュー（sonnet）: 5 件すべて Addressed、新規の Critical/Important なし。再レビューの範囲外メモ 2 件は保留: 計画 04 本文 726 行付近の `wavFile(seconds:)` 例が実装の `wavFile(samples:)` と不一致（文書のみ）、`ProcessTapSourceTests.stopAfterTimedOutStartReturnsPromptly` は 200 ms のまま（負荷時に揺れる可能性）。
+
+**Lead 検証（HEAD 0a76f1f、2026-10-27）**: `swift test` 487 テスト / 45 スイート 緑（アイドル実行、警告なし、Z24 の 2 件も緑）。`scripts/build-app.sh && scripts/e2e-check.sh` 25 PASS / 0 FAIL / 0 SKIP（04.3 base RTF 0.136、04.4 whisper-live RTF 0.349、02.1 を含む）。ログは scratchpad の plan04-final-swift-test.log / plan04-final-e2e.log。
+
 ## 利用者への依頼（後回しにした 👤 手順）
 
 ### 計画 02 Task 1（TCC まとめ確認）— 2026-10-26
@@ -174,6 +256,8 @@
 2. 許可ありで `tapOnly` が受信できるか（system の `chunks` > 0）を確認する。0 のままなら `.build/debug/autonote dev record --seconds 10 --tap-layout withOutputClock --out /tmp/an-rec`（音を鳴らしながら）と比較し、`withOutputClock` だけ受信できる場合は `ProcessTapSource.init` の `layout` 既定を `.withOutputClock` に変える（裁定 X6）。
 3. 計画 02 Task 15（後回し可）: `docs/superpowers/plans/2026-10-25-autonote-02-audio-capture.md` の Task 15 Step 1〜4 のとおり、内蔵スピーカー / Shokz での穴埋め、`--voice-processing` の有無、手元の mp3 の `dev import` を実機で確かめ、結果表と要件書 §5.6・§19 を更新してコミットする。
 
+追記（2026-10-27、計画 04 Task 8 の E2E 実行時）: このセッションの `autonote` にマイクとシステム音声の許可が付き、E2E 02.1 が SKIP ではなく実行されるようになった。system トラックは `tapOnly` のまま受信でき（chunks > 0、`seconds` は 5±0.5 内）、上の 1・2 は実質確認済み（`.tapOnly` の既定は維持）。一方 mic トラックが約 5.65 秒で許容 5.0±0.5 を超えて FAIL したため、計画 04 の Lead 追加タスク 8b で原因を調べて直した（結果は計画 04 の裁定 Z23 を参照）。残るのは 3（Task 15）だけ。
+
 ### 計画 03 Task 10 Step 4〜7（実機で自動録音を一周）— 2026-10-26
 ハーネスは実装済み（`autonote dev auto-record`）。Shokz・3.5mm・USB の挙動はハードウェアが要るので利用者に依頼する。TCC の責任プロセスは起動元の端末になるため Terminal.app から実行する（マイクとシステム音声録音の許可が要る）。
 1. `swift build && mkdir -p /tmp/an-dev/vault /tmp/an-dev/data && .build/debug/autonote dev auto-record --vault /tmp/an-dev/vault --data /tmp/an-dev/data | tee /tmp/an-dev/shokz.log` を起動し、ブラウザで音の出る動画を流しておく。
@@ -181,6 +265,10 @@
 3. Step 5（3.5mm イヤホン）: 同じ 1〜5 を抜き差しで。`device.first.…` の uid が `BuiltInHeadphoneInputDevice` か、マイク無しイヤホンでも「外部マイク」が現れるかを見る。
 4. Step 6（USB、あれば）: `{"kind":"device","event":"added",…}` の行を記録（シリアルは伏せ字）。`uid_kind` が実物と合うか、別ポートで `device_uid` が変わるか、変わったときに型番一致でカウントダウンするか。
 5. Step 7: `docs/superpowers/research/2026-10-24-spike-results.md` 項目 10（USB は項目 4）の「結論」「測定値」を埋めてコミット（`docs: record auto-record hardware results (spike item 10)`）。復帰が 20 回で戻らない・声が欠ける場合は Task 7 の `retryInterval`/`maxAttempts` と要件書 §11.5 の方式を見直す必要があるので Lead に報告。
+
+### 計画 04 Task 12（Apple Silicon 機での確認。後回し可）— 2026-10-26
+- 計画 00 Task 8 の引き継ぎ。Apple Silicon 機が手元にあるときに `docs/superpowers/plans/2026-10-25-autonote-04-transcription.md` の Task 12 Step 1〜9 を行う（`dev engines` / `dev transcribe --engine speech` / whisper の Metal / 機材の見え方）。結果で `EngineCatalog.defaults(for: .appleSilicon)` の「仮」を確定または変更し、結果表の項目 1・4・7・12 と要件書 §6.2・§19 を更新する。
+- 計画 04 Task 9 Step 4（マイクで 60 秒話して 15 秒超の発話が無いことを見る）は任意。やるなら `autonote dev transcribe --mic --engine dictation --segmentation <採用案> --seconds 60`。
 
 ## 再開手順
 1. この表で進行中の計画を見る。そのブランチに checkout。
