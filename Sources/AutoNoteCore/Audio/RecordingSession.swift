@@ -243,9 +243,13 @@ public actor RecordingSession {
 
     /// `stop` for a stop requested by `tick()`: it waits its turn at the gate, so it must not end a later meeting.
     private func stop(meeting id: MeetingID, reason: StopReason) async {
-        _ = try? await serialized { () -> Manifest? in
-            guard meetingID == id else { return nil }
-            return try await performStop(reason: reason)
+        do {
+            _ = try await serialized { () -> Manifest? in
+                guard meetingID == id else { return nil }
+                return try await performStop(reason: reason)
+            }
+        } catch {
+            Self.log("\(reason.rawValue) stop", error)
         }
     }
 

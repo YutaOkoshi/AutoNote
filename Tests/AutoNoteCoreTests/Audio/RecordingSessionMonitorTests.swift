@@ -22,10 +22,16 @@ import AutoNoteTestSupport
         let h = try await SessionHarness.make(disk: FakeDiskSpace(bytes: 2_000_000_000))
         let events = await h.session.events()
         _ = try await h.session.start(.init(language: .ja))
-        h.clock.advance(1); await h.session.tick()          // first check: 2 GB, fine
+        #expect(h.disk.calls == 1)                          // the check before starting
+        h.clock.advance(1); await h.session.tick()          // first tick checks: 2 GB, fine
+        #expect(h.disk.calls == 2)
         h.disk.bytes = 900_000_000
         h.clock.advance(5); await h.session.tick()          // 5 s since the last check: skipped
-        h.clock.advance(5); await h.session.tick()          // 10 s: checked
+        #expect(h.disk.calls == 2)
+        h.clock.advance(4.9); await h.session.tick()        // 9.9 s: still skipped
+        #expect(h.disk.calls == 2)
+        h.clock.advance(0.1); await h.session.tick()        // 10 s: checked
+        #expect(h.disk.calls == 3)
         _ = try await h.session.stop()
         let received = await eventsUntilStopped(events)
         #expect(received.filter { if case .diskSpaceLow = $0 { true } else { false } }.count == 1)
@@ -50,6 +56,45 @@ import AutoNoteTestSupport
         #expect(m.status == .recorded)
         #expect(try await h.manifests.load(m.id) == m)
         #expect(abs(try h.duration(m, .mic) - 70) < 0.05)
+    }
+
+    @Test func stopAfterEarlierLowWarningSendsOneOfEach() async throws {
+        let h = try await SessionHarness.make(disk: FakeDiskSpace(bytes: 900_000_000))
+        let events = await h.session.events()
+        _ = try await h.session.start(.init(language: .ja))
+        h.clock.advance(10); await h.session.tick()
+        h.disk.bytes = 400_000_000
+        h.clock.advance(10); await h.session.tick()
+        h.clock.advance(10); await h.session.tick()         // after the stop request: no second stop
+        let received = try await withTimeout(.seconds(5)) { await eventsUntilStopped(events) }
+        #expect(received.filter { if case .diskSpaceLow = $0 { true } else { false } } == [.diskSpaceLow(availableBytes: 900_000_000)])
+        #expect(received.filter { if case .stopped(_, .diskFull) = $0 { true } else { false } }.count == 1)
+        #expect(await h.session.state == .idle)
+    }
+
+    @Test func providerErrorAtStartDoesNotBlockRecording() async throws {
+        let disk = FakeDiskSpace(); disk.error = DiskSpaceError.unavailable(path: "/nowhere")
+        let h = try await SessionHarness.make(disk: disk)
+        let id = try await h.session.start(.init(language: .ja))
+        #expect(await h.session.state == .recording(id))
+        #expect(try await h.manifests.load(id).status == .recording)
+        #expect(disk.calls == 1)
+        _ = try await h.session.stop()
+    }
+
+    @Test func providerErrorDuringTickIsSkipped() async throws {
+        let h = try await SessionHarness.make()
+        let events = await h.session.events()
+        let id = try await h.session.start(.init(language: .ja))
+        h.disk.error = DiskSpaceError.unavailable(path: "/nowhere")
+        h.clock.advance(10); await h.session.tick()
+        #expect(h.disk.calls == 2)
+        try await Task.sleep(for: .milliseconds(50))         // a wrongly spawned stop would have run by now
+        #expect(await h.session.state == .recording(id))
+        let m = try await h.session.stop()
+        let received = await eventsUntilStopped(events)
+        #expect(!received.contains { if case .diskSpaceLow = $0 { true } else { false } })
+        #expect(received.last == .stopped(m, .manual))
     }
 
     @Test func refusesToStartBelow500MB() async throws {
