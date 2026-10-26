@@ -109,8 +109,12 @@ public actor ModelManager {
             }
             let digest = try await Task.detached { try sha256Hex(of: partial) }.value
             guard digest == model.sha256 else { throw ModelError.checksumMismatch }
-            if fm.fileExists(atPath: final.path) { try fm.removeItem(at: final) }
-            try fm.moveItem(at: partial, to: final)
+            if fm.fileExists(atPath: final.path) {
+                // Atomic swap: there is never a moment without a valid model file.
+                _ = try fm.replaceItemAt(final, withItemAt: partial)
+            } else {
+                try fm.moveItem(at: partial, to: final)
+            }
             progress(1.0)
             return final
         } catch {
@@ -123,8 +127,15 @@ public actor ModelManager {
         let handle = try FileHandle(forReadingFrom: file)
         defer { try? handle.close() }
         var hasher = SHA256()
-        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
-            hasher.update(data: chunk)
+        var done = false
+        while !done {
+            try autoreleasepool {
+                if let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
+                    hasher.update(data: chunk)
+                } else {
+                    done = true
+                }
+            }
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }

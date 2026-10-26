@@ -27,6 +27,7 @@ import Testing
         #expect(await mm.fileURL(for: "fake") == url)
         #expect(try await mm.verify("fake"))
         #expect(p.values.last == 1.0)
+        #expect(zip(p.values, p.values.dropFirst()).allSatisfy { $0 <= $1 })
         #expect(try contents(dir) == ["ggml-fake.bin"])
     }
 
@@ -108,5 +109,39 @@ import Testing
         #expect(Set(WhisperModelCatalog.all.map(\.name)) == ["base", "small", "large-v3-turbo", "large-v3-turbo-q5_0"])
         #expect(WhisperModelCatalog.all.allSatisfy { $0.url.host() == "huggingface.co" && $0.sha256.count == 64 })
         #expect(WhisperModelCatalog.all.allSatisfy { $0.url.lastPathComponent == $0.fileName })
+    }
+
+    @Test func redownloadOverExistingKeepsAValidFile() async throws {
+        let blob = Data("fake-model".utf8)
+        let dir = try TemporaryDirectory.make()
+        let first = ModelManager(directory: dir, catalog: [model(blob)], downloader: FakeModelDownloader(payload: blob))
+        let url = try await first.download("fake") { _ in }
+
+        let failing = ModelManager(
+            directory: dir, catalog: [model(blob)],
+            downloader: FakeModelDownloader(payload: blob, failAfterBytes: 3))
+        await #expect(throws: (any Error).self) { try await failing.download("fake") { _ in } }
+        #expect(await failing.installed().map(\.name) == ["fake"])
+        #expect(await failing.fileURL(for: "fake") == url)
+        #expect(try Data(contentsOf: url) == blob)
+        #expect(try contents(dir) == ["ggml-fake.bin"])
+
+        let again = ModelManager(directory: dir, catalog: [model(blob)], downloader: FakeModelDownloader(payload: blob))
+        let url2 = try await again.download("fake") { _ in }
+        #expect(url2 == url)
+        #expect(try Data(contentsOf: url2) == blob)
+        #expect(try contents(dir) == ["ggml-fake.bin"])
+    }
+
+    @Test func stalePartialIsIgnoredAndReplaced() async throws {
+        let blob = Data("fake-model".utf8)
+        let dir = try TemporaryDirectory.make()
+        let stale = dir.appending(path: "ggml-fake.bin.partial")
+        try Data(blob).write(to: stale)  // right size, but still not an installed model
+        let mm = ModelManager(directory: dir, catalog: [model(blob)], downloader: FakeModelDownloader(payload: blob))
+        #expect(await mm.installed().isEmpty)
+        #expect(await mm.fileURL(for: "fake") == nil)
+        _ = try await mm.download("fake") { _ in }
+        #expect(try contents(dir) == ["ggml-fake.bin"])
     }
 }
