@@ -16,7 +16,7 @@
 | 01 中核モデルと保存形式 | plan-01 | **完了**（2026-10-26、HEAD 652df47） | 基点 5fd0a64。14 タスク、最終レビュー（opus）で Critical 1・Important 4・Minor 5 を修正し再レビュー clean。swift test 80 件、E2E 20 項目 PASS |
 | 02 音声取り込み | plan-02 | **完了**（2026-10-26、HEAD 9a0fd64） | 基点 4441130。16 タスク（Task 15 👤 は利用者待ち）、最終レビュー（opus）で Important 1・Minor 7 → 修正波 1 回 + 再レビュー clean。swift test 206 件、E2E 21 PASS / 0 FAIL / 1 SKIP（02.1 は許可未応答）。Task 1 と 14/16 の 👤 手順は「利用者への依頼」参照 |
 | 03 機材と自動録音 | plan-03 | **完了**（2026-10-26、HEAD 974aeee） | 基点 9a0fd64。11 タスク（Task 10 Step 4〜7 👤 は利用者待ち）、実行前スキャンで 22 件を裁定（Y1〜Y21）、最終レビュー（opus）で Important 2・Minor 9 → 修正波 1 回 + 再レビュー clean。swift test 348 件、E2E 24 PASS / 0 FAIL / 1 SKIP（02.1 は許可未応答） |
-| 04 文字起こし | plan-04 | 未着手 | |
+| 04 文字起こし | plan-04 | 進行中（2026-10-26 開始、基点 3de330f） | 実行前スキャンで API の読み替え 5 件と裁定 Z1〜Z16（台帳）。Task 12 👤（Apple Silicon）は利用者待ち |
 | 05 議事録と待ち行列 | plan-05 | 未着手 | |
 | 06 UI・CLI・Automations | plan-06 | 未着手 | |
 
