@@ -5,6 +5,8 @@ import os
 /// `RecordingSession`; tests use `FakeRecordingControl`.
 public protocol RecordingControl: Sendable {
     func start(device: DeviceRef?, language: Language, manual: Bool) async throws -> MeetingID
+    /// Callers must not overlap stops (the device coordinator serializes them): an own stop is recognized by the
+    /// reason of the one stop in flight.
     func stop(reason: StopReason) async
     func pause() async
     func resume() async
@@ -24,22 +26,28 @@ public actor RecordingSessionControl: RecordingControl {
     private let session: RecordingSession
     /// Set by `stop(reason:)` while its `.stopped` event has not been seen yet. Holding the reason (not just a flag)
     /// keeps a self-stop with a different reason that lands during our own stop from being swallowed.
-    private var expectingOwnStop: StopReason?
+    private(set) var expectingOwnStop: StopReason?
     private var subscribers: [UUID: AsyncStream<Void>.Continuation] = [:]
     private var forwarding: Task<Void, Never>?
 
     public init(session: RecordingSession) { self.session = session }
 
+    deinit { forwarding?.cancel() }
+
     public func start(device: DeviceRef?, language: Language, manual: Bool) async throws -> MeetingID {
         try await session.start(.init(language: language, microphoneUID: device?.uid, device: device))
     }
 
+    /// Do not overlap calls (see `RecordingControl.stop(reason:)`).
     public func stop(reason: StopReason) async {
         expectingOwnStop = reason
         do {
             _ = try await session.stop(reason: reason)
+        } catch RecordingError.notRecording {
+            expectingOwnStop = nil   // nothing was stopped, so no `.stopped` of ours will come
+            Self.log("stop", RecordingError.notRecording)
         } catch {
-            expectingOwnStop = nil
+            // e.g. the final manifest save failed: the session has already sent `.stopped`, which must still be dropped.
             Self.log("stop", error)
         }
     }
@@ -72,12 +80,15 @@ public actor RecordingSessionControl: RecordingControl {
     public func selfStops() async -> AsyncStream<Void> {
         if forwarding == nil {
             let events = await session.events()
-            if forwarding == nil {   // re-check: another call may have subscribed during the await
+            // Re-check: another call may have started forwarding during the await. The loser's `events` is then simply
+            // dropped, which unregisters it from the session's broadcaster (no event is lost: the winner subscribed first).
+            if forwarding == nil {
                 forwarding = Task { [weak self] in
                     for await event in events {
                         guard let self else { return }
                         await self.handle(event)
                     }
+                    await self?.finishSubscribers()
                 }
             }
         }
@@ -98,6 +109,12 @@ public actor RecordingSessionControl: RecordingControl {
     }
 
     private func removeSubscriber(_ id: UUID) { subscribers[id] = nil }
+
+    /// The session's event stream ended: no more self-stops can come.
+    private func finishSubscribers() {
+        for continuation in subscribers.values { continuation.finish() }
+        subscribers = [:]
+    }
 
     private static func log(_ what: String, _ error: any Error) {
         logger.error("\(what, privacy: .public) failed: \(String(describing: error), privacy: .public)")

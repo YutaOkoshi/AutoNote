@@ -43,6 +43,45 @@ private func receives(_ stream: AsyncStream<Void>, within limit: Duration) async
 
 private struct OtherError: Error {}
 
+/// A microphone whose `stop` blocks until `release()`, so a test can hold a session stop in flight.
+private final class GatedAudioSource: AudioSource, @unchecked Sendable {
+    let track = Track.mic
+    // All state guarded by `lock`.
+    private let lock = NSLock()
+    private var waiting: CheckedContinuation<Void, Never>?
+    private var released = false
+    private var entered = false
+
+    var stopEntered: Bool { lock.withLock { entered } }
+
+    func start(onBuffer: @Sendable @escaping (AudioChunk) -> Void) async throws {}
+
+    func stop() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let resumeNow = lock.withLock {
+                entered = true
+                if released { return true }
+                waiting = continuation
+                return false
+            }
+            if resumeNow { continuation.resume() }
+        }
+    }
+
+    func release() {
+        let continuation = lock.withLock { released = true; let c = waiting; waiting = nil; return c }
+        continuation?.resume()
+    }
+}
+
+private struct GatedSourceFactory: AudioSourceFactory {
+    let mic: GatedAudioSource
+    let system = FakeAudioSource(track: .system)
+    func makeSystemSource(clock: MeetingClock) -> any AudioSource { system }
+    func makeMicrophoneSource(deviceUID: String?, clock: MeetingClock) -> any AudioSource { mic }
+    func inputDevice(uid: String?) -> DeviceRef? { FakeAudioSourceFactory.defaultInput }
+}
+
 enum AttachFailure: String, CaseIterable, Sendable {
     case deviceNotFound, coreAudio, timedOut, microphonePermission, notRecording, other
 
@@ -140,6 +179,7 @@ enum AttachFailure: String, CaseIterable, Sendable {
         let h = try await SessionHarness.make()
         let control = RecordingSessionControl(session: h.session)
         let selfStops = await control.selfStops()
+        let otherSelfStops = await control.selfStops()
         let events = await h.session.events()
 
         _ = try await control.start(device: nil, language: .ja, manual: true)
@@ -156,6 +196,57 @@ enum AttachFailure: String, CaseIterable, Sendable {
         // The adapter forwards in event order, so a leaked manual stop would already be buffered ahead of this one.
         #expect(await receives(selfStops, within: .seconds(5)))
         #expect(await !receives(selfStops, within: .milliseconds(200)))
+        #expect(await receives(otherSelfStops, within: .seconds(5)))     // every stream gets the self-stop
+        #expect(await !receives(otherSelfStops, within: .milliseconds(200)))
+    }
+
+    @Test func adapterStopWhileIdleDoesNotSwallowLaterSelfStop() async throws {
+        let h = try await SessionHarness.make()
+        let control = RecordingSessionControl(session: h.session)
+        let selfStops = await control.selfStops()
+        let events = await h.session.events()
+        await control.stop(reason: .diskFull)                   // idle: throws notRecording, so the marker is cleared
+        #expect(await control.expectingOwnStop == nil)
+
+        _ = try await control.start(device: nil, language: .ja, manual: true)
+        h.disk.bytes = 100_000_000
+        await h.session.tick()
+        _ = try await withTimeout(.seconds(5)) { await eventsUntilStopped(events) }
+        #expect(await receives(selfStops, within: .seconds(5)))
+    }
+
+    /// Real-session path: the disk-full stop is held inside the microphone's `stop` while our `.manual` stop waits
+    /// at the session's gate, so the `.stopped(_, .diskFull)` arrives while our own stop is in flight.
+    @Test func adapterForwardsDifferentReasonSelfStopDuringOwnStop() async throws {
+        let mic = GatedAudioSource()
+        let paths = AppPaths(root: try TemporaryDirectory.make())
+        let disk = FakeDiskSpace()
+        let session = RecordingSession(paths: paths, manifests: ManifestStore(paths: paths),
+                                       sources: GatedSourceFactory(mic: mic), host: FakeHostClock(), disk: disk,
+                                       now: { Samples.start }, tickInterval: .seconds(3600), timeZone: Samples.tokyo)
+        let control = RecordingSessionControl(session: session)
+        let selfStops = await control.selfStops()
+        _ = try await control.start(device: nil, language: .ja, manual: true)
+
+        disk.bytes = 100_000_000
+        await session.tick()                                    // spawns the disk-full stop
+        try await waitUntil { mic.stopEntered }                 // ...which now holds the session's gate
+        let ownStop = Task { await control.stop(reason: .manual) }
+        try await waitUntil { await control.expectingOwnStop == .manual }
+        mic.release()
+
+        #expect(await receives(selfStops, within: .seconds(5)))
+        await ownStop.value                                     // throws notRecording inside: marker cleared
+        #expect(await control.expectingOwnStop == nil)
+        #expect(await session.state == .idle)
+    }
+
+    @Test func fakeSelfStopsReachEveryStream() async throws {
+        let control = FakeRecordingControl()
+        let first = await control.selfStops(), second = await control.selfStops()
+        await control.emitSelfStop()
+        #expect(await receives(first, within: .seconds(5)))
+        #expect(await receives(second, within: .seconds(5)))
     }
 
     @Test func adapterPassesMicrophoneUID() async throws {

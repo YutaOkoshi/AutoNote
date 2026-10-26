@@ -17,8 +17,7 @@ public actor FakeRecordingControl: RecordingControl {
     private var attachFailures: [String: (remaining: Int, error: any Error)] = [:]
     private var defaultAttachError: (any Error)?
     private var startFails = false
-    private var selfStopStream: AsyncStream<Void>?
-    private var selfStopContinuation: AsyncStream<Void>.Continuation?
+    private var selfStopContinuations: [AsyncStream<Void>.Continuation] = []
 
     public init() {}
 
@@ -36,9 +35,9 @@ public actor FakeRecordingControl: RecordingControl {
     /// Every later `start` throws `RecordingError.allSourcesFailed("fake")`.
     public func failStart() { startFails = true }
 
+    /// Yields once on every stream `selfStops()` has returned so far.
     public func emitSelfStop() {
-        _ = ensureSelfStopStream()
-        selfStopContinuation?.yield(())
+        for continuation in selfStopContinuations { continuation.yield(()) }
     }
 
     public func start(device: DeviceRef?, language: Language, manual: Bool) async throws -> MeetingID {
@@ -71,13 +70,10 @@ public actor FakeRecordingControl: RecordingControl {
         }
     }
 
-    /// Always the same stream (single consumer).
-    public func selfStops() async -> AsyncStream<Void> { ensureSelfStopStream() }
-
-    private func ensureSelfStopStream() -> AsyncStream<Void> {
-        if let selfStopStream { return selfStopStream }
+    /// A new stream per call; each gets every later `emitSelfStop()`.
+    public func selfStops() async -> AsyncStream<Void> {
         let (stream, continuation) = AsyncStream<Void>.makeStream()
-        selfStopStream = stream; selfStopContinuation = continuation
+        selfStopContinuations.append(continuation)
         return stream
     }
 }
