@@ -7,6 +7,7 @@ import AutoNoteTestSupport
     ("えー、来週リリースします。", "来週リリースします。"), ("それで えーと 来週です", "それで 来週です"), ("そうです、えー。", "そうです。"),
     ("えーとですね、はい", "えーとですね、はい"), ("あのー人に聞きます", "あのー人に聞きます"), ("um, I think so.", "I think so."),
     ("Uh", ""), ("えー。えーと。", ""), ("えーえーと", ""), ("umbrella を持参", "umbrella を持参"),
+    ("それで、えー", "それで"), ("えー。それでは始めます。", "それでは始めます。"), ("um. OK", "OK"), ("はい、えー、。次です", "はい。次です"),
 ])
 func cleans(_ c: (String, String)) { #expect(FillerRemover(fillers: DictionaryFile.defaultFillers).clean(c.0) == c.1) }
 
