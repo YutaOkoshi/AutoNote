@@ -48,7 +48,10 @@ public actor PostProcessingQueue {
     var stepTask: Task<Void, Never>?
     var loopTask: Task<Void, Never>?
     var loadTask: Task<Void, Never>?
-    var pausedForRecording = false
+    /// The latest `RecordingActivity` value. While `true`, no `transcribe` stage starts and `gate` is paused.
+    var isRecording = false
+    /// Feeds `activity.isRecordingUpdates()` into `setRecording(_:)` between `start()` and `stop()`.
+    var recordingTask: Task<Void, Never>?
     /// Rate-limit rounds of a summarize rerun in flight (the waiting job keeps them in `attempts`).
     var rateLimitRounds: [String: Int] = [:]
     private var runToken = 0
@@ -79,13 +82,40 @@ public actor PostProcessingQueue {
     /// and starts the loop.
     public func start() async {
         await ensureLoaded()
+        if recordingTask == nil {
+            let activity = self.activity
+            recordingTask = Task {
+                for await recording in await activity.isRecordingUpdates() {
+                    if Task.isCancelled { break }
+                    await self.setRecording(recording)
+                }
+            }
+        }
         guard loopTask == nil else { return }
         loopTask = Task { await self.loop() }
+    }
+
+    /// Pauses (`true`) or resumes (`false`) the batch transcription. A running `transcribe` is not cancelled;
+    /// it stops at the gate. Resuming wakes the loop so held `transcribe` stages start.
+    func setRecording(_ recording: Bool) async {
+        guard recording != isRecording else { return }
+        isRecording = recording
+        if recording {
+            await gate.pause()
+            Self.logger.info("recording started: final transcription paused")
+        } else {
+            await gate.resume()
+            Self.logger.info("recording ended: final transcription resumed")
+            wake()
+        }
+        publish()
     }
 
     /// Cancels the running stage (its job returns to `.pending`) and ends the loop.
     public func stop() async {
         stopping = true
+        recordingTask?.cancel()
+        recordingTask = nil
         loopTask?.cancel()
         stepTask?.cancel()
         wake()
@@ -241,7 +271,7 @@ public actor PostProcessingQueue {
                                summaryFailure: SummaryFailureKind.of(job.summaryFailure),
                                awaitingConfirmation: job.state == .waiting && job.notBefore == nil,
                                generation: job.generation)
-        }, pausedForRecording: pausedForRecording)
+        }, pausedForRecording: isRecording && jobs.values.contains(where: Self.waitsForTranscribe))
     }
 
     /// A fresh stream per call: the current snapshot first, then every change.
@@ -312,7 +342,17 @@ public actor PostProcessingQueue {
         publish()
     }
 
+    /// A job that is still to (or now does) run `transcribe`, which a recording holds back.
+    static func waitsForTranscribe(_ job: Job) -> Bool {
+        guard job.nextStage == StageName.transcribe else { return false }
+        switch job.state {
+        case .pending, .waiting, .running: return true
+        case .failed, .done: return false
+        }
+    }
+
     func isRunnable(_ job: Job, now: Date) -> Bool {
+        if isRecording && job.nextStage == StageName.transcribe { return false }
         switch job.state {
         case .pending: return true
         case .waiting: return job.notBefore.map { $0 <= now } ?? false
