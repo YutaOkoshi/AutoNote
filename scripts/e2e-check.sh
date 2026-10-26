@@ -449,6 +449,60 @@ check_dev_import() {
     pass "m4a / wav とも imported・16 kHz mono"
 }
 
+check_dev_devices() {
+    CURRENT="03.1 dev devices が接続中の入力を 1 行以上の JSON で出す"
+    cli_or_skip || return
+    if ! system_profiler SPAudioDataType 2>/dev/null | grep -q 'Input Channels'; then skip "入力デバイスが無い Mac"; return; fi
+    run_timeout 10 "${AUTONOTE_CLI}" dev devices; local code=$?
+    [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
+    local lines; lines=$(grep -c . "${LAST_LOG}" || true)
+    [[ "${lines}" -ge 1 ]] || { fail "出力が空"; return; }
+    if ! python3 -I -c 'import json,sys
+rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+assert rows and all("device_uid" in r for r in rows)' "${LAST_LOG}" 2>/dev/null; then
+        fail "JSON として読めない、または device_uid が無い行がある"; return
+    fi
+    pass "${lines} 行"
+}
+
+check_dev_devices_watch() {
+    CURRENT="03.2 dev devices --watch が present を流し SIGINT で exit 0"
+    cli_or_skip || return
+    new_log
+    "${AUTONOTE_CLI}" dev devices --watch >"${LAST_LOG}" 2>&1 &
+    local pid=$! i
+    for i in $(seq 1 50); do
+        grep -q '"event":"present"' "${LAST_LOG}" && break
+        kill -0 "${pid}" 2>/dev/null || break
+        sleep 0.1
+    done
+    local present
+    present=$(grep -c '"event":"present"' "${LAST_LOG}" || true)
+    kill -INT "${pid}" 2>/dev/null
+    local code waited=0
+    while kill -0 "${pid}" 2>/dev/null && (( waited < 30 )); do sleep 0.1; waited=$((waited + 1)); done
+    if kill -0 "${pid}" 2>/dev/null; then kill -9 "${pid}" 2>/dev/null; wait "${pid}" 2>/dev/null; fail "SIGINT から 3 秒で終わらない"; return; fi
+    wait "${pid}"; code=$?
+    if [[ "${present}" -lt 1 ]]; then fail "present の行が無い"; return; fi
+    if ! python3 -I -c 'import json,sys; [json.loads(l) for l in open(sys.argv[1]) if l.strip()]' "${LAST_LOG}" 2>/dev/null; then
+        fail "JSON として読めない行がある"; return
+    fi
+    if [[ ${code} -ne 0 ]]; then fail "SIGINT 後の終了コードが ${code}（期待 0）"; return; fi
+    pass "present ${present} 行、exit 0"
+}
+
+check_dev_auto_record_quit() {
+    CURRENT="03.3 dev auto-record が quit で終わる"
+    cli_or_skip || return
+    # stdin は run_timeout の背景ジョブでは /dev/null になるので EOF = quit で終わる（quit 行と同じ経路）。何も録音を始めないので許可は不要
+    run_timeout 20 "${AUTONOTE_CLI}" dev auto-record --vault "${WORK}/ar-vault" --data "${WORK}/ar-data" <<<'quit'; local code=$?
+    [[ ${code} -eq 124 ]] && { fail "hang: 20 秒で終わらない"; return; }
+    [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
+    local first; first="$(head -n 1 "${LAST_LOG}")"
+    grep -q '"kind":"status"' <<<"${first}" && grep -q '"state":"idle"' <<<"${first}" || { fail "1 行目が status/idle でない: ${first}"; return; }
+    pass "status idle の後 exit 0"
+}
+
 # ---------------------------------------------------------------- 実行
 
 CHECKS=(
@@ -473,6 +527,9 @@ CHECKS=(
     check_render_fixture_detects_diff
     check_dev_record
     check_dev_import
+    check_dev_devices
+    check_dev_devices_watch
+    check_dev_auto_record_quit
 )
 
 START=${SECONDS}
