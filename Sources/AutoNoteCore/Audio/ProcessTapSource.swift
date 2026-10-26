@@ -19,33 +19,6 @@ private final class IOCounters: Sendable {
     let frames = Atomic<Int>(0)
 }
 
-/// Resumes a checked continuation at most once, whichever of teardown completion and timeout comes first.
-private final class ResumeGate: Sendable {
-    private enum State { case waiting(CheckedContinuation<Void, Never>?), resumed }
-    private let state = Mutex<State>(.waiting(nil))
-
-    /// Stores the continuation, or resumes it at once if `fire` already ran.
-    func install(_ c: CheckedContinuation<Void, Never>) {
-        let resumeNow = state.withLock { s -> Bool in
-            if case .resumed = s { return true }
-            s = .waiting(c); return false
-        }
-        if resumeNow { c.resume() }
-    }
-
-    /// Returns true only for the first caller.
-    @discardableResult
-    func fire() -> Bool {
-        let (first, c) = state.withLock { s -> (Bool, CheckedContinuation<Void, Never>?) in
-            guard case .waiting(let c) = s else { return (false, nil) }
-            s = .resumed
-            return (true, c)
-        }
-        c?.resume()
-        return first
-    }
-}
-
 /// System audio (all processes except `excludeBundleIDs`) via a Core Audio process tap and a private aggregate device.
 ///
 /// Every hardware call runs on a dedicated serial queue so neither the actor's executor nor the main thread blocks
@@ -154,8 +127,8 @@ public actor ProcessTapSource: AudioSource {
             await teardown(up.objects)
             throw AudioSourceError.unsupportedFormat
         }
-        let drain = Self.makeDrainTask(ring: up.ring, converter: converter, inputRate: up.format.mSampleRate,
-                                       clock: clock, onBuffer: onBuffer)
+        let drain = SourceDrain.makeTask(track: track, ring: up.ring, converter: converter, inputRate: up.format.mSampleRate,
+                                          clock: clock, onBuffer: onBuffer)
         state = .running(objects: up.objects, ring: up.ring, drain: drain)
         if stopRequestedWhileStarting { await stop() }
     }
@@ -219,20 +192,9 @@ public actor ProcessTapSource: AudioSource {
 
     /// Runs the teardown on `controlQueue`; gives up waiting after `stopTimeout` (the teardown keeps going).
     private func teardown(_ objects: Objects) async {
-        let hardware = self.hardware, timeout = self.stopTimeout, queue = self.controlQueue
-        let gate = ResumeGate()
-        let timer = Task {
-            do { try await Task.sleep(for: timeout) } catch { return }
-            if gate.fire() { Self.logger.error("teardown timeout") }
-        }
-        await withCheckedContinuation { cont in
-            gate.install(cont)
-            queue.async {
-                Self.tearDown(hardware, objects)
-                gate.fire()
-            }
-        }
-        timer.cancel()
+        let hardware = self.hardware
+        let finished = await controlQueue.run(timeout: stopTimeout) { Self.tearDown(hardware, objects) }
+        if !finished { Self.logger.error("teardown timeout") }
     }
 
     // MARK: - Real-time and drain
@@ -251,50 +213,6 @@ public actor ProcessTapSource: AudioSource {
             guard frames > 0 else { return }
             counters.frames.add(frames, ordering: .relaxed)
             ring.write(abl, frameCount: frames, hostTime: inInputTime.pointee.mHostTime, sampleTime: inInputTime.pointee.mSampleTime)
-        }
-    }
-
-    /// Every 20 ms: read all records, convert each to a chunk stamped with its own host time.
-    /// When a record does not start where the previous one ended (within `TimelineAligner.tolerance`), emits the
-    /// converter's tail at the end of the previous record and resets the converter.
-    /// On cancellation, drains what is left and emits the converter's tail, placed at the end of the last record.
-    private nonisolated static func makeDrainTask(ring: AudioRingBuffer, converter: sending SampleConverter, inputRate: Double,
-                                                  clock: MeetingClock, onBuffer: @Sendable @escaping (AudioChunk) -> Void) -> Task<Void, Never> {
-        Task.detached(priority: .userInitiated) {
-            var converter = converter
-            var buffer: [Float] = []
-            var expectedNext: Double?           // timeline seconds where the next record should start
-            var lastHostTime: UInt64 = 0
-
-            func drainAvailable() {
-                while let record = ring.read(into: &buffer) {
-                    let start = clock.timeline(hostTime: record.hostTime)
-                    if let expected = expectedNext, abs(start.seconds - expected) > TimelineAligner.tolerance {
-                        // Emit the pre-gap samples still buffered in the resampler, then start fresh.
-                        let tail = converter.flush()
-                        if !tail.isEmpty {
-                            onBuffer(AudioChunk(track: .system, samples: tail, start: TimelineTime(seconds: expected), hostTime: lastHostTime))
-                        }
-                        converter.reset()
-                    }
-                    expectedNext = start.seconds + Double(record.frameCount) / inputRate
-                    lastHostTime = record.hostTime
-                    let samples = converter.convert(buffer)
-                    if !samples.isEmpty {
-                        onBuffer(AudioChunk(track: .system, samples: samples, start: start, hostTime: record.hostTime))
-                    }
-                }
-            }
-
-            while !Task.isCancelled {
-                drainAvailable()
-                try? await Task.sleep(for: .milliseconds(20))
-            }
-            drainAvailable()
-            let tail = converter.flush()
-            if !tail.isEmpty, let end = expectedNext {
-                onBuffer(AudioChunk(track: .system, samples: tail, start: TimelineTime(seconds: end), hostTime: lastHostTime))
-            }
         }
     }
 }
