@@ -24,8 +24,10 @@ public struct WriteVaultStage: QueueStage {
         }
         let minutesURL = context.paths.minutesFile(id)
 
-        // A failed regeneration must not overwrite the existing minutes with a transcript-only note.
+        // A failed regeneration must not overwrite the existing minutes with a transcript-only note. The
+        // previous minutes stay the state of record, so undo SummarizeStage's `.generating`.
         if job.summaryFailure != nil, FileManager.default.fileExists(atPath: minutesURL.path) {
+            _ = try await context.manifests.update(id) { $0.status = .minutesGenerated }
             for stage in [StageName.updateIndex, StageName.automations] where !job.completedStages.contains(stage) {
                 job.completedStages.append(stage)
             }

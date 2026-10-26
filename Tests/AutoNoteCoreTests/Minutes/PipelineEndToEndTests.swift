@@ -115,6 +115,27 @@ import Testing
         #expect(try await f.status() == .minutesGenerated)
     }
 
+    @Test func failedRegenerateRestoresMinutesGeneratedStatusAndKeepsNote() async throws {
+        let f = try await setUp()
+        let first = f.queue(summarizer: Self.succeeding)
+        await first.enqueue(f.id)
+        await first.runUntilIdle()
+        let before = try f.read(Self.titledPath)
+        #expect(try await f.status() == .minutesGenerated)
+
+        // SummarizeStage marks the meeting `.generating`, fails, and WriteVaultStage keeps the existing note.
+        let queue = f.queue(summarizer: Self.fixed(.failure(FakeError(message: "x"))))
+        await queue.regenerate(f.id)
+        await queue.runUntilIdle()
+
+        #expect(try f.read(Self.titledPath) == before)
+        #expect(!f.exists(Self.untitledPath))
+        let job = try #require(try await f.job())
+        #expect(job.generation == 1)
+        #expect(job.summaryFailure != nil)
+        #expect(try await f.status() == .minutesGenerated)
+    }
+
     @Test func regenerateWithoutJobStartsFromSummarize() async throws {
         let f = try await setUp()
         let first = f.queue(summarizer: Self.succeeding)
