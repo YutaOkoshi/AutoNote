@@ -17,7 +17,7 @@
 | 02 音声取り込み | plan-02 | **完了**（2026-10-26、HEAD 9a0fd64） | 基点 4441130。16 タスク（Task 15 👤 は利用者待ち）、最終レビュー（opus）で Important 1・Minor 7 → 修正波 1 回 + 再レビュー clean。swift test 206 件、E2E 21 PASS / 0 FAIL / 1 SKIP（02.1 は許可未応答）。Task 1 と 14/16 の 👤 手順は「利用者への依頼」参照 |
 | 03 機材と自動録音 | plan-03 | **完了**（2026-10-26、HEAD 974aeee） | 基点 9a0fd64。11 タスク（Task 10 Step 4〜7 👤 は利用者待ち）、実行前スキャンで 22 件を裁定（Y1〜Y21）、最終レビュー（opus）で Important 2・Minor 9 → 修正波 1 回 + 再レビュー clean。swift test 348 件、E2E 24 PASS / 0 FAIL / 1 SKIP（02.1 は許可未応答） |
 | 04 文字起こし | plan-04 | 完了（2026-10-27、HEAD 0a76f1f、487 テスト、E2E 25/0/0） | 裁定 Z1〜Z29（下の写し）。ローカル AVX2 xcframework（Z20）、`.silenceFinalize` 採用（Task 9 計測）。Task 12 👤（Apple Silicon）は利用者待ち |
-| 05 議事録と待ち行列 | plan-05 | 未着手 | |
+| 05 議事録と待ち行列 | plan-05 | 完了（2026-10-27、HEAD e121609、630 テスト、E2E 27/0/0） | 裁定 P1・Y1〜Y35（下の写し）。Task 1 👤 と Task 14 Step 6 👤（claude -p の実測）は利用者待ち。計画 06 は Step 6 を配線前の関門にする |
 | 06 UI・CLI・Automations | plan-06 | 未着手 | |
 
 ## 裁定の写し（計画完了時に台帳から転記）
@@ -241,6 +241,97 @@
 
 **Lead 検証（HEAD 0a76f1f、2026-10-27）**: `swift test` 487 テスト / 45 スイート 緑（アイドル実行、警告なし、Z24 の 2 件も緑）。`scripts/build-app.sh && scripts/e2e-check.sh` 25 PASS / 0 FAIL / 0 SKIP（04.3 base RTF 0.136、04.4 whisper-live RTF 0.349、02.1 を含む）。ログは scratchpad の plan04-final-swift-test.log / plan04-final-e2e.log。
 
+### 計画 05（台帳から転記、2026-10-27）
+- 実行前スキャン（基点 018c339）: API 74 行のうち差異 11・無し 4（うち #21 #30 は計画が作る）。読み替え 11 件は次のとおり。
+  - #12 `Job.nextStage` は計算プロパティ（保存しない。JSON に出ない）
+  - #18 共有プロトコルのファイルは `Minutes/MinutesProtocols.swift`（計画の `Protocols.swift` を読み替え）
+  - #21 `AppPaths.claudeWorkingDirectory` は無い（Task 2 が `AppPaths+Minutes.swift` で追加）
+  - #25 `ManifestStore.load(_:)` は `throws -> Manifest`（optional ではない。「読めない→何もしない」は `try?`）
+  - #27 `ManifestStore.all()` は throws なし（`try` 不要）
+  - #30 `PortableDefaults.standard` に `.prompt` は無い（Task 3 が追加）
+  - #31 `PortableConfigStoreTests.createdDefaults` の期待値は 2 か所（Task 3 が両方直す）
+  - #32 `DictionaryFile.parse(_:)` は `(dictionary:, issues:)` のタプル
+  - #41 `VaultError.outputFolderUnavailable(URL)` はペイロードあり
+  - #46 `Samples.manifest` は `.minutesGenerated`・`tracks: []`（テストで上書きする）
+  - #70 `DevCommands.run` の default usage 一覧に `DevSummarize.usage` を足す指示が計画に無い
+- そのほかのスキャン結果: タスク間の衝突表で 39 行のうち食い違い 10 件、未決 14 件を Y1〜Y32 で裁定。overview 8b の `PostProcessingQueue` init の記述が内部で矛盾（Y28）、8c の「`VaultWriter` / `PortableConfigStore` は出力フォルダごとに 1 インスタンス」と計画 05 の毎回 new が衝突（Y14）。
+- Ruling P1: Task 1（👤 `claude -p` の 60 分・120 分を `--setting-sources project` で測る）は利用者に回す。各回で利用者の claude の使用量を消費するため計画自身が 👤 としており、Task 2〜14 は Task 1 に依存しない（Task 3 は計画の推定式 文字数 ÷ 1.0 + 16,000 のまま。Task 1 はその妥当性を確かめるだけ）。「利用者への依頼」に記録済み。コスト: 外れていれば `charsPerToken` と分割閾値の定数 1 つを後で下げる。
+- Y1: 共有プロトコルのファイルは `Minutes/MinutesProtocols.swift`。01 / 04 の型は再定義しない。`StageName` は String 定数の名前空間で `StageName.all: [String]`。
+- Y2: 計画 01 Storage はコードに合わせる — `ManifestStore.load(_:) throws -> Manifest`（「読めない→何もしない」は `try?`）、`ManifestStore.all() -> [Manifest]`（throws なし）。
+- Y3: Task 3 は `PortableConfigStoreTests.createdDefaults` の期待値 2 か所を `[.dictionary, .prompt, .frontmatter, .devices]` に直す。
+- Y4: `DictionaryFile.parse(_:)` は `(dictionary:, issues:)`。ステージは `.dictionary` を取り `issues` は無視する。
+- Y5: `VaultError.outputFolderUnavailable(URL)` はペイロードあり。`catch VaultError.outputFolderUnavailable` のパターンで受ける。
+- Y6: `Samples.manifest` は `.minutesGenerated` / `tracks: []`。テストが `status`・`tracks`・`endedAt` を必要に応じて上書きする。
+- Y7: Task 14 は `DevSummarize.usage` を `DevCommands.run` の default usage 一覧に足し、既存の `rest` を使う。
+- Y8: `ClaudeLocator.locate(home:loginShellLookup:isExecutable:)` に既定引数（`homeDirectoryForCurrentUser`、`ClaudeLocator.loginShellLookup`、`isExecutableFile(atPath:)`）。`SummarizerFactory` は既定で `locate()` を呼ぶ。
+- Y9: `PostProcessingQueue` の `jobStore`・実行中タスク・enqueue / rerun のヘルパは `internal`（`private` にしない）。`+Commands.swift` の拡張がコンパイルできるように。
+- Y10: TestSupport の `ScriptedStage` のストリーム引数は `release:`（`gate:` にしない。`BatchGate` と紛らわしいため）。
+- Y11: `job.transcriptEngine` は TranscribeStage が引き続き書く（計画 06 が表示する）。欠陥ではない。
+- Y12: `resolveOverwrite(false)` は manifest の status も `.minutesGenerated` にする（議事録はアプリ領域にあり、Vault は意図して更新しない）。コスト: status 書き込み 1 回。
+- Y13: `standardStages(runner:summarizer:timeZone: TimeZone = .current)` は `timeZone` を `WriteVaultStage` へ渡す。Task 12 のテストは `TimeZone(identifier: "Asia/Tokyo")!` を渡し、CI のタイムゾーンによらず固定ファイル名で通す。
+- Y14: 新規 `Minutes/SharedVaultServices.swift`。`public final class SharedVaultServices: Sendable`（出力フォルダのパス + paths.root をキーに Mutex で守るキャッシュ）、`public static let standard`、`vaultWriter(outputFolder:paths:now:)`、`configStore(outputFolder:paths:)`。Task 9〜13 のステージと `Retention` は init の `services: SharedVaultServices = .standard` を受け取り、`VaultWriter` / `PortableConfigStore` を直接作らない。テストは隔離のため `SharedVaultServices()` を渡し、計画 06 は `.standard` を使う（overview 8c の「1 インスタンス共有」を満たす）。Task 9（最初の利用者）が作る。コスト: 間接層 1 つ。
+- Y15: Task 6 の `classifiesFailures` は `@Test(arguments:)` でパラメータ化し（stdout と期待する `SummarizerError` の case）、実際の `#expect` を持たせる。全タスク共通: 計画中のコメントだけのテスト本体は実行できるアサーションにする。コメントだけのテストはレビューで ❌。
+- Y16: 分割規則の端: パートは空にしない。1 発話だけで予算の半分を超えても単独で 1 パートにする。発話数が `minimumParts` 未満ならパート数 = 発話数（最小 1）。
+- Y17: ジョブの順序は `(createdAt, id)` の昇順。テストは id の同順位判定に頼ってよい。
+- Y18: `.retry(after:)` は 1 ステージにつき最大 `maxAttempts = 24` 回まで受け付ける（毎時の rate limit 再試行で約 24 時間）。超えたら最後の理由でジョブを failed にする。`generation` は summarize の再実行が実際に始まるときだけ増える。
+- Y19: 失敗した regenerate は done のジョブに `summaryFailure` を残す（UI が表示する）。通知を `meeting:generation` で重複排除するのは計画 06 の担当（06 への申し送り）。
+- Y20: `Retention.purgeExpiredAudio` が音声を消すのは、`final.json` があり、status が `.recording` / `.tooShort` でなく、`transcribe` が未完了のジョブが無い会議だけ。4 つ目のテストにジョブ無しの `.recorded` を入れる。
+- Y21: 出力フォルダが無いときの「書き出し済み」は `paths.vaultStateFile(id)` の存在で判定する。
+- Y22: Task 9 のフォールバック（ライブ → 確定版）は `TranscriptFinalizer` と同じ順で Replacer → FillerRemover を通し、エコーの重複排除はしない（live.json にトラック情報が無い）。コードのコメントに記載。計画 06 への申し送り。
+- Y23: `TranscribeStage` のランナーは init で固定。確定版エンジンの設定が変わったら計画 06 がステージ一式を組み直す（06 への申し送り）。
+- Y24: `ProcessRunning.run(environment:)` は環境を置き換える（呼び出し側は親の環境を含む `childEnvironment` を渡す）。cwd のテストは `realpath` で比べる。
+- Y25: `start()` は保存済みの `Job.stages` を使う。未知のステージ名は明確な理由つきでジョブを failed にする。
+- Y26: `JobProgress.stage` は実行中のステージ（待機中は `nextStage`）。進捗は保存せず、再起動後はジョブが走るまで nil。
+- Y27: `runUntilIdle()` は実行できるジョブが無くなったら戻る（キューが空のときだけではない。録音による停止・`notBefore`・`awaitingConfirmation` も含む）。
+- Y28: `PostProcessingQueue.init` は計画 05 どおり `gate:` 必須。overview 8b の「配線」の箇条は計画完了時に直し、計画 06 のブリーフは必須の形で書く。
+- Y29: Task 3 の `build(_:)` は `build(_:utterances:part:)` に委譲する（描画経路を 1 本にし、区切り文字の防御を 1 か所に置く）。
+- Y30: `TemporaryDirectory`・`Samples`・`u()`・`FakeError`・`CallLog`・`FakeBatchTranscriber`・`FakeSummarizer`・`FakeQueueStage` は計画の名前で TestSupport にある（スキャンで一致）。新しい fake は `Sources/AutoNoteTestSupport/Minutes/` に置く。
+- Y31（最終修正波。Y35 に統合して実装）: stdout の JSON が `is_error == true` でどのパターンにも合わないときは `.invalidOutput` ではなく `.failed(exitCode:, message: result テキスト + stderr の先頭 500 字)` に分類し、エラー文を失わない。ブリーフの `.invalidOutput` の行は `is_error == false` で構造化出力がデコードできない場合だけに当てはまる。
+- Y32（最終修正波で実装、b2567d2）: `PostProcessingQueue.init` に `services: SharedVaultServices = .standard`（`clock` の後）を足し、`delete()` がそれを使う。隔離した services を渡すテストでステージと同じ `VaultWriter` になる。
+- タスクごとの結果（最終コミット、レビュー判定、修正ラウンド）:
+  - Task 1 — 👤 保留（P1）。コミットなし
+  - Task 2 6d23722 — 仕様 ✅ / 品質 承認（sonnet）、修正 0。492 テスト
+  - Task 3 822bdef — 仕様 ✅ / 品質 承認（sonnet）、修正 0。505 テスト。実装者の懸念: `partNote` / `mergeInstructions` の文面は創作だった → Task 4 が一字一句のブリーフ文面に置換、`PortableConfigStoreTests` の 2 か所の編集は `.prompt` 既定を足した帰結と確認
+  - Task 4 9c97e2c — 仕様 ✅ / 品質 承認（sonnet）、修正 0。520 テスト（フル実行で一度だけ「1 issue」、再現せず。タイミングのテストと推定）
+  - Task 5 135db9a — 仕様 ✅ / 品質 承認（opus）、修正 0。539 テスト
+  - Task 6 fed4737 — 仕様 ✅ / 品質 承認（opus）、修正 0。552 テスト。作業ディレクトリの作成を認証確認より前に置く順序変更を許容
+  - Task 7 53e0064 — 初回 807debb は品質 不承認（I1 `resolveOverwrite` が承認待ちでないジョブに作用する、I2 rerun が `.running` を再確認しない）→ 修正 1（承認待ち（`.waiting` かつ `notBefore == nil`）の場合だけ作用、`rerunsInProgress` フラグを `isRunnable` で見る、M1/M2/M3/M5）で承認（sonnet の限定再レビュー）。584 テスト
+  - Task 8 da7b691 — 仕様 ✅ / 品質 承認（sonnet）、修正 0。575 テスト
+  - Task 9 90eb80d — 仕様 ✅ / 品質 承認（opus）、修正 0。582 テスト
+  - Task 10 8b106da — 仕様 ✅ / 品質 承認（sonnet）、修正 0。596 テスト
+  - Task 11 83f20f7 — 初回 f2d083b は品質 不承認（frontmatter の読み取りがエラー対応づけの外にあり、Vault の権限エラーで `.retry(after: 300)` ではなく failed になる）→ 修正 1（対応づけの中へ移動、`minutes_unreadable` のログ、テスト追加）で承認（sonnet の限定再レビュー）。613 テスト
+  - Task 12 617d2a6 — 仕様 ✅ / 品質 承認（opus）、修正 0。612 テスト
+  - Task 13 ccfb50d — 仕様 ✅ / 品質 承認（sonnet）、修正 0。621 テスト
+  - Task 14 ac8b7e3 — 仕様 ✅ / 品質 承認（sonnet）、修正 0。624 テスト / 60 スイート、フル E2E 27/0/0（05.1 / 05.2 を含む）。Step 6 👤 保留
+- 実装中に Lead が許容した点（Task 7）: 毎時の rate limit の再実行回数はメモリ上（クラッシュでリセット。計画 06 への申し送り）、`retry` は attempts を戻して rate limit 待ちのジョブも即時に走らせる、実行中のジョブへの `rerun` は先にステージをキャンセルする、ログは `os.Logger` のみ（ファイルロガーは計画 06 の `logs/autonote.log`）。
+- 保留した Minor（最終修正波に入れるか保留のままかは最終レビューで裁定）:
+  - Task 2: 順序のテストに id 同順位のケースが無い、`load()` は壊れたファイルで throw（`all()` だけが脇へ退避）
+  - Task 3: `utteranceCannotForgeDelimiter` の `lines.last` 判定がゆるい、テストの force unwrap
+  - Task 4: 計画の描画が二重（eager）、`mergePrompt` はエンコード失敗時に `{}` を使う、推定が文字列を確保する、`sortedKeys` と閾値境界のテストが無い、1 秒の実時間の性能テスト
+  - Task 5: タイムアウト発火後のキャンセルが `CancellationError` ではなくタイムアウト結果を返す（`ProcessRunner.swift:79` / `:150`、完了後に `Task.checkCancellation()` を足す）、ログインシェル探索の最悪が約 11 秒（注記の 5 秒・テストの 10 秒を超える）、小さな整理 3 件（task-5-review.md）
+  - Task 6: （Y31 は修正波へ）作業ディレクトリがシンボリックリンクだとリンク越しに空にする、テストの `className` 使い回し、`FakeClaude` の空レスポンスの前提、タイムアウトのテスト後に sleep プロセスが約 4 秒残る、`public let` の余り
+  - Task 7: 限定再レビューの M4 / M6、rerun のテストが rerun 直後に状態を読む（ループが先に `.running` を永続化すると揺れうる）、同じ会議への 2 つの同時 rerun がフラグを共有、`notBefore != nil` と manifest が throw する経路が未テスト、再起動のテストが attempts − 1 を固定していない
+  - Task 8: `stop()` が `recordingTask` を待たない、`initial()` の前後で `.started` / `.stopped` がバッファされると brief が true → false になりうる、`init(session:)` が実 `RecordingSession` で未テスト（計画 06 が配線）
+  - Task 9: `TranscribeStage.swift:30` の汎用 catch の先頭に `Task.checkCancellation()`（キャンセルされたジョブがフォールバックしない）、辞書の読み取り / フォールバックの書き込みが throw すると manifest が `.transcribing` のまま、ほかは見た目のみ
+  - Task 10: アトミック書き込みのヘルパが JobStore と重複（共有ヘルパ化の候補）、prompt / 辞書の読み取りエラーが `summaryFailure` ではなくステージ失敗になる、成功時に既存の `minutes.json` を置き換えるテストが無い
+  - Task 11: 4 件（task-11-review.md）
+  - Task 12: 古いジョブがあると `acceptShortRecording` が黙って何もしない、failed のジョブへの `regenerate` は summarize から再実行（計画 06 が failed → retry に振る）、automations が最後であることのテストが順序ではなく存在を見る、計画 Step 4 のフィルタ文言、テストの `/tmp/unused` リテラル
+  - Task 13: `delete` が `.standard` を使う（Y32 で修正波）、`purge` の `throws` が未使用、`delete` の `try?` の設定読み込み、`eventually` ヘルパが実時間でポーリング
+  - Task 14: パースエラーのメッセージが捨てられ汎用 usage だけが出る（`\(error)` を出す）、到達しない `else` 分岐、`meetingFile` が最初の `.md` を取る（会議 1 件のときだけ正しい）、パーサのテストが `--out` のディレクトリ性と `--claude` と `--fail-summary` の優先を見ない、05.1 の `_index.md` 確認がファイル名の部分一致で行ではない
+- 👤 保留: Task 1 と Task 14 Step 6（実際の `claude -p` を使う。手順は「利用者への依頼」の計画 05）。
+- 台帳に番号のない欠番: なし（P1、Y1〜Y32 が連番）。
+
+**最終レビュー（ブランチ全体、opus、BASE 018c339..ac8b7e3）**: 判定「修正後マージ可」。Critical 0、Important 3、Minor 7（保留）。「判断しなかった事項」は台帳アーカイブの final-review.md §Declined を参照。
+- Y33（I1）: 再生成が失敗すると SummarizeStage が付けた `.generating` が戻らず「生成中」が表示され続ける。WriteVaultStage の手順 2（summaryFailure あり＋minutes.json あり）で manifest を `.minutesGenerated` に戻す。
+- Y34（I2）: Y18 の上限 24 回が §13 の「5 分おきに再試行」を約 2 時間で失敗に変えていた。`.retry(after:)` は無制限にし、上限 24 は rate limit の回数（`Job.rateLimitRounds: Int?`、optional で追加、summarize 成功と rerun/regenerate で nil に戻す）にだけ適用。25 回目は `rate_limited_rounds_exhausted` で失敗。手動 `retry` は回数を保持する（もう 1 回だけ試して再び失敗）。`maxAttempts` は `maxRateLimitRounds` に改名。
+- Y35（I3、Y31 を統合）: 分類器が `is_error:false` で structured_output が無いときにモデル本文へ失敗パターンを当てていた（会議で「rate limit」と話すと誤分類し、本文が summaryFailure/lastError に漏れる）。パターン照合は `is_error:true` の `result` と stderr だけ。`is_error:false` で構造化出力が無い/壊れている → `.invalidOutput("subtype=<s>: structured_output invalid at <スキーマのパス>")`（本文は入れない）。`is_error:true` で不一致 → `.failed(exitCode:, message: result+stderr の先頭 500 字)`。
+- Y32: `PostProcessingQueue.init(paths:stages:activity:gate:clock:services:)`（`services` 既定 `.standard`）、`delete` がそれを使う。
+- 保留から昇格: Task 5 のタイムアウト後キャンセル（`completion()` の後に `Task.checkCancellation()`）、Task 9 の汎用 catch 先頭でのキャンセル確認（キャンセル時は代用に行かない）。
+- 修正波: 44799bb（Y34）、761f116（Y33）、34960d9（Y35）、b2567d2（Y32）、47d76cc（T5）、e121609（T9）。再レビュー（sonnet）: 6 件すべて Addressed、新規の Critical/Important なし。残った Minor: rate limit 以外の失敗で `rateLimitRounds` が古いまま残る（上限 24 で無害）、旧形式 job JSON の decode テストなし、`cancelledJobNeverTakesLiveFallback` が事前キャンセル依存。
+- 最終レビューの指摘（計画 06 への申し送り）: Task 14 Step 6 👤（本物の `claude` を Swift から 1 回呼ぶ）は、計画 06 で待ち行列を配線する前の関門にする。`claude auth status --json` と失敗文言の分類はこれでしか確かめられない。
+
+**Lead 検証（HEAD e121609、2026-10-27）**: `swift test` 630 テスト / 60 スイート 緑（アイドル実行、警告なし）。`scripts/build-app.sh && scripts/e2e-check.sh` 27 PASS / 0 FAIL / 0 SKIP（05.1 は `2026/2026-10-24_1400_架空の定例.md`、05.2 は `2026/2026-10-24_140000.md`）。ログは scratchpad の plan05-final-swift-test.log / plan05-final-e2e.log。
+
 ## 利用者への依頼（後回しにした 👤 手順）
 
 ### 計画 02 Task 1（TCC まとめ確認）— 2026-10-26
@@ -269,6 +360,28 @@
 ### 計画 04 Task 12（Apple Silicon 機での確認。後回し可）— 2026-10-26
 - 計画 00 Task 8 の引き継ぎ。Apple Silicon 機が手元にあるときに `docs/superpowers/plans/2026-10-25-autonote-04-transcription.md` の Task 12 Step 1〜9 を行う（`dev engines` / `dev transcribe --engine speech` / whisper の Metal / 機材の見え方）。結果で `EngineCatalog.defaults(for: .appleSilicon)` の「仮」を確定または変更し、結果表の項目 1・4・7・12 と要件書 §6.2・§19 を更新する。
 - 計画 04 Task 9 Step 4（マイクで 60 秒話して 15 秒超の発話が無いことを見る）は任意。やるなら `autonote dev transcribe --mic --engine dictation --segmentation <採用案> --seconds 60`。
+
+### 計画 05 Task 1 と Task 14 Step 6（claude -p の実測。費用がかかるため利用者判断）— 2026-10-27
+どちらも実際の `claude -p` を呼ぶので、利用者の claude の使用量を消費する（裁定 P1）。コード側はこれに依存せず完成している。実行するかどうか、失敗時の再試行は利用者が決める。
+1. Task 1（`--setting-sources project` で 60 分・120 分の確認。計画 05 Task 1 Step 1）。リポジトリのルートで 2 回だけ実行する:
+   ```bash
+   python3 -I scripts/make-fake-transcript.py --minutes 60  > "$TMPDIR/transcript-60.txt"
+   python3 -I scripts/make-fake-transcript.py --minutes 120 > "$TMPDIR/transcript-120.txt"
+   scripts/probe-claude.sh "$TMPDIR/transcript-60.txt"  60min-project
+   scripts/probe-claude.sh "$TMPDIR/transcript-120.txt" 120min-project
+   ```
+   合格: 2 回とも `has_structured_output: true`、`is_error: false`、`subtype: "success"`、最後に `OK: スキーマに合う`。出力 `/tmp/claude-out-*-project.json` はコミットしない。
+2. Task 14 Step 6（`autonote dev summarize --claude` で実機の一周。任意）。`scripts/build-app.sh` のあと、`$AUTONOTE_CLI` は `e2e-check.sh` と同じ CLI のパス:
+   ```bash
+   python3 -I scripts/make-fake-transcript.py --minutes 1   # 出力を Transcript JSON に変換して $TMPDIR/t1.json に保存
+   "$AUTONOTE_CLI" dev summarize --fake "$TMPDIR/t1.json" --out "$TMPDIR/claude-check" --claude
+   ```
+   `t1.json` の形は `{"engine","language":"ja","utterances":[{"start","end","speaker","text","is_final"}]}`。合格: 出力 JSON の `status` が `minutes_generated`、会議ファイルに 3 行の要約がある、`~/.claude/projects` に新しいエントリが増えていない。
+3. 結果が出たら Lead が次を更新する。
+   - 要件書 §8.1 の括弧書き（60 分・120 分は `--setting-sources user` でだけ測った）を、「60 分・120 分とも `--setting-sources project` で `structured_output` が返った。計画 05 Task 1」に置き換え、§19 の項目 6 に「project でも確認済み」を足す
+   - `docs/superpowers/research/2026-10-24-spike-results.md` の項目 6 に project での再測定（回・stdin バイト数・所要時間・入力トークンの内訳・出力トークン・件数・スキーマ検査）を 2 行足し、1 時間あたりの入力トークンと固定の上乗せを 1 行で書く
+   - 60 分・120 分の実測入力トークンが推定式（文字数 ÷ 1.0 + 16,000。60 分は 38,300、120 分は 60,557）を超えたら、`PromptBuilder.charsPerToken` と分割閾値（200k）を実測から下げる
+   - 失敗した場合は結果をそのまま書く。§8.1 の変更は利用者の判断
 
 ## 再開手順
 1. この表で進行中の計画を見る。そのブランチに checkout。
