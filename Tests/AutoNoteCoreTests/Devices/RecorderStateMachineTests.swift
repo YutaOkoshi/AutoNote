@@ -88,3 +88,65 @@ func transition(_ cell: Table.Cell) {
     let (_, e2) = m.apply(.deviceDisconnected(Table.deviceA))
     #expect(e2 == [.suspendMicrophone, .scheduleTimer(seconds: 45, token: 2), .showGraceBanner(seconds: 45)])
 }
+
+// MARK: - I2 / Y26: a USB unit of the same model and name returning during grace is the origin's return.
+
+private let usbOrigin = DeviceIdentity(raw: .fixtureUSBInput(uid: "AppleUSBAudioEngine:Fictional:Audio:14100000:1"))!
+private let usbOtherPort = DeviceIdentity(raw: .fixtureUSBInput(uid: "AppleUSBAudioEngine:Fictional:Audio:14132000:1"))!
+
+/// Auto-recording from `usbOrigin`, unplugged into grace (from recording, or from paused when `paused`).
+private func usbMachineInGrace(paused: Bool) -> RecorderStateMachine {
+    var m = RecorderStateMachine(config: Table.config)
+    _ = m.apply(.deviceConnected(usbOrigin, autoStartEntryID: "eU"))
+    _ = m.apply(.timerFired(token: 1))
+    if paused { _ = m.apply(.pause) }
+    _ = m.apply(.deviceDisconnected(usbOrigin))
+    return m
+}
+
+@Test func usbReplugOnOtherPortDuringGraceReturnsToRecording() {
+    var m = usbMachineInGrace(paused: false)
+    #expect(m.state == .grace)
+    let (state, effects) = m.apply(.deviceConnected(usbOtherPort, autoStartEntryID: nil))
+    #expect(state == .recording)
+    #expect(effects == [.cancelTimer, .clearGraceBanner, .reattachMicrophone(usbOtherPort)])
+    #expect(m.origin == usbOtherPort)
+    #expect(m.originEntryID == "eU")
+    #expect(m.pendingTimerToken == nil)
+}
+
+@Test func usbReplugOnOtherPortDuringGraceFromPausedReturnsToPaused() {
+    var m = usbMachineInGrace(paused: true)
+    #expect(m.state == .grace)
+    let (state, effects) = m.apply(.deviceConnected(usbOtherPort, autoStartEntryID: nil))
+    #expect(state == .paused)
+    #expect(effects == [.cancelTimer, .clearGraceBanner, .reattachMicrophone(usbOtherPort)])
+    #expect(m.origin == usbOtherPort)
+}
+
+@Test func bluetoothWithOtherUIDAndSameNameIsNotTheOriginsReturn() {
+    var m = Table.machine(in: .GR)
+    var other = Table.deviceA; other.deviceUID = "66-77-88-99-AA-BB:input"
+    let (state, effects) = m.apply(.deviceConnected(other, autoStartEntryID: nil))
+    #expect(state == .grace); #expect(effects.isEmpty); #expect(m.origin == Table.deviceA)
+}
+
+@Test func usbReturnNeedsSameNameAndARealModelUID() {
+    var renamed = usbOtherPort; renamed.name = "Fictional Other Headset"
+    var zeroModel = usbOtherPort; zeroModel.modelUID = "0 0"
+    var noModel = usbOtherPort; noModel.modelUID = nil
+    var bluetooth = usbOtherPort; bluetooth.transport = .bluetooth
+    for candidate in [renamed, zeroModel, noModel, bluetooth] {
+        var m = usbMachineInGrace(paused: false)
+        let (state, effects) = m.apply(.deviceConnected(candidate, autoStartEntryID: nil))
+        #expect(state == .grace, "\(candidate)"); #expect(effects.isEmpty)
+    }
+    // An origin without a real model UID never matches another UID either.
+    var zeroOrigin = RecorderStateMachine(config: Table.config)
+    var origin0 = usbOrigin; origin0.modelUID = "0 0"
+    var return0 = usbOtherPort; return0.modelUID = "0 0"
+    _ = zeroOrigin.apply(.deviceConnected(origin0, autoStartEntryID: "eU"))
+    _ = zeroOrigin.apply(.timerFired(token: 1))
+    _ = zeroOrigin.apply(.deviceDisconnected(origin0))
+    #expect(zeroOrigin.apply(.deviceConnected(return0, autoStartEntryID: nil)).0 == .grace)
+}

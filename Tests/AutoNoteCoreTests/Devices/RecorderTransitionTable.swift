@@ -5,6 +5,8 @@ import AutoNoteTestSupport
 
 /// Spec §5.9 as data: 8 configurations x 14 events = 112 cells. Cells not listed in `overrides` mean
 /// "nothing changes, no effects". GP c1 follows Lead ruling Y7b (back to paused; no resume).
+/// GR/GP c1 is a return by UID; the other grace return rules (entry ID, and Y26's USB same model UID and name on
+/// another port) are out-of-table tests in RecorderStateMachineTests.
 enum RecorderTransitionTable {
     static let deviceA = DeviceIdentity(raw: .fixtureBluetoothInput)!
     static let deviceB = DeviceIdentity(raw: .fixtureUSBInput(uid: "AppleUSBAudioEngine:Fictional:Audio:SERIAL-B:1"))!

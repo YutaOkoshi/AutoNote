@@ -85,6 +85,17 @@ public struct RecorderStateMachine: Sendable {
 
     private func isOrigin(_ device: DeviceIdentity) -> Bool { origin.map { $0.deviceUID == device.deviceUID } ?? false }
 
+    /// The grace return rule (Y26): the origin's UID, the origin's registry entry, or a USB unit with the same
+    /// real model UID (non-nil, not "0 0") and name, which covers a re-plug on another hub/dock port. USB only.
+    private func isOriginReturn(_ device: DeviceIdentity, entryID: String?) -> Bool {
+        guard let origin else { return false }
+        if origin.deviceUID == device.deviceUID { return true }
+        if let entryID, entryID == originEntryID { return true }
+        guard device.transport == .usb, origin.transport == .usb,
+              let model = device.modelUID, model != "0 0", model == origin.modelUID else { return false }
+        return device.name == origin.name
+    }
+
     private mutating func transition(_ event: RecorderEvent) -> [RecorderEffect] {
         switch (state, event) {
         case (.idle, .deviceConnected(let device, let entryID?)):
@@ -130,7 +141,7 @@ public struct RecorderStateMachine: Sendable {
         case (.recording, .sessionEnded), (.paused, .sessionEnded):
             endSession(); return []
 
-        case (.grace, .deviceConnected(let device, let entryID)) where isOrigin(device) || (entryID != nil && entryID == originEntryID):
+        case (.grace, .deviceConnected(let device, let entryID)) where isOriginReturn(device, entryID: entryID):
             origin = device
             pendingTimerToken = nil; state = graceFromPaused ? .paused : .recording; graceFromPaused = false
             return [.cancelTimer, .clearGraceBanner, .reattachMicrophone(device)]
