@@ -91,6 +91,21 @@ final class CoordinatorHarness: Sendable {
         hardware.fireChange()
     }
 
+    /// `connect`, then waits until the running coordinator has finished handling one more device event
+    /// (so `raw` must be an auto-record candidate and no post-wake window may hold the event).
+    func connectAndSettle(_ raw: RawAudioDevice) async throws {
+        let before = await coordinator.handledEvents
+        connect(raw)
+        try await waitUntil { await coordinator.handledEvents > before }
+    }
+
+    /// `disconnect`, then waits like `connectAndSettle`.
+    func disconnectAndSettle(_ raw: RawAudioDevice) async throws {
+        let before = await coordinator.handledEvents
+        disconnect(raw)
+        try await waitUntil { await coordinator.handledEvents > before }
+    }
+
     /// Removes `raw` (by UID) from the fake hardware and fires the change.
     func disconnect(_ raw: RawAudioDevice) {
         hardware.setDevices(hardware.snapshot().filter { $0.deviceUID != raw.deviceUID })

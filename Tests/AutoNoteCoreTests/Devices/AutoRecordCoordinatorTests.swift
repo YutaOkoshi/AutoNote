@@ -235,12 +235,67 @@ import AutoNoteTestSupport
         let h = try await CoordinatorHarness()
         let c = h.coordinator
         try await h.startRunning()
-        h.connect(.fixtureBluetoothInput)
-        try await h.waitUntil { await c.current().state == .countdown }
-        h.disconnect(.fixtureBluetoothInput)
-        try await h.waitUntil { await c.current().state == .idle }
+        try await h.connectAndSettle(.fixtureBluetoothInput)
+        #expect(await c.current().state == .countdown)
+        try await h.disconnectAndSettle(.fixtureBluetoothInput)
+        #expect(await c.current().state == .idle)
         #expect(await h.notifier.withdrawn.contains("device.countdown"))
         await h.stopRunning()
+    }
+
+    // Review fix 1: without the gate, `.added(A)` ran while detach was blocked and the grace effects queued behind it
+    // (scheduleTimer, showGraceBanner) then re-showed the banner after it had been cleared.
+    @Test func graceEffectsCompleteBeforeTheNextEvent() async throws {
+        let h = try await CoordinatorHarness()
+        let c = h.coordinator, A = h.A
+        await h.startAutoRecording()
+        await h.recorder.hold(.detach)
+        let removing = Task { await c.handle(.removed(A)) }
+        try await h.waitUntil { await h.recorder.blockedCount(.detach) == 1 }
+        let adding = Task { await c.handle(.added(A)) }
+        try await h.waitUntil { await c.queuedOperations == 1 }
+        await h.recorder.release(.detach)
+        await removing.value; await adding.value
+        try await h.waitUntil { await h.recorder.attachCalls == [A.deviceUID] }
+        let snapshot = await c.current()
+        #expect(snapshot.state == .recording && snapshot.banner == nil && snapshot.deadline == nil)
+        let graces = await h.notifier.posted.filter { if case .deviceGoneGrace = $0 { true } else { false } }
+        #expect(graces == [.deviceGoneGrace(A.deviceRef, seconds: 30)])
+        #expect(await h.notifier.withdrawn.filter { $0 == "device.grace" }.count == 1)
+        #expect(h.timer.pendingCount == 0)
+    }
+
+    @Test func stopDuringInFlightStartWaitsForIt() async throws {
+        let h = try await CoordinatorHarness()
+        let c = h.coordinator
+        await h.recorder.hold(.start)
+        await c.handle(.added(h.A))
+        let starting = Task { await h.timer.advance(by: 5) }
+        try await h.waitUntil { await h.recorder.blockedCount(.start) == 1 }
+        let stopping = Task { await c.stop() }
+        try await h.waitUntil { await c.queuedOperations == 1 }
+        #expect(await h.recorder.stopCount == 0)
+        await h.recorder.release(.start)
+        await starting.value; await stopping.value
+        #expect(await h.recorder.starts.count == 1)
+        #expect(await h.recorder.stopReasons == [.manual])
+        #expect(await c.current().state == .idle)
+        #expect(await c.current().meetingID == nil)
+    }
+
+    @Test func staleTimerTokenIsIgnored() async throws {
+        let h = try await CoordinatorHarness()
+        let c = h.coordinator
+        await c.handle(.added(h.A))          // countdown, token 1
+        await c.cancelCountdown()
+        await h.timer.advance(by: 1)
+        await c.handle(.added(h.A))          // countdown again, token 2 due at t = 6
+        await c.timerFired(token: 1)         // the cancelled countdown's token reaches the coordinator
+        #expect(await c.current().state == .countdown)
+        #expect(await h.recorder.starts.isEmpty)
+        await h.timer.advance(by: 5)
+        #expect(await h.recorder.starts.count == 1)
+        #expect(await c.current().state == .recording)
     }
 
     @Test func configFromSettingsCopiesDeviceFields() {

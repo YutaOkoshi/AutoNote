@@ -5,8 +5,10 @@ public enum AutoRecordError: Error, Equatable, Sendable { case notRecording }
 
 /// Wires device events, the registry, `RecorderStateMachine` and the recorder together (spec §5.9): countdown
 /// auto-start, disconnect grace, manual recording, and the snapshots the menu bar shows.
-/// Effects run serially on this actor in the order the state machine returned them. Awaiting the recorder lets other
-/// calls interleave, so the in-flight start and reattach are held as tasks (`startTask`, `reattachTask`, Y4).
+/// Every entry point (device events, operations, timer callbacks, self-stops, reattach completion) passes one FIFO
+/// gate, so one `apply` and all its effects finish before the next begins, even across the recorder's `await`s.
+/// A stop therefore always waits for a start in flight (Y4). The microphone reattach retries outside the gate
+/// (`reattachTask`); only its completion re-enters.
 public actor AutoRecordCoordinator {
     private static let logger = Logger(subsystem: "com.yutaokoshi.autonote", category: "devices")
 
@@ -18,14 +20,21 @@ public actor AutoRecordCoordinator {
     private let config: @Sendable () async -> AutoRecordConfig
     private let now: @Sendable () -> Date
 
+    private static let countdownNoticeID = UserNotice.deviceConnectedCountdown(placeholderRef, seconds: 0).id
+    private static let graceNoticeID = UserNotice.deviceGoneGrace(placeholderRef, seconds: 0).id
+    private static let placeholderRef = DeviceRef(name: "", uid: "", transport: "")
+
+    private var gate = OperationGate()
+    /// Operations parked at the gate (tests use it to know a call is queued).
+    private(set) var queuedOperations = 0
+    /// Device events whose handling has finished (the harness waits on it).
+    private(set) var handledEvents = 0
+
     private var machine: RecorderStateMachine
     private var timerHandle: (any CancellableTimer)?
-    private var startTask: Task<MeetingID, any Error>?
     private var reattachTask: Task<Void, Never>?
     /// Bumped by every reattach and every cancellation of one, so a stale outcome is dropped (Y22).
     private var reattachGeneration = 0
-    /// Bumped by every `startRecording`, so a start that returns after its session ended is not applied.
-    private var sessionGeneration = 0
 
     private var meetingID: MeetingID?
     private var startedAt: Date?
@@ -58,13 +67,16 @@ public actor AutoRecordCoordinator {
     /// Reads `monitor.events()` and `recorder.selfStops()` until the monitor's stream finishes or the task is cancelled.
     public func run() async {
         await registry.reload()
-        machine.config = await config()
+        await serialized {
+            machine.config = await config()
+            emitIfChanged()
+        }
         let selfStops = await recorder.selfStops()
         let events: AsyncStream<DeviceEvent>
         do {
             events = try await monitor.events()
         } catch {
-            Self.logger.error("device monitor failed: \(String(describing: error), privacy: .public)")
+            Self.log("device monitor", error)
             return
         }
         await withTaskGroup(of: Void.self) { group in
@@ -77,19 +89,22 @@ public actor AutoRecordCoordinator {
     }
 
     public func handle(_ event: DeviceEvent) async {
-        switch event {
-        case .added(let device):
-            await registry.reload()
-            let entryID: String?
-            if case .registered(let id, _) = await registry.match(device) { entryID = id } else { entryID = nil }
-            // Unregistered devices are passed too: a returning origin in grace is recognized by its UID.
-            await apply(.deviceConnected(device, autoStartEntryID: entryID))
-            // Task 9: registration notice for `.unknown` / `.reRegistrationSuggested`.
-        case .removed(let device):
-            await apply(.deviceDisconnected(device))
-        case .present(_, let reason):
-            // Task 9: `.present` posts deviceAlreadyConnected for registered devices; never a countdown.
-            Self.logger.debug("present (\(String(describing: reason), privacy: .public)) ignored")
+        await serialized {
+            switch event {
+            case .added(let device):
+                await registry.reload()
+                let entryID: String?
+                if case .registered(let id, _) = await registry.match(device) { entryID = id } else { entryID = nil }
+                // Unregistered devices are passed too: a returning origin in grace is recognized by its UID.
+                await applyInGate(.deviceConnected(device, autoStartEntryID: entryID))
+                // Task 9: registration notice for `.unknown` / `.reRegistrationSuggested`.
+            case .removed(let device):
+                await applyInGate(.deviceDisconnected(device))
+            case .present(_, let reason):
+                // Task 9: `.present` posts deviceAlreadyConnected for registered devices; never a countdown.
+                Self.logger.debug("present (\(String(describing: reason), privacy: .public)) ignored")
+            }
+            handledEvents += 1
         }
     }
 
@@ -97,8 +112,11 @@ public actor AutoRecordCoordinator {
 
     /// Records from the Mac's default input. Throws what the recorder's start threw (after the same cleanup as auto-start).
     public func manualStart(language: Language?) async throws {
-        if let language, machine.state == .idle || machine.state == .countdown { pendingLanguage = language }
-        if let error = await apply(.manualStart) { throw error }
+        let error = await serialized { () async -> (any Error)? in
+            if let language, !isInSession { pendingLanguage = language }
+            return await applyInGate(.manualStart)
+        }
+        if let error { throw error }
     }
 
     public func stop(reason: StopReason = .manual) async { await apply(.manualStop, stopReason: reason) }
@@ -112,13 +130,15 @@ public actor AutoRecordCoordinator {
     }
 
     public func setLanguage(_ language: Language) async {
-        if isInSession {
-            sessionLanguage = language
-            emitIfChanged()
-            await recorder.setLanguage(language)
-        } else {
-            pendingLanguage = language
-            emitIfChanged()
+        await serialized {
+            if isInSession {
+                sessionLanguage = language
+                emitIfChanged()
+                await recorder.setLanguage(language)
+            } else {
+                pendingLanguage = language
+                emitIfChanged()
+            }
         }
     }
 
@@ -140,8 +160,9 @@ public actor AutoRecordCoordinator {
 
     /// A new subscription per call; it first receives the current value.
     public func snapshots() -> AsyncStream<RecorderSnapshot> {
+        emitIfChanged()   // existing subscribers catch up first, so `lastEmitted` is the value sent below
         let (stream, continuation) = AsyncStream<RecorderSnapshot>.makeStream()
-        continuation.yield(current())
+        continuation.yield(lastEmitted ?? current())
         let id = UUID()
         subscribers[id] = continuation
         continuation.onTermination = { [weak self] _ in Task { await self?.unsubscribe(id) } }
@@ -170,9 +191,30 @@ public actor AutoRecordCoordinator {
 
     // MARK: Applying events
 
-    /// Returns the error of a start that failed during this apply (only `manualStart` uses it).
+    /// FIFO admission (plan 02's `OperationGate`). Never call it from inside `body`: that would deadlock.
+    private func serialized<T>(_ body: () async -> T) async -> T {
+        if !gate.tryEnter() {
+            queuedOperations += 1
+            await withCheckedContinuation { gate.wait($0) }
+            queuedOperations -= 1
+        }
+        defer { gate.leave() }
+        return await body()
+    }
+
     @discardableResult
     private func apply(_ event: RecorderEvent, stopReason: StopReason = .manual) async -> (any Error)? {
+        await serialized { await applyInGate(event, stopReason: stopReason) }
+    }
+
+    /// Scheduled timers land here. Internal so tests can deliver a stale token.
+    func timerFired(token: Int) async { await apply(.timerFired(token: token)) }
+
+    /// The caller holds the gate. Returns the error of a start that failed during this apply (only `manualStart`
+    /// uses it). `emit: false` is for the nested `sessionEnded` of a failed start, whose caller emits once.
+    @discardableResult
+    private func applyInGate(_ event: RecorderEvent, stopReason: StopReason = .manual, emit: Bool = true) async
+        -> (any Error)? {
         machine.config = await config()
         let from = machine.state
         let (to, effects) = machine.apply(event)
@@ -187,7 +229,7 @@ public actor AutoRecordCoordinator {
         for effect in effects {
             if let error = await execute(effect, stopReason: reason) { startError = error }
         }
-        emitIfChanged()
+        if emit { emitIfChanged() }
         return startError
     }
 
@@ -199,11 +241,11 @@ public actor AutoRecordCoordinator {
             await notifier.post(.deviceConnectedCountdown(device.deviceRef, seconds: seconds))
         case .dismissCountdownNotice:
             deadline = nil
-            await notifier.withdraw(id: "device.countdown")
+            await notifier.withdraw(id: Self.countdownNoticeID)
         case .scheduleTimer(let seconds, let token):
             timerHandle?.cancel()
             timerHandle = timer.schedule(after: Double(seconds)) { [weak self] in
-                await self?.apply(.timerFired(token: token))
+                await self?.timerFired(token: token)
             }
         case .cancelTimer:
             timerHandle?.cancel(); timerHandle = nil
@@ -211,8 +253,6 @@ public actor AutoRecordCoordinator {
             return await startRecording(choice, trigger)
         case .stopRecording:
             cancelReattach()
-            // Let a start still in flight finish first, so the recorder sees the stop after it.
-            _ = await startTask?.result
             await recorder.stop(reason: stopReason)
         case .pauseRecording:
             await recorder.pause()
@@ -231,33 +271,25 @@ public actor AutoRecordCoordinator {
             }
         case .clearGraceBanner:
             banner = nil; deadline = nil
-            await notifier.withdraw(id: "device.grace")
+            await notifier.withdraw(id: Self.graceNoticeID)
         }
         return nil
     }
 
     private func startRecording(_ choice: MicrophoneChoice, _ trigger: RecordingTrigger) async -> (any Error)? {
-        sessionGeneration += 1
-        let generation = sessionGeneration
         let language = pendingLanguage ?? machine.config.language
         sessionLanguage = language
         banner = nil; deadline = nil; meetingID = nil; startedAt = nil
         let device: DeviceRef? = if case .device(let identity) = choice { identity.deviceRef } else { nil }
-        let recorder = self.recorder
-        let task = Task { try await recorder.start(device: device, language: language, manual: trigger == .manual) }
-        startTask = task
         emitIfChanged()   // "recording, starting": no meetingID yet (Y11)
-        let result = await task.result
-        if startTask == task { startTask = nil }
-        // The session ended (stop, self-stop) while starting: its stop already waited for this start.
-        guard generation == sessionGeneration, isInSession else { return nil }
-        switch result {
-        case .success(let id):
-            meetingID = id; startedAt = now()
+        do {
+            // Holding the gate: nothing else (a stop, a pause) reaches the recorder until this start returns.
+            meetingID = try await recorder.start(device: device, language: language, manual: trigger == .manual)
+            startedAt = now()
             return nil
-        case .failure(let error):
-            Self.logger.error("start failed: \(String(describing: error), privacy: .public)")
-            await apply(.sessionEnded)
+        } catch {
+            Self.log("start", error)
+            await applyInGate(.sessionEnded, emit: false)   // inline: the gate is already held
             banner = Banner.startFailed
             return error
         }
@@ -270,12 +302,12 @@ public actor AutoRecordCoordinator {
         let uid = device.deviceUID
         reattachTask = Task { [weak self] in
             let outcome = await reattacher.reattach(uid: uid)
-            guard !Task.isCancelled else { return }
-            await self?.finishReattach(outcome, generation: generation)
+            guard !Task.isCancelled, let self else { return }
+            await self.serialized { await self.finishReattach(outcome, generation: generation) }
         }
     }
 
-    private func finishReattach(_ outcome: ReattachOutcome, generation: Int) {
+    private func finishReattach(_ outcome: ReattachOutcome, generation: Int) async {
         guard generation == reattachGeneration else { return }
         reattachTask = nil
         guard isInSession, machine.state != .grace else { return }
@@ -291,11 +323,15 @@ public actor AutoRecordCoordinator {
 
     /// A recording, pause or grace just went back to idle.
     private func endSession() {
-        sessionGeneration += 1
         cancelReattach()
         timerHandle?.cancel(); timerHandle = nil
         meetingID = nil; startedAt = nil; deadline = nil; banner = nil
         sessionLanguage = nil; pendingLanguage = nil
+    }
+
+    /// Only the error's type is public; its description may hold paths or device names.
+    private static func log(_ what: String, _ error: any Error) {
+        logger.error("\(what, privacy: .public) failed: \(String(describing: type(of: error)), privacy: .public) \(String(describing: error), privacy: .private)")
     }
 
     private static func name(of event: RecorderEvent) -> String {
