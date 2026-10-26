@@ -1,6 +1,6 @@
 import Foundation
 
-public enum RecorderState: String, Sendable { case idle, countdown, recording, paused, grace }
+public enum RecorderState: String, Codable, Sendable { case idle, countdown, recording, paused, grace }
 
 public enum RecordingTrigger: String, Sendable { case auto, manual }
 
