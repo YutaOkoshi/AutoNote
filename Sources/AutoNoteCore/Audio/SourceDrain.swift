@@ -42,7 +42,16 @@ extension DispatchQueue {
     /// Returns false when the wait timed out.
     @discardableResult
     func runAwaiting(timeout: Duration, _ work: @Sendable @escaping () -> Void) async -> Bool {
+        await runAwaiting(timeout: timeout, work, abandoned: { _ in }) != nil
+    }
+
+    /// Runs `work` on this queue and waits for its value, giving up after `timeout` (the work keeps going).
+    /// Returns nil when the wait timed out; the late value is then handed to `abandoned`, still on this queue,
+    /// right after `work` returns. Exactly one of the caller and `abandoned` receives the value.
+    func runAwaiting<T: Sendable>(timeout: Duration, _ work: @Sendable @escaping () -> T,
+                                  abandoned: @Sendable @escaping (T) -> Void) async -> T? {
         let gate = ResumeGate()
+        let box = Mutex<T?>(nil)
         let timer = Task {
             do { try await Task.sleep(for: timeout) } catch { return }
             gate.fire(timedOut: true)
@@ -50,12 +59,13 @@ extension DispatchQueue {
         await withCheckedContinuation { cont in
             gate.install(cont)
             self.async {
-                work()
-                gate.fire(timedOut: false)
+                let value = work()
+                box.withLock { $0 = value }
+                if !gate.fire(timedOut: false) { abandoned(value) }
             }
         }
         timer.cancel()
-        return !gate.timedOut
+        return gate.timedOut ? nil : box.withLock { $0 }
     }
 }
 

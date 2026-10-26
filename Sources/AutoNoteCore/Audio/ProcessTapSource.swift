@@ -22,7 +22,8 @@ private final class IOCounters: Sendable {
 /// System audio (all processes except `excludeBundleIDs`) via a Core Audio process tap and a private aggregate device.
 ///
 /// Every hardware call runs on a dedicated serial queue so neither the actor's executor nor the main thread blocks
-/// (`AudioDeviceStart` can wait ~90 s on the permission dialog; teardown can block for minutes).
+/// (`AudioDeviceStart` can wait ~90 s on the permission dialog; teardown can block for minutes). Both waits are bounded:
+/// `start` throws `.timedOut(call: "AudioDeviceStart")` after `startTimeout`, `stop` gives up after `stopTimeout`.
 public actor ProcessTapSource: AudioSource {
     public static let aggregateUIDPrefix = "com.yutaokoshi.autonote.tap."
 
@@ -53,6 +54,7 @@ public actor ProcessTapSource: AudioSource {
     private let excludeBundleIDs: [String]
     private let layout: AggregateLayout
     private let stopTimeout: Duration
+    private let startTimeout: Duration
     private let controlQueue = DispatchQueue(label: "com.yutaokoshi.autonote.tap.control", qos: .userInitiated)
     private let ioQueue = DispatchQueue(label: "com.yutaokoshi.autonote.tap.io", qos: .userInteractive)
 
@@ -63,9 +65,10 @@ public actor ProcessTapSource: AudioSource {
 
     public init(clock: MeetingClock, hardware: any TapHardware = CoreAudioTapHardware(),
                 excludeBundleIDs: [String] = [Bundle.main.bundleIdentifier].compactMap { $0 },
-                layout: AggregateLayout = .tapOnly, stopTimeout: Duration = .seconds(5)) {
+                layout: AggregateLayout = .tapOnly, stopTimeout: Duration = .seconds(5),
+                startTimeout: Duration = .seconds(10)) {
         self.clock = clock; self.hardware = hardware; self.excludeBundleIDs = excludeBundleIDs
-        self.layout = layout; self.stopTimeout = stopTimeout
+        self.layout = layout; self.stopTimeout = stopTimeout; self.startTimeout = startTimeout
     }
 
     /// Safety net when the owner drops a running source without `stop()`: no waiting, teardown runs in the background.
@@ -110,10 +113,17 @@ public actor ProcessTapSource: AudioSource {
 
         let hardware = self.hardware, layout = self.layout, ioQueue = self.ioQueue
         let spec = TapSpec(excludeBundleIDs: excludeBundleIDs)
-        let result: Result<BringUp, any Error> = await withCheckedContinuation { cont in
-            controlQueue.async {
-                cont.resume(returning: Result { try Self.bringUp(hardware, spec: spec, layout: layout, ioQueue: ioQueue, counters: counters) })
-            }
+        // Bounded wait: `AudioDeviceStart` can block ~90 s while the permission dialog is unanswered. A bring-up that
+        // finishes after the timeout is torn down on `controlQueue` at once; its objects are never used.
+        let finished: Result<BringUp, any Error>? = await controlQueue.runAwaiting(timeout: startTimeout, {
+            Result { try Self.bringUp(hardware, spec: spec, layout: layout, ioQueue: ioQueue, counters: counters) }
+        }, abandoned: { late in
+            if case .success(let up) = late { Self.tearDown(hardware, up.objects) }
+        })
+        guard let result = finished else {
+            Self.logger.error("start timeout")
+            state = .idle
+            throw AudioSourceError.timedOut(call: "AudioDeviceStart")
         }
         let up: BringUp
         do {

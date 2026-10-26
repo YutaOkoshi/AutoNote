@@ -50,7 +50,7 @@ public struct AudioImporter: Sendable {
 
         // Manifest dates are stored at millisecond precision; truncate so the saved manifest equals the returned one.
         let resolved = startedAt ?? Self.fileDate(url)
-        let start = Self.truncatedToMilliseconds(resolved)
+        let start = resolved.truncatedToMilliseconds
         // Never reuse an existing meeting directory: failure cleanup deletes the whole directory.
         var id = MeetingID.make(start: start, timeZone: timeZone)
         while FileManager.default.fileExists(atPath: paths.meetingDirectory(id).path) {
@@ -68,7 +68,7 @@ public struct AudioImporter: Sendable {
             let samples = try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
             let seconds = Double(samples) / AudioChunk.sampleRate
             let manifest = Manifest(
-                id: id, title: nil, startedAt: start, endedAt: Self.truncatedToMilliseconds(start.addingTimeInterval(seconds)),
+                id: id, title: nil, startedAt: start, endedAt: start.addingTimeInterval(seconds).truncatedToMilliseconds,
                 source: .imported, device: Self.importDevice, language: language,
                 tracks: [TrackFile(track: .mic, relativePath: Self.relativePath,
                                    startOffset: TimelineTime(seconds: 0), durationSeconds: seconds)],
@@ -85,10 +85,6 @@ public struct AudioImporter: Sendable {
     }
 
     // MARK: - Private
-
-    private static func truncatedToMilliseconds(_ date: Date) -> Date {
-        Date(timeIntervalSince1970: (date.timeIntervalSince1970 * 1000).rounded(.down) / 1000)
-    }
 
     private static func fileDate(_ url: URL) -> Date {
         let values = try? url.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])

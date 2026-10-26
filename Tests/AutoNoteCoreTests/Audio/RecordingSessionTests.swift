@@ -74,7 +74,8 @@ private func t(_ s: Double) -> TimelineTime { TimelineTime(seconds: s) }
         h.clock.advance(seconds)
         let m = try await h.session.stop()
         #expect(m.status == expected)
-        #expect(m.endedAt == Samples.start.addingTimeInterval(seconds))
+        #expect(m.endedAt == Samples.start.addingTimeInterval(seconds).truncatedToMilliseconds)
+        #expect(try await h.manifests.load(m.id) == m)   // the returned manifest equals the saved one
         #expect(await h.session.state == .idle)
         #expect(await h.session.elapsed() == .zero)
     }
@@ -87,6 +88,8 @@ private func t(_ s: Double) -> TimelineTime { TimelineTime(seconds: s) }
         #expect(await h.session.state == .idle)
     }
 
+    // Also covers a system start that times out: `ProcessTapSource` throws `.timedOut(call: "AudioDeviceStart")`
+    // after `startTimeout`, which takes this same path (`.sourceFailed(.system, …)`, `silenceWarning`, mic continues).
     @Test func systemFailureContinuesWithMic() async throws {
         let h = try await SessionHarness.make(system: FakeAudioSource(track: .system, startError: AudioSourceError.coreAudio(call: "AudioHardwareCreateProcessTap", status: -1)))
         let events = await h.session.events()
@@ -159,6 +162,18 @@ private func t(_ s: Double) -> TimelineTime { TimelineTime(seconds: s) }
         for await c in audio { chunks.append(c) }   // finished by stop
         #expect(chunks.map { $0.samples.first } == [1000, 3000])
         #expect(chunks.allSatisfy { $0.track == .mic })
+    }
+
+    @Test func failedStartFinishesAudioStreams() async throws {
+        let h = try await SessionHarness.make(mic: FakeAudioSource(track: .mic, startError: AudioSourceError.microphonePermission(.denied)))
+        let audio = await h.session.audio(for: .mic)
+        await #expect(throws: RecordingError.microphonePermission(.denied)) { try await h.session.start(.init(language: .ja)) }
+        let count = try await withTimeout(.seconds(2)) {
+            var n = 0
+            for await _ in audio { n += 1 }   // finished by the abandoned start
+            return n
+        }
+        #expect(count == 0)
     }
 
     @Test func audioCalledAgainFinishesPreviousStream() async throws {

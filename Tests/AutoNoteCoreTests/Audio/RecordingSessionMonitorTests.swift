@@ -121,6 +121,24 @@ import AutoNoteTestSupport
         #expect(received.contains(.silenceWarning(.init(track: .mic, message: SilenceMonitor.micMessage))))
     }
 
+    @Test func audioDuringPauseDoesNotSuppressMicWarning() async throws {
+        let h = try await SessionHarness.make()
+        let events = await h.session.events()
+        let id = try await h.session.start(.init(language: .ja))
+        await h.mic.emit(AudioFixtures.zeros(start: 0, seconds: 10))
+        h.clock.advance(10); await h.session.waitUntilIdle(); await h.session.tick()
+        try await h.session.pause()
+        await h.mic.emit(AudioFixtures.tone(start: 10, seconds: 10, value: 2000))   // dropped: must not count as signal
+        h.clock.advance(10); await h.session.waitUntilIdle(); await h.session.tick()
+        try await h.session.resume()
+        await h.mic.emit(AudioFixtures.zeros(start: 20, seconds: 5))
+        h.clock.advance(5); await h.session.waitUntilIdle(); await h.session.tick()   // 15 s recorded
+        #expect(try await h.manifests.load(id).silenceWarning == true)
+        _ = try await h.session.stop()
+        let received = await eventsUntilStopped(events)
+        #expect(received.contains(.silenceWarning(.init(track: .mic, message: SilenceMonitor.micMessage))))
+    }
+
     @Test func systemSilenceWarningAfter60sWithoutCallbacks() async throws {
         let h = try await SessionHarness.make()
         let events = await h.session.events()

@@ -1,7 +1,7 @@
 import Foundation
 
-/// The chunk consumer: one task per meeting reads the `ChunkQueue` in arrival order and, per chunk, feeds the silence
-/// monitor, writes the track (unless paused or the track's writer failed), forwards to `audio(for:)` and saves any
+/// The chunk consumer: one task per meeting reads the `ChunkQueue` in arrival order and, per chunk (unless paused),
+/// feeds the silence monitor, writes the track (unless the track's writer failed), forwards to `audio(for:)` and saves any
 /// segment change. `waitUntilIdle` counts a chunk as handled only after all of that, including the save.
 extension RecordingSession {
     /// Returns once every chunk accepted so far has been handled (written, forwarded, its manifest change saved).
@@ -24,8 +24,8 @@ extension RecordingSession {
     func handle(_ incoming: AudioChunk, from track: Track) async {
         var chunk = incoming
         chunk.track = track
+        if case .paused = state { return }   // paused audio is dropped and must not reach the silence monitor either
         monitor?.observe(track, chunk: chunk)
-        if case .paused = state { return }
         guard writers.accepts(track) else { return }
         let changes: [SegmentChange]
         do {

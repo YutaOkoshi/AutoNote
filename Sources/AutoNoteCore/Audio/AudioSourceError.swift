@@ -12,4 +12,6 @@ public enum AudioSourceError: Error, Equatable, Sendable {
     case deviceNotFound(uid: String)
     case alreadyStarted
     case unsupportedFormat
+    /// A hardware call did not return within the caller's timeout; `call` is the Core Audio function name.
+    case timedOut(call: String)
 }

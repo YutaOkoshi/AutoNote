@@ -26,6 +26,9 @@ public final class AudioRingBuffer: @unchecked Sendable {
     private let recordCapacity: Int
     private let samples: UnsafeMutablePointer<Float>
     private let records: UnsafeMutablePointer<Record>
+    /// Byte offset of `AudioBufferList.mBuffers`, computed here so `write` never builds a key path (it allocates in
+    /// unoptimized builds).
+    private let buffersOffset: Int
 
     // Monotonic counters (never wrapped); the slot is `counter % capacity`.
     private let writeFrameIndex = Atomic<Int>(0)
@@ -39,6 +42,7 @@ public final class AudioRingBuffer: @unchecked Sendable {
         self.channels = channels
         self.capacityFrames = capacityFrames
         self.recordCapacity = recordCapacity
+        buffersOffset = MemoryLayout<AudioBufferList>.offset(of: \.mBuffers)!
         samples = .allocate(capacity: capacityFrames * channels)
         samples.initialize(repeating: 0, count: capacityFrames * channels)
         records = .allocate(capacity: recordCapacity)
@@ -58,7 +62,7 @@ public final class AudioRingBuffer: @unchecked Sendable {
         guard frameCount > 0 else { return true }
         let channels = self.channels
         let bufferCount = Int(abl.pointee.mNumberBuffers)
-        let first = UnsafeRawPointer(abl).advanced(by: MemoryLayout<AudioBufferList>.offset(of: \.mBuffers)!)
+        let first = UnsafeRawPointer(abl).advanced(by: buffersOffset)
             .assumingMemoryBound(to: AudioBuffer.self)
 
         // Layout check: one interleaved buffer, or one single-channel buffer per channel.

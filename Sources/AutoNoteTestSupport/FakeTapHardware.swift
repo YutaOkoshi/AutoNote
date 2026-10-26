@@ -9,6 +9,7 @@ public final class FakeTapHardware: TapHardware, @unchecked Sendable {
     private var _lastTapSpec: TapSpec?
     private var _failOn: String?
     private var _teardownDelay: Duration = .zero
+    private var _startDelay: Duration = .zero
     private var _format: AudioStreamBasicDescription
     private var block: AudioDeviceIOBlock?
 
@@ -38,6 +39,11 @@ public final class FakeTapHardware: TapHardware, @unchecked Sendable {
         get { lock.withLock { _teardownDelay } }
         set { lock.withLock { _teardownDelay = newValue } }
     }
+    /// Blocks the calling thread for this long inside `start` (like `AudioDeviceStart` waiting on the permission dialog).
+    public var startDelay: Duration {
+        get { lock.withLock { _startDelay } }
+        set { lock.withLock { _startDelay = newValue } }
+    }
     /// Default: 48 kHz / 2 ch / Float32 interleaved.
     public var format: AudioStreamBasicDescription {
         get { lock.withLock { _format } }
@@ -47,9 +53,9 @@ public final class FakeTapHardware: TapHardware, @unchecked Sendable {
     private func record(_ name: String, teardown: Bool = false) throws {
         let (fail, delay) = lock.withLock { () -> (Bool, Duration) in
             _calls.append(name)
-            return (_failOn == name, _teardownDelay)
+            return (_failOn == name, teardown ? _teardownDelay : (name == "start" ? _startDelay : .zero))
         }
-        if teardown, delay > .zero {
+        if delay > .zero {
             let c = delay.components
             Thread.sleep(forTimeInterval: Double(c.seconds) + Double(c.attoseconds) / 1e18)
         }

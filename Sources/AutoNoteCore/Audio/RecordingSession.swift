@@ -265,7 +265,7 @@ public actor RecordingSession {
         } catch {
             Self.log("disk space check at start", error)   // unknown free space does not block a recording
         }
-        let startedAt = now()
+        let startedAt = now().truncatedToMilliseconds   // stored at ms precision; keep memory equal to disk
         let id = MeetingID.make(start: startedAt, timeZone: timeZone)
         let clock = MeetingClock(origin: host.hostTime(), host: host)
         let device = configuration.device ?? sources.inputDevice(uid: configuration.microphoneUID)
@@ -352,7 +352,7 @@ public actor RecordingSession {
 
         let (changes, failures) = writers.transition { try $0.close(at: end) }
         await reportWriterFailures(failures)
-        let endedAt = startedAt.addingTimeInterval(end.seconds)
+        let endedAt = startedAt.addingTimeInterval(end.seconds).truncatedToMilliseconds   // returned == saved
         let status: MeetingStatus = end.seconds < Self.minimumDurationSeconds ? .tooShort : .recorded
         let finish: @Sendable (inout Manifest) -> Void = { m in
             if let i = m.pauses.lastIndex(where: { $0.end == nil }) { m.pauses[i].end = end }
@@ -372,13 +372,14 @@ public actor RecordingSession {
             broadcaster.yield(.stopped(manifest, reason))
         }
         if case .success(let manifest) = result { broadcaster.yield(.stopped(manifest, reason)) }
-        for subscriber in audioSubscribers.values { subscriber.continuation.finish() }
-        audioSubscribers = [:]
         clearMeeting()
         return try result.get()
     }
 
+    /// Ends a meeting that stopped or never started: also finishes every `audio(for:)` stream.
     private func clearMeeting() {
+        for subscriber in audioSubscribers.values { subscriber.continuation.finish() }
+        audioSubscribers = [:]
         state = .idle
         meetingID = nil; clock = nil; monitor = nil; writers = TrackWriters(); saver = nil
         micSource = nil; systemSource = nil; ticker = nil
