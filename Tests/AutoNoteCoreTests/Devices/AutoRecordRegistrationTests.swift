@@ -134,6 +134,7 @@ import AutoNoteTestSupport
         #expect(starts.count == 1)
         #expect(starts.first?.0 == A.deviceRef && starts.first?.1 == .ja && starts.first?.2 == false)
         #expect(await countdowns(h).isEmpty)
+        #expect(await h.notifier.withdrawn.contains(UserNotice.deviceAlreadyConnected(A.deviceRef).id))
         try await h.disconnectAndSettle(.fixtureBluetoothInput)
         #expect(await c.current().state == .grace)
         await h.stopRunning()

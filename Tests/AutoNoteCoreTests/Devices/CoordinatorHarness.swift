@@ -92,9 +92,10 @@ final class CoordinatorHarness: Sendable {
     func startRunning(initial: [RawAudioDevice] = []) async throws {
         hardware.setDevices([.fixtureBuiltInMicrophone] + initial)
         let coordinator = self.coordinator
+        let before = await coordinator.handledEvents
         runTask.withLock { $0 = Task { await coordinator.run() } }
         try await waitUntil { await !monitor.connected().isEmpty }
-        try await waitUntil { await coordinator.handledEvents >= 1 + initial.count }
+        try await waitUntil { await coordinator.handledEvents >= before + 1 + initial.count }
     }
 
     /// Cancels `run()` and waits for it to return.

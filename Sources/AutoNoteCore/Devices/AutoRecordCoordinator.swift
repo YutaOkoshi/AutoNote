@@ -108,7 +108,7 @@ public actor AutoRecordCoordinator {
                     askedToRegister[device.deviceUID] = device
                     await notifier.post(.deviceSeenFirstTime(device.deviceRef))
                 case .registered, .ignored:
-                    break
+                    askedToRegister[device.deviceUID] = nil   // answered elsewhere (settings, another prompt)
                 }
             case .removed(let device):
                 if let ref = alreadyConnected.removeValue(forKey: device.deviceUID) {
@@ -221,6 +221,7 @@ public actor AutoRecordCoordinator {
                 try await registry.ignore(device)
             }
         } catch {
+            // plan 06: surface save failures of a registration answer to the user
             Self.log("register", error)
         }
     }
