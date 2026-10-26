@@ -1,7 +1,7 @@
 import Testing
 import CoreAudio
 import Foundation
-import AutoNoteCore
+@testable import AutoNoteCore
 import AutoNoteTestSupport
 
 @Suite struct DeviceListDiffTests {
@@ -33,6 +33,29 @@ import AutoNoteTestSupport
         device.audioObjectID = 161
         let result = diff.update(with: [device])
         #expect(result.added.isEmpty && result.removed.isEmpty)
+        #expect(diff.known[device.deviceUID!] == DeviceIdentity(raw: device))
+        #expect(diff.known.count == 1)
+    }
+
+    @Test func severalAddsKeepCurrentOrder() {
+        var diff = DeviceListDiff()
+        let result = diff.update(with: [.fixtureBluetoothInput, .fixtureBuiltInMicrophone, .fixtureHeadphoneInput])
+        #expect(result.added.map(\.deviceUID) == [
+            RawAudioDevice.fixtureBluetoothInput.deviceUID!, RawAudioDevice.fixtureBuiltInMicrophone.deviceUID!,
+            RawAudioDevice.fixtureHeadphoneInput.deviceUID!])
+    }
+
+    @Test func severalRemovesAndAddsInOneUpdate() {
+        var diff = DeviceListDiff()
+        _ = diff.update(with: [.fixtureBuiltInMicrophone, .fixtureHeadphoneInput, .fixtureUSBInput(uid: "usb-keep")])
+        let result = diff.update(with: [.fixtureUSBInput(uid: "usb-keep"), .fixtureBluetoothInput, .fixtureUSBInput(uid: "usb-new")])
+        #expect(result.removed.map(\.deviceUID) == [
+            RawAudioDevice.fixtureBuiltInMicrophone.deviceUID!, RawAudioDevice.fixtureHeadphoneInput.deviceUID!])
+        #expect(result.added.map(\.deviceUID) == [RawAudioDevice.fixtureBluetoothInput.deviceUID!, "usb-new"])
+    }
+
+    @Test func lookupTransportMapsAutoAggregate() {
+        #expect(CoreAudioDeviceLookup.transport(kAudioDeviceTransportTypeAutoAggregate) == "aggregate")
     }
 
     @Test func aggregateAddedIsIgnored() {

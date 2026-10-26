@@ -1,5 +1,6 @@
 import Foundation
 import CoreAudio
+import os
 
 public protocol HardwareObservation: Sendable {
     /// Idempotent: a second call is a no-op.
@@ -54,23 +55,27 @@ public final class CoreAudioHardware: AudioHardwareQuerying {
         }
     }
 
-    /// `cancelled` is only touched on `queue`; the listener block is removed on the same queue it was added with.
+    /// `cancelled` is guarded by a lock (not the listener queue), so `cancel()` is safe to call from inside `onChange`,
+    /// which runs on that queue. Only the first caller removes the listener.
     private final class Observation: HardwareObservation, @unchecked Sendable {
         private let queue: DispatchQueue
         private let block: AudioObjectPropertyListenerBlock
-        private var cancelled = false
+        private let cancelled = OSAllocatedUnfairLock(initialState: false)
 
         init(queue: DispatchQueue, block: @escaping AudioObjectPropertyListenerBlock) {
             self.queue = queue; self.block = block
         }
 
         func cancel() {
-            queue.sync {
-                guard !cancelled else { return }
-                cancelled = true
-                var address = CoreAudioHardware.address(kAudioHardwarePropertyDevices)
-                AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, queue, block)
+            let isFirst = cancelled.withLock { state -> Bool in
+                if state { return false }
+                state = true
+                return true
             }
+            guard isFirst else { return }
+            var address = CoreAudioHardware.address(kAudioHardwarePropertyDevices)
+            // The status is ignored on purpose: there is no recovery, and a failure only means the listener was already gone.
+            _ = AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, queue, block)
         }
 
         deinit { cancel() }
