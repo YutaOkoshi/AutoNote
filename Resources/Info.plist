@@ -18,6 +18,8 @@
 	<string>26.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSUserNotificationAlertStyle</key>
+	<string>alert</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>会議の自分の声を録音するためにマイクを使います</string>
 	<key>NSAudioCaptureUsageDescription</key>
