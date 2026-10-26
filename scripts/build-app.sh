@@ -20,6 +20,11 @@ if ! security find-identity -v -p codesigning | grep -q "\"${CERT_NAME}\""; then
     "${ROOT}/scripts/make-dev-cert.sh"
 fi
 
+# whisper.cpp の XCFramework（Package.swift の binaryTarget）が無ければ先にソースから作る
+if [[ ! -f "${ROOT}/tools/whisper.xcframework/Info.plist" ]]; then
+    "${ROOT}/scripts/build-whisper-xcframework.sh"
+fi
+
 swift build -c "${CONF}" --product AutoNoteApp
 swift build -c "${CONF}" --product autonote
 BIN_DIR="$(swift build -c "${CONF}" --show-bin-path)"
@@ -33,7 +38,7 @@ cp "${ROOT}/Resources/Info.plist" "${APP}/Contents/Info.plist"
 # whisper.cpp の XCFramework（macos-arm64_x86_64 スライス）を同梱し、実行ファイルから @rpath で引けるようにする
 WHISPER_FW="${BIN_DIR}/whisper.framework"
 if [[ ! -d "${WHISPER_FW}" ]]; then
-    WHISPER_FW="$(find "${ROOT}/.build/artifacts" -name whisper.framework -path '*macos-arm64_x86_64*' -print -quit)"
+    WHISPER_FW="${ROOT}/tools/whisper.xcframework/macos-arm64_x86_64/whisper.framework"
 fi
 if [[ -z "${WHISPER_FW}" || ! -d "${WHISPER_FW}" ]]; then
     echo "whisper.framework が見つからない" >&2

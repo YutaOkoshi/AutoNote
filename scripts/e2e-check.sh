@@ -100,6 +100,17 @@ cli_or_skip() {   # 項目の先頭で呼ぶ。使えなければ skip / fail �
     need_autonote_cli; case $? in 0) return 0 ;; 1) skip "autonote が無い（swift build で作る）" ;; *) fail "swift build --product autonote が失敗" ;; esac; return 1
 }
 
+# whisper.cpp の XCFramework（Package.swift の binaryTarget、tools/ は git 管理外）が無ければ先に作る。
+# 項目 1 の swift test と AUTONOTE_CLI のビルドが新しい clone で失敗しないように。--quick はビルドしないので触らない
+ensure_whisper_xcframework() {
+    [[ "${QUICK}" -eq 1 || -f "${ROOT}/tools/whisper.xcframework/Info.plist" ]] && return 0
+    echo "tools/whisper.xcframework が無いので scripts/build-whisper-xcframework.sh で作る（数分かかる）"
+    "${ROOT}/scripts/build-whisper-xcframework.sh" >"${WORK}/build-whisper-xcframework.log" 2>&1 && return 0
+    echo "scripts/build-whisper-xcframework.sh が失敗（末尾 20 行）:" >&2
+    tail -n 20 "${WORK}/build-whisper-xcframework.log" | sed 's/^/      | /' >&2
+    return 1
+}
+
 # ---------------------------------------------------------------- 確認項目
 
 check_swift_test() {
@@ -536,6 +547,8 @@ CHECKS=(
     check_dev_devices_watch
     check_dev_auto_record_quit
 )
+
+ensure_whisper_xcframework   # 失敗しても続ける（swift test などの項目が FAIL を出す）
 
 START=${SECONDS}
 for c in "${CHECKS[@]}"; do
