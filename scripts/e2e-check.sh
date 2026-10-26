@@ -396,7 +396,7 @@ check_dev_record() {
     local out="${WORK}/rec" code
     run_timeout 40 "${AUTONOTE_CLI}" dev record --seconds 5 --out "${out}"; code=$?
     [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
-    local json; json="$(tail -n 1 "${LAST_LOG}")"
+    local json; json="$(grep '^{' "${LAST_LOG}" | tail -n 1)"
     local status manifest
     status="$(printf '%s' "${json}" | plutil -extract status raw -o - - 2>/dev/null)"
     manifest="$(printf '%s' "${json}" | plutil -extract manifest raw -o - - 2>/dev/null)"
@@ -411,7 +411,7 @@ check_dev_record() {
     local wav info
     for wav in "$(dirname "${manifest}")"/tracks/*.wav; do
         info="$(afinfo "${wav}" 2>&1)"
-        grep -q '16000 Hz' <<<"${info}" && grep -q '1 ch' <<<"${info}" && grep -q '16-bit' <<<"${info}" \
+        grep -q '16000 Hz' <<<"${info}" && grep -q '1 ch' <<<"${info}" && grep -qE 'Int16|I16' <<<"${info}" \
             || { LAST_LOG=""; fail "${wav##*/} が 16 kHz / 1 ch / 16 bit でない"; return; }
     done
     pass "system chunks=$(printf '%s' "${json}" | plutil -extract tracks.1.chunks raw -o - - 2>/dev/null)"
@@ -428,7 +428,7 @@ check_dev_import() {
     local f json manifest wav info
     for f in s.m4a s.wav; do
         run "${AUTONOTE_CLI}" dev import "${dir}/${f}" --out "${WORK}/imp" --start 2026-10-20T10:00:00+09:00 || { fail "${f}: dev import が 0 以外で終了"; return; }
-        json="$(tail -n 1 "${LAST_LOG}")"
+        json="$(grep '^{' "${LAST_LOG}" | tail -n 1)"
         manifest="$(printf '%s' "${json}" | plutil -extract manifest raw -o - - 2>/dev/null)"
         wav="$(printf '%s' "${json}" | plutil -extract wav raw -o - - 2>/dev/null)"
         [[ -f "${manifest}" ]] || { fail "${f}: manifest が無い"; return; }

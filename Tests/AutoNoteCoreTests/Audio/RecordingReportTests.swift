@@ -49,4 +49,21 @@ import AutoNoteTestSupport
         #expect(line.contains("\"mic_permission\":\"authorized\""))
         #expect(try JSONSerialization.jsonObject(with: Data(line.utf8)) is [String: Any])
     }
+
+    @Test func readsDurationFromWAVWhenManifestHasNone() throws {
+        let dir = try TemporaryDirectory.make()
+        try FileManager.default.createDirectory(at: dir.appending(path: "tracks"), withIntermediateDirectories: true)
+        let samples = 16_000  // 1 second of 16 kHz mono Int16
+        var data = WAVFile.header(sampleRate: 16_000, channels: 1, bitsPerSample: 16, dataBytes: samples * 2)
+        data.append(Data(count: samples * 2))
+        try data.write(to: dir.appending(path: "tracks/mic-000.wav"))
+        var m = manifest()
+        m.tracks = [TrackFile(track: .mic, relativePath: "tracks/mic-000.wav", startOffset: TimelineTime(seconds: 0))]
+        let report = try RecordingReport.make(manifest: m, manifestURL: dir.appending(path: "manifest.json"),
+                                              meetingDirectory: dir, statistics: [:], events: [],
+                                              micPermission: .authorized)
+        #expect(report.tracks[0].seconds == 1.0)
+        #expect(report.tracks[0].chunks == 0)
+        #expect(report.tracks[1].files == 0)
+    }
 }

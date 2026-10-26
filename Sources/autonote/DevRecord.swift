@@ -3,10 +3,10 @@ import Dispatch
 import Foundation
 import Synchronization
 
-/// `autonote dev record --seconds <N> --out <dir> [--mic-uid <UID>] [--voice-processing] [--check-permission]`
+/// `autonote dev record --seconds <N> --out <dir> [--mic-uid <UID>] [--voice-processing] [--tap-layout tapOnly|withOutputClock] [--check-permission]`
 /// Exit codes: 0 ok, 3 microphone permission not authorized, 1 anything else.
 enum DevRecord {
-    static let usage = "usage: autonote dev record --seconds <N> --out <dir> [--mic-uid <UID>] [--voice-processing] [--check-permission]"
+    static let usage = "usage: autonote dev record --seconds <N> --out <dir> [--mic-uid <UID>] [--voice-processing] [--tap-layout tapOnly|withOutputClock] [--check-permission]"
 
     static func run(_ args: [String]) async -> Int32 {
         var seconds: Double?
@@ -14,6 +14,7 @@ enum DevRecord {
         var micUID: String?
         var voiceProcessing = false
         var checkOnly = false
+        var tapLayout: AggregateLayout?
         var index = 0
         while index < args.count {
             switch args[index] {
@@ -28,6 +29,14 @@ enum DevRecord {
                 micUID = args[index + 1]; index += 2
             case "--voice-processing":
                 voiceProcessing = true; index += 1
+            case "--tap-layout":
+                guard index + 1 < args.count else { return DevCommands.usageError(usage) }
+                switch args[index + 1] {
+                case "tapOnly": tapLayout = .tapOnly
+                case "withOutputClock": tapLayout = .withOutputClock
+                default: return DevCommands.usageError(usage)
+                }
+                index += 2
             case "--check-permission":
                 checkOnly = true; index += 1
             default:
@@ -51,11 +60,26 @@ enum DevRecord {
             var settings = Settings()
             settings.voiceProcessing = voiceProcessing
             let paths = AppPaths(root: out)
-            let session = RecordingSession.live(paths: paths, settings: settings)
+            let session: RecordingSession
+            if let tapLayout {
+                DevCommands.printError("tap layout: \(tapLayout)")
+                session = RecordingSession(
+                    paths: paths, manifests: ManifestStore(paths: paths),
+                    sources: LiveAudioSourceFactory(voiceProcessing: settings.voiceProcessing, tapLayout: tapLayout))
+            } else {
+                session = RecordingSession.live(paths: paths, settings: settings)
+            }
 
-            let collector = EventCollector()
+            // Ends itself on `.stopped`, so awaiting it after `stop()` is deterministic.
             let stream = await session.events()
-            let listener = Task { for await event in stream { await collector.add(event) } }
+            let listener = Task<[RecordingEvent], Never> {
+                var received: [RecordingEvent] = []
+                for await event in stream {
+                    received.append(event)
+                    if case .stopped = event { break }
+                }
+                return received
+            }
             defer { listener.cancel() }
 
             // First SIGINT cuts the wait short; the stop path below still runs exactly once.
@@ -77,13 +101,12 @@ enum DevRecord {
             await sleeper.value
             let manifest = try await session.stop()
             let stats = await session.statistics()
-            // Give the listener a moment to drain the final `.stopped` event.
-            try? await Task.sleep(for: .milliseconds(100))
+            let events = await listener.value
 
             let report = try RecordingReport.make(
                 manifest: manifest, manifestURL: paths.manifestFile(manifest.id),
                 meetingDirectory: paths.meetingDirectory(manifest.id),
-                statistics: stats, events: await collector.events, micPermission: permission)
+                statistics: stats, events: events, micPermission: permission)
             print(try report.jsonLine())
             return 0
         } catch {
@@ -91,9 +114,4 @@ enum DevRecord {
             return 1
         }
     }
-}
-
-private actor EventCollector {
-    private(set) var events: [RecordingEvent] = []
-    func add(_ event: RecordingEvent) { events.append(event) }
 }
