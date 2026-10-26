@@ -17,4 +17,13 @@ import Testing
     @Test func emptyChunkGivesEmptyBuffer() {
         #expect(AppleAudioBuffers.pcmBuffer(chunk([], at: 0)).frameLength == 0)
     }
+
+    @Test func analyzerConverterResamplesAndFlushesTheTail() throws {
+        let target = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
+        let c = try #require(AnalyzerAudioConverter(to: target))
+        var frames = 0
+        for _ in 0..<10 { frames += Int(try c.convert(AppleAudioBuffers.pcmBuffer(chunk(tone(0.1), at: 0)))?.frameLength ?? 0) }
+        frames += Int(try c.flush()?.frameLength ?? 0)
+        #expect(abs(frames - 48_000) <= 48)
+    }
 }

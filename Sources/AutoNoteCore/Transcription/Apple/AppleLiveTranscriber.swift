@@ -8,7 +8,8 @@ public typealias SpeechLiveTranscriber = AppleLiveTranscriber<SpeechAdapter>
 
 /// Realtime transcription with Apple's `SpeechAnalyzer` (the flow measured in plan 00's AppleSpeechProbe).
 /// `start` sets the analyzer up and returns at once; a results task yields utterances through the stream.
-/// An analyzer error after `start` ends the stream (logged to stderr once).
+/// A recognition or audio-conversion error after `start` tears the session down and ends the stream (always
+/// logged to stderr); a consumer that stops reading the stream tears it down too.
 public actor AppleLiveTranscriber<Adapter: AppleSpeechModuleAdapter>: LiveTranscriber {
     /// Upper bound on contextual strings handed to the analyzer (plan 04 Task 7).
     static var maxHints: Int { 100 }
@@ -20,19 +21,22 @@ public actor AppleLiveTranscriber<Adapter: AppleSpeechModuleAdapter>: LiveTransc
     private var detector = SilenceDetector()
     private var analyzer: SpeechAnalyzer?
     private var input: AsyncStream<AnalyzerInput>.Continuation?
-    private var analysisFormat: AVAudioFormat?
-    private var converter: AVAudioConverter?
+    private var converter: (any AnalyzerAudioConverting)?
     private var continuation: AsyncStream<Utterance>.Continuation?
     private var resultsTask: Task<Void, Never>?
     private var finalizing: Task<Void, Never>?
     private var finishing: Task<Void, Never>?
     private var started = false
     private var accepting = false
-    private var loggedFailure = false
+    private var ended = false
+    private var loggedSites: Set<String> = []
 
     public init(strategy: SegmentationStrategy = .current) {
         requestedStrategy = strategy
     }
+
+    /// Seconds of audio the analyzer has been given (for tests).
+    var audioSeconds: Double { mapper.audioSeconds }
 
     public func start(language: Language, hints: [String]) async throws -> AsyncStream<Utterance> {
         guard !started else { throw TranscriptionError.engineUnavailable("already started") }
@@ -44,7 +48,7 @@ public actor AppleLiveTranscriber<Adapter: AppleSpeechModuleAdapter>: LiveTransc
         strategy = Adapter.supports(requestedStrategy) ? requestedStrategy : .silenceFinalize
         let (module, results) = Adapter.makeModule(locale: locale, strategy: strategy)
         let analyzer: SpeechAnalyzer
-        let inputStream: AsyncStream<AnalyzerInput>
+        let converter: any AnalyzerAudioConverting
         let inputContinuation: AsyncStream<AnalyzerInput>.Continuation
         do {
             if let request = try await AssetInventory.assetInstallationRequest(supporting: [module]) {
@@ -59,52 +63,76 @@ public actor AppleLiveTranscriber<Adapter: AppleSpeechModuleAdapter>: LiveTransc
             guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module]) else {
                 throw TranscriptionError.engineUnavailable("\(Adapter.engineKind): no compatible audio format")
             }
-            if format != AppleAudioBuffers.format {
-                guard let c = AVAudioConverter(from: AppleAudioBuffers.format, to: format) else {
+            if format == AppleAudioBuffers.format {
+                converter = PassthroughAudioConverter()
+            } else {
+                guard let c = AnalyzerAudioConverter(to: format) else {
                     throw TranscriptionError.engineUnavailable("\(Adapter.engineKind): cannot convert audio to \(format)")
                 }
                 converter = c
             }
-            analysisFormat = format
             try await analyzer.prepareToAnalyze(in: format)
-            (inputStream, inputContinuation) = AsyncStream<AnalyzerInput>.makeStream()
+            let (inputStream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
+            inputContinuation = continuation
             try await analyzer.start(inputSequence: inputStream)
         } catch let error as TranscriptionError {
             throw error
         } catch {
             throw TranscriptionError.engineUnavailable(String(describing: error))
         }
+        return begin(analyzer: analyzer, results: results, input: inputContinuation, converter: converter)
+    }
+
+    /// Runs a session on an analyzer that is already started (tests pass `analyzer: nil` and fakes).
+    func begin(analyzer: SpeechAnalyzer?, results: AsyncThrowingStream<RecognizedSegment, Error>,
+               input: AsyncStream<AnalyzerInput>.Continuation, converter: sending any AnalyzerAudioConverting)
+        -> AsyncStream<Utterance> {
+        started = true
         let (stream, continuation) = AsyncStream<Utterance>.makeStream()
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.consumerStopped() }
+        }
         self.analyzer = analyzer
+        self.input = input
+        self.converter = converter
         self.continuation = continuation
-        input = inputContinuation
         accepting = true
-        resultsTask = Task { await consume(results) }
+        resultsTask = Task { await readResults(results) }
         return stream
     }
 
     public func feed(_ chunk: AudioChunk) async {
-        guard accepting, let input, !chunk.samples.isEmpty else { return }
-        mapper.append(chunk)
-        guard let buffer = convert(AppleAudioBuffers.pcmBuffer(chunk)) else { return }
-        input.yield(AnalyzerInput(buffer: buffer))
+        guard accepting, let input, let converter, !chunk.samples.isEmpty else { return }
+        let buffer: AVAudioPCMBuffer?
+        do { buffer = try converter.convert(AppleAudioBuffers.pcmBuffer(chunk)) } catch {
+            log("audio conversion failed; stopping", error, always: true)
+            tearDown()
+            return
+        }
+        mapper.append(chunk)                                      // only audio the analyzer actually receives
+        if let buffer { input.yield(AnalyzerInput(buffer: buffer)) }
         if strategy == .silenceFinalize {
             for boundary in detector.process(chunk.samples) { scheduleFinalize(through: boundary) }
         }
     }
 
-    /// Closes the input, lets the analyzer finalize everything fed, then ends the stream.
+    /// Flushes the converter, closes the input, lets the analyzer finalize everything fed, then ends the stream.
     /// Later (or concurrent) calls wait for the same ending.
     public func finish() async {
         if accepting {
             accepting = false
+            do {
+                if let tail = try converter?.flush() { input?.yield(AnalyzerInput(buffer: tail)) }
+            } catch {
+                log("audio conversion flush failed", error)
+            }
             input?.finish()
             input = nil
             let analyzer = analyzer
             finishing = Task {
                 await finalizing?.value
                 do { try await analyzer?.finalizeAndFinishThroughEndOfInput() } catch {
-                    logFailure("finalize failed", error)
+                    log("finalize at end of input failed", error)
                     await analyzer?.cancelAndFinishNow()
                 }
                 await resultsTask?.value
@@ -116,20 +144,33 @@ public actor AppleLiveTranscriber<Adapter: AppleSpeechModuleAdapter>: LiveTransc
         await finishing?.value
     }
 
-    private func consume(_ results: AsyncThrowingStream<RecognizedSegment, Error>) async {
+    private func readResults(_ results: AsyncThrowingStream<RecognizedSegment, Error>) async {
         do {
             for try await segment in results { continuation?.yield(assembler.consume(segment, mapper: mapper)) }
         } catch {
-            logFailure("recognition failed", error)
-            accepting = false
-            input?.finish()
-            input = nil
-            await analyzer?.cancelAndFinishNow()
+            log("recognition failed; stopping", error, always: true)
+            tearDown()
         }
         endStream()
     }
 
+    /// Stops the session at once: no more feeds, input closed, results cancelled, analyzer cancelled, stream ended.
+    private func tearDown() {
+        accepting = false
+        input?.finish()
+        input = nil
+        resultsTask?.cancel()
+        if let analyzer { Task { await analyzer.cancelAndFinishNow() } }
+        endStream()
+    }
+
+    private func consumerStopped() {
+        guard !ended else { return }
+        tearDown()
+    }
+
     private func endStream() {
+        ended = true
         continuation?.finish()
         continuation = nil
     }
@@ -141,34 +182,14 @@ public actor AppleLiveTranscriber<Adapter: AppleSpeechModuleAdapter>: LiveTransc
         finalizing = Task {
             await previous?.value
             do { try await analyzer.finalize(through: CMTime(seconds: boundary, preferredTimescale: 16_000)) } catch {
-                logFailure("finalize at \(boundary) s failed", error)
+                log("finalize at a silence boundary failed", error)
             }
         }
     }
 
-    /// Converts to the analyzer's format with the one reused converter (nil converter: formats already match).
-    private func convert(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
-        guard let converter, let format = analysisFormat else { return buffer }
-        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * format.sampleRate / AppleAudioBuffers.format.sampleRate) + 32
-        guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return nil }
-        nonisolated(unsafe) var fed = false                    // the input block runs synchronously inside convert
-        var error: NSError?
-        let status = converter.convert(to: out, error: &error) { _, inputStatus in
-            if fed { inputStatus.pointee = .noDataNow; return nil }
-            fed = true
-            inputStatus.pointee = .haveData
-            return buffer
-        }
-        if status == .error {
-            logFailure("audio conversion failed", error ?? NSError(domain: "AVAudioConverter", code: -1))
-            return nil
-        }
-        return out.frameLength > 0 ? out : nil
-    }
-
-    private func logFailure(_ what: String, _ error: Error) {
-        guard !loggedFailure else { return }
-        loggedFailure = true
-        FileHandle.standardError.write(Data("\(Adapter.engineKind) live: \(what): \(error)\n".utf8))
+    /// Logs each distinct non-fatal failure once; `always` is for the error that ends the stream.
+    private func log(_ site: String, _ error: Error, always: Bool = false) {
+        guard always || loggedSites.insert(site).inserted else { return }
+        FileHandle.standardError.write(Data("\(Adapter.engineKind) live: \(site): \(error)\n".utf8))
     }
 }
