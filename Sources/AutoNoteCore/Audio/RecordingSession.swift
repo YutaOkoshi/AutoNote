@@ -92,7 +92,8 @@ public actor RecordingSession {
         return clock.now()
     }
 
-    /// Live chunks of `track` for real-time transcription. Not fed while paused; finished at `stop`.
+    /// Live chunks of `track` for real-time transcription. Not fed while paused; finished at `stop` and when a `start`
+    /// fails (so a stream made before a failed start never receives a later meeting's chunks).
     /// Calling again finishes the previous stream.
     public func audio(for track: Track) -> AsyncStream<AudioChunk> {
         audioSubscribers[track]?.continuation.finish()

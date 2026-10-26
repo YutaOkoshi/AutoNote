@@ -395,7 +395,8 @@ check_dev_record() {
     grep -q '"mic_permission":"authorized"' "${LAST_LOG}" || { skip "マイク許可がない（責任プロセス: ターミナル）"; return; }
     local out="${WORK}/rec" code
     run_timeout 40 "${AUTONOTE_CLI}" dev record --seconds 5 --out "${out}"; code=$?
-    [[ ${code} -eq 124 ]] && { skip "システム音声の録音許可が未応答（責任プロセス: ターミナル）。Terminal.app から scripts/e2e-check.sh を実行するか、許可ダイアログに応答してください"; return; }
+    # start gives up after 10 s and stop after 5 s per source, so 40 s means a hang (regression), never a pending dialog.
+    [[ ${code} -eq 124 ]] && { fail "hang: 40 秒で終わらない（start/stop のタイムアウトが効いていない）"; return; }
     [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
     local json; json="$(grep '^{' "${LAST_LOG}" | tail -n 1)"
     local status manifest
@@ -404,22 +405,22 @@ check_dev_record() {
     [[ "${status}" == "too_short" ]] || { fail "status=${status}（期待 too_short）"; return; }
     [[ -f "${manifest}" ]] || { fail "manifest が無い: ${manifest}"; return; }
     [[ "$(plutil -extract status raw -o - "${manifest}" 2>/dev/null)" == "${status}" ]] || { fail "manifest の status が JSON と違う"; return; }
+    local wav info
+    for wav in "$(dirname "${manifest}")"/tracks/*.wav; do
+        info="$(afinfo "${wav}" 2>&1)"
+        grep -q '16000 Hz' <<<"${info}" && grep -q '1 ch' <<<"${info}" && grep -qE 'Int16|I16' <<<"${info}" \
+            || { LAST_LOG=""; fail "${wav##*/} が 16 kHz / 1 ch / 16 bit でない"; return; }
+    done
     # System source failed (e.g. permission dialog pending: start gives up after its 10 s timeout and the mic records
-    # alone, so the 5 s length cannot hold). The command returned without hanging; the length check needs the permission.
+    # alone, so the 5 s length cannot hold). The WAV formats above are still verified; the length check needs the permission.
     if grep -q 'sourceFailed(system)' <<<"${json}"; then
-        skip "システム音声の開始に失敗（許可が未応答なら 10 秒で timeout してマイクのみ録音: mic=$(printf '%s' "${json}" | plutil -extract tracks.0.seconds raw -o - - 2>/dev/null)s）。Terminal.app から scripts/e2e-check.sh を実行するか、許可ダイアログに応答してください"
+        skip "システム音声の開始に失敗（許可が未応答なら 10 秒で timeout してマイクのみ録音: mic=$(printf '%s' "${json}" | plutil -extract tracks.0.seconds raw -o - - 2>/dev/null)s、WAV 形式は確認済み）。Terminal.app から scripts/e2e-check.sh を実行するか、許可ダイアログに応答してください"
         return
     fi
     local i seconds
     for i in 0 1; do
         seconds="$(printf '%s' "${json}" | plutil -extract "tracks.${i}.seconds" raw -o - - 2>/dev/null)"
         awk -v s="${seconds}" 'BEGIN { exit !(s >= 4.5 && s <= 5.5) }' || { fail "tracks.${i}.seconds=${seconds}（期待 5.0±0.5）"; return; }
-    done
-    local wav info
-    for wav in "$(dirname "${manifest}")"/tracks/*.wav; do
-        info="$(afinfo "${wav}" 2>&1)"
-        grep -q '16000 Hz' <<<"${info}" && grep -q '1 ch' <<<"${info}" && grep -qE 'Int16|I16' <<<"${info}" \
-            || { LAST_LOG=""; fail "${wav##*/} が 16 kHz / 1 ch / 16 bit でない"; return; }
     done
     pass "system chunks=$(printf '%s' "${json}" | plutil -extract tracks.1.chunks raw -o - - 2>/dev/null)"
 }
