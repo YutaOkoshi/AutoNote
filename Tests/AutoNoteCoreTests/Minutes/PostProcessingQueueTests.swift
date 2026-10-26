@@ -172,7 +172,8 @@ private func waitFor(_ queue: PostProcessingQueue, timeout: Duration = .seconds(
         #expect(job.notBefore == nil)
     }
 
-    @Test func retryIsHonouredAtMostMaxAttemptsTimes() async throws {
+    @Test func retryAfterIsNotCapped() async throws {
+        // Spec §13: an unavailable output folder is retried every 5 minutes until it returns; no give-up.
         let f = try Fixture()
         try await f.saveManifest()
         let always = ScriptedStage(name: StageName.writeVault, log: f.log,
@@ -185,10 +186,11 @@ private func waitFor(_ queue: PostProcessingQueue, timeout: Duration = .seconds(
             await queue.runUntilIdle()
         }
         let job = try #require(try await f.job())
-        #expect(job.state == .failed)
+        #expect(job.state == .waiting)
+        #expect(job.notBefore != nil)
         #expect(job.lastError == "busy")
-        #expect(job.attempts == PostProcessingQueue.maxAttempts + 1)
-        #expect(await f.log.entries.filter { $0 == StageName.writeVault }.count == PostProcessingQueue.maxAttempts + 1)
+        #expect(job.attempts > 24)
+        #expect(await f.log.entries.filter { $0 == StageName.writeVault }.count == 51)
     }
 
     @Test func failedStageBlocksOnlyItsJob() async throws {
@@ -369,19 +371,47 @@ private func waitFor(_ queue: PostProcessingQueue, timeout: Duration = .seconds(
         let summarize = ScriptedStage(name: StageName.summarize, log: f.log, onRun: { job in
             job.summaryFailure = "rate_limited: x"
         })
-        let queue = f.queue(f.stages([StageName.summarize: summarize]))
+        var queue = f.queue(f.stages([StageName.summarize: summarize]))
         await queue.enqueue(Fixture.firstID)
         await queue.runUntilIdle()
-        for _ in 0..<40 {
+        #expect(try await f.job()?.rateLimitRounds == 1)
+        for _ in 0..<23 {
             f.clock.advance(by: 3600)
             await queue.runUntilIdle()
         }
-        let job = try #require(try await f.job())
+        var job = try #require(try await f.job())
+        #expect(job.state == .waiting)
+        #expect(job.rateLimitRounds == 24)
+
+        // The round count is on disk: a fresh queue (app restart) carries on from 24, so round 25 fails the job.
+        queue = f.queue(f.stages([StageName.summarize: summarize]))
+        f.clock.advance(by: 3600)
+        await queue.runUntilIdle()
+        job = try #require(try await f.job())
         #expect(job.state == .failed)
-        #expect(job.lastError == "rate_limited: x")
-        #expect(await f.log.entries.filter { $0 == StageName.summarize }.count == PostProcessingQueue.maxAttempts + 1)
+        #expect(job.lastError == "rate_limited_rounds_exhausted")
+        #expect(job.rateLimitRounds == 25)
+        #expect(await f.log.entries.filter { $0 == StageName.summarize }.count == 25)
         // a failed job with a summary failure stays visible
         #expect(await queue.snapshot().jobs.first?.summaryFailure == .rateLimited)
+    }
+
+    @Test func successfulSummarizeResetsRateLimitRounds() async throws {
+        let f = try Fixture()
+        try await f.saveManifest()
+        let calls = FirstTime()
+        let summarize = ScriptedStage(name: StageName.summarize, log: f.log, onRun: { job in
+            if calls.take() { job.summaryFailure = "rate_limited: x" }
+        })
+        let queue = f.queue(f.stages([StageName.summarize: summarize]))
+        await queue.enqueue(Fixture.firstID)
+        await queue.runUntilIdle()
+        #expect(try await f.job()?.rateLimitRounds == 1)
+        f.clock.advance(by: 3600)
+        await queue.runUntilIdle()
+        let job = try #require(try await f.job())
+        #expect(job.state == .done)
+        #expect(job.rateLimitRounds == nil)
     }
 
     @Test func restartResumesInterruptedStageWithoutCountingAttempt() async throws {

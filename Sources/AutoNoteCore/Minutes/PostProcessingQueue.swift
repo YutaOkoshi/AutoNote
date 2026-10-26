@@ -11,9 +11,10 @@ public enum QueueError: Error, Equatable {
 /// The persistent post-processing queue (要件書 §8.1). Runs exactly one stage at a time across all jobs,
 /// oldest runnable job first, and persists every state change through `JobStore`.
 public actor PostProcessingQueue {
-    /// A stage's `.retry(after:)` is honoured this many times; the next retry result fails the job.
-    /// The hourly rate-limit rerun counts its rounds against the same limit.
-    public static let maxAttempts = 24
+    /// Hourly rate-limit summarize rounds allowed (≈ 24 h); the next one fails the job. A stage's
+    /// `.retry(after:)` is not capped (spec §13: retry until the output folder is back).
+    public static let maxRateLimitRounds = 24
+    static let rateLimitExhaustedReason = "rate_limited_rounds_exhausted"
     static let rateLimitDelay: TimeInterval = 3600
     static let lastErrorLimit = 300
     static let overwritePrefix = "overwrite_confirmation: "
@@ -52,8 +53,6 @@ public actor PostProcessingQueue {
     var isRecording = false
     /// Feeds `activity.isRecordingUpdates()` into `setRecording(_:)` between `start()` and `stop()`.
     var recordingTask: Task<Void, Never>?
-    /// Rate-limit rounds of a summarize rerun in flight (the waiting job keeps them in `attempts`).
-    var rateLimitRounds: [String: Int] = [:]
     /// Meetings with a `rerun` in progress; no stage of theirs may start until the reset is saved.
     var rerunsInProgress: Set<String> = []
     private var runToken = 0
@@ -215,7 +214,7 @@ public actor PostProcessingQueue {
         }
         guard var job = jobs[id.rawValue] else { throw QueueError.unknownMeeting(id) }
         Self.resetForRerun(&job, from: stage)
-        rateLimitRounds[id.rawValue] = nil
+        job.rateLimitRounds = nil
         await persist(job)
         Self.logger.info("rerun \(id.rawValue, privacy: .public) from \(stage, privacy: .public): generation \(job.generation)")
         wake()
@@ -418,11 +417,9 @@ public actor PostProcessingQueue {
 
         // A finished job picked again is a rate-limited one whose hour is up (or was retried).
         if job.nextStage == nil {
-            let rounds = job.attempts
             Self.resetForRerun(&job, from: StageName.summarize)
-            job.attempts = rounds
-            rateLimitRounds[key] = rounds
-            Self.logger.info("rerun \(key, privacy: .public) from summarize after rate limit, round \(rounds + 1)")
+            let round = (job.rateLimitRounds ?? 0) + 1
+            Self.logger.info("rerun \(key, privacy: .public) from summarize after rate limit, round \(round)")
         }
 
         // Unregistered known stages are completed without running; unknown names fail the job.
@@ -486,6 +483,7 @@ public actor PostProcessingQueue {
             done.lastError = nil
             done.notBefore = nil
             done.state = .pending
+            if stageName == StageName.summarize, done.summaryFailure == nil { done.rateLimitRounds = nil }
             if done.nextStage == nil { finish(&done) }
             job = done
             Self.logger.info("job \(key, privacy: .public) stage \(stageName, privacy: .public): done, job \(job.state.rawValue, privacy: .public)")
@@ -493,14 +491,9 @@ public actor PostProcessingQueue {
             switch error {
             case .retry(let after, let reason):
                 job.lastError = Self.short(reason)
-                if job.attempts > Self.maxAttempts {
-                    job.state = .failed
-                    Self.logger.error("job \(key, privacy: .public) stage \(stageName, privacy: .public): retries exhausted, failed")
-                } else {
-                    job.state = .waiting
-                    job.notBefore = clock.now().addingTimeInterval(after)
-                    Self.logger.info("job \(key, privacy: .public) stage \(stageName, privacy: .public): waiting \(after, privacy: .public)s")
-                }
+                job.state = .waiting
+                job.notBefore = clock.now().addingTimeInterval(after)
+                Self.logger.info("job \(key, privacy: .public) stage \(stageName, privacy: .public): waiting \(after, privacy: .public)s")
             case .failed(let reason):
                 job.state = .failed
                 job.lastError = Self.short(reason)
@@ -526,20 +519,18 @@ public actor PostProcessingQueue {
     /// All stages are complete: rate-limited summaries wait an hour for a summarize rerun, others are done.
     private func finish(_ job: inout Job) {
         let key = job.meeting.rawValue
-        let carried = rateLimitRounds.removeValue(forKey: key) ?? 0
         guard SummaryFailureKind.of(job.summaryFailure) == .rateLimited else {
             job.state = .done
             return
         }
-        let rounds = carried + 1
-        if rounds > Self.maxAttempts {
+        let rounds = (job.rateLimitRounds ?? 0) + 1
+        job.rateLimitRounds = rounds
+        if rounds > Self.maxRateLimitRounds {
             job.state = .failed
-            job.attempts = rounds
-            job.lastError = job.summaryFailure.map(Self.short)
+            job.lastError = Self.rateLimitExhaustedReason
             Self.logger.error("job \(key, privacy: .public): rate limit rounds exhausted, failed")
         } else {
             job.state = .waiting
-            job.attempts = rounds
             job.notBefore = clock.now().addingTimeInterval(Self.rateLimitDelay)
             Self.logger.info("job \(key, privacy: .public): rate limited, summarize again in 1 hour")
         }

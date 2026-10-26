@@ -18,6 +18,7 @@ import AutoNoteTestSupport
         j.summaryFailure = SummaryFailureKind.encode(.rateLimited, message: "hit your limit")
         j.notBefore = Date(timeIntervalSince1970: 2_000)
         j.overwriteApproved = true
+        j.rateLimitRounds = 3
         j.completedStages = [StageName.transcribe]
         try await store.save(j)
         let file = paths.root.appending(path: "queue/jobs/20261024-1400-a1b2.json")
@@ -26,6 +27,7 @@ import AutoNoteTestSupport
         #expect(text.contains("completed_stages"))
         #expect(text.contains("not_before"))
         #expect(text.contains("overwrite_approved"))
+        #expect(text.contains("\"rate_limit_rounds\""))
         #expect(try await store.load(j.meeting) == j)
     }
 

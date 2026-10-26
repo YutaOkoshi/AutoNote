@@ -61,7 +61,6 @@ extension PostProcessingQueue {
         try await Retention(paths: paths).deleteMeeting(id, outputFolder: outputFolder)
         jobs[key] = nil
         progress[key] = nil
-        rateLimitRounds[key] = nil
         publish()
         logger.info("delete \(key, privacy: .public): removed from queue")
     }

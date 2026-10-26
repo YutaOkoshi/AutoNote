@@ -45,15 +45,18 @@ public struct Job: Codable, Equatable, Sendable {
     public var transcriptEngine: String?
     public var summaryFailure: String?
     public var overwriteApproved: Bool
+    /// Hourly rate-limit summarize rounds so far (nil when none); reset by a successful summarize.
+    public var rateLimitRounds: Int?
 
     public init(id: String, meeting: MeetingID, stages: [String], completedStages: [String], state: JobState,
                 attempts: Int, lastError: String?, notBefore: Date?, createdAt: Date,
                 generation: Int = 0, transcriptEngine: String? = nil, summaryFailure: String? = nil,
-                overwriteApproved: Bool = false) {
+                overwriteApproved: Bool = false, rateLimitRounds: Int? = nil) {
         self.id = id; self.meeting = meeting; self.stages = stages; self.completedStages = completedStages
         self.state = state; self.attempts = attempts; self.lastError = lastError; self.notBefore = notBefore
         self.createdAt = createdAt; self.generation = generation; self.transcriptEngine = transcriptEngine
         self.summaryFailure = summaryFailure; self.overwriteApproved = overwriteApproved
+        self.rateLimitRounds = rateLimitRounds
     }
 
     /// First stage not yet completed.
@@ -61,7 +64,7 @@ public struct Job: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, meeting, stages, completedStages, state, attempts, lastError, notBefore, createdAt
-        case generation, transcriptEngine, summaryFailure, overwriteApproved
+        case generation, transcriptEngine, summaryFailure, overwriteApproved, rateLimitRounds
     }
 
     public init(from decoder: any Decoder) throws {
@@ -79,6 +82,7 @@ public struct Job: Codable, Equatable, Sendable {
         transcriptEngine = try c.decodeIfPresent(String.self, forKey: .transcriptEngine)
         summaryFailure = try c.decodeIfPresent(String.self, forKey: .summaryFailure)
         overwriteApproved = try c.decodeIfPresent(Bool.self, forKey: .overwriteApproved) ?? false
+        rateLimitRounds = try c.decodeIfPresent(Int.self, forKey: .rateLimitRounds)
     }
 }
 
