@@ -115,11 +115,12 @@ private final class ChunkCollector: Sendable {
     }
 
     @Test func startTimesOutWhenHardwareStartBlocks() async {
+        // Start blocks 3× the timeout; the bound leaves 1.5 s of scheduler slack and still sits before the start returns.
         let hw = FakeTapHardware(); hw.startDelay = .seconds(3)
-        let src = ProcessTapSource(clock: .fake(), hardware: hw, startTimeout: .milliseconds(200))
+        let src = ProcessTapSource(clock: .fake(), hardware: hw, startTimeout: .seconds(1))
         let t0 = ContinuousClock.now
         let error = await #expect(throws: AudioSourceError.self) { try await src.start { _ in } }
-        #expect(ContinuousClock.now - t0 < .seconds(1))
+        #expect(ContinuousClock.now - t0 < .milliseconds(2500))
         #expect(error == .timedOut(call: "AudioDeviceStart"))
         // Idle again: a second start is admitted instead of throwing alreadyStarted. It queues behind the still-blocked
         // late bring-up on the serial control queue, so it times out as well.
