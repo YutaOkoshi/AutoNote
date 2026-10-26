@@ -12,8 +12,9 @@ let package = Package(
     targets: [
         .target(name: "AutoNoteCore"),
         .executableTarget(name: "AutoNoteApp", dependencies: ["AutoNoteCore"]),
-        .executableTarget(name: "autonote", dependencies: ["AutoNoteCore"]),
-        .testTarget(name: "AutoNoteCoreTests", dependencies: ["AutoNoteCore"]),
+        .target(name: "AutoNoteTestSupport", dependencies: ["AutoNoteCore"]),
+        .executableTarget(name: "autonote", dependencies: ["AutoNoteCore", "AutoNoteTestSupport"]),
+        .testTarget(name: "AutoNoteCoreTests", dependencies: ["AutoNoteCore", "AutoNoteTestSupport"]),
     ],
     swiftLanguageModes: [.v6]
 )
