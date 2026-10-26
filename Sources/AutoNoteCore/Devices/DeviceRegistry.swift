@@ -47,6 +47,8 @@ public enum RegistryMatch: Equatable, Sendable {
 
 public enum DeviceRegistryError: Error, Equatable {
     case unknownEntry(String)
+    /// The stored file could not be read or set aside; the registry is read-only until a reload succeeds.
+    case storageUnavailable(String)
 }
 
 public protocol DeviceRegistryStorage: Sendable {
@@ -66,29 +68,36 @@ public actor DeviceRegistry {
     private let mac: any MacIdentityProviding
     private let now: @Sendable () -> Date
     private var items: [RegisteredDevice] = []
+    private var loadFailed: Error?
 
     public init(storage: any DeviceRegistryStorage, mac: any MacIdentityProviding,
                 now: @Sendable @escaping () -> Date = Date.init) {
         self.storage = storage; self.mac = mac; self.now = now
     }
 
-    /// A missing file, a legacy top-level `[]`, or an unreadable file all leave an empty registry;
-    /// unreadable content is first handed to `backupCorrupt`.
+    /// A missing file, a legacy top-level array, or an undecodable file all leave a usable registry
+    /// (undecodable content is first handed to `backupCorrupt`). An I/O error from `load` or `backupCorrupt`
+    /// leaves it empty and read-only (`loadFailed`) so the only copy is never overwritten; a later successful
+    /// reload clears that.
     public func reload() async {
         items = []
-        guard let data = try? await storage.load() else { return }
+        loadFailed = nil
+        let data: Data?
+        do { data = try await storage.load() } catch { loadFailed = error; return }
+        guard let data else { return }
         if let file = try? AutoNoteJSON.decoder().decode(DeviceRegistryFile.self, from: data) {
             items = file.devices
         } else if let legacy = try? AutoNoteJSON.decoder().decode([RegisteredDevice].self, from: data) {
             items = legacy
         } else {
-            try? await storage.backupCorrupt(data)
+            do { try await storage.backupCorrupt(data) } catch { loadFailed = error }
         }
     }
 
     public func entries() -> [RegisteredDevice] { items }
 
     public func match(_ device: DeviceIdentity) -> RegistryMatch {
+        if loadFailed != nil { return .unknown }
         if let hit = items.first(where: { $0.deviceUID == device.deviceUID }) {
             return hit.disposition == .registered
                 ? .registered(entryID: hit.id, rule: .deviceUID) : .ignored(entryID: hit.id)
@@ -101,15 +110,15 @@ public actor DeviceRegistry {
         switch device.transport {
         case .usb:
             if let model = device.modelUID, model != "0 0",
-               let hit = items.first(where: {
+               let hit = preferred(items.filter {
                    $0.disposition == .registered && $0.transport == .usb && $0.modelUID == model && $0.name == device.name
-               }) {
+               }, mac: thisMac) {
                 return resolve(hit, .modelUIDAndName)
             }
         case .bluetooth:
-            if let hit = items.first(where: {
+            if let hit = preferred(items.filter {
                 $0.disposition == .registered && $0.transport == .bluetooth && $0.name == device.name
-            }) {
+            }, mac: thisMac) {
                 return resolve(hit, .name)
             }
         default:
@@ -120,6 +129,7 @@ public actor DeviceRegistry {
 
     @discardableResult
     public func register(_ device: DeviceIdentity, startOnModelMatchDefault: Bool = false) async throws -> RegisteredDevice {
+        try requireWritable()
         if let index = items.firstIndex(where: { $0.deviceUID == device.deviceUID }) {
             var entry = items[index]
             entry.disposition = .registered
@@ -132,6 +142,7 @@ public actor DeviceRegistry {
     }
 
     public func ignore(_ device: DeviceIdentity) async throws {
+        try requireWritable()
         if let index = items.firstIndex(where: { $0.deviceUID == device.deviceUID }) {
             var entry = items[index]
             entry.disposition = .ignored
@@ -142,6 +153,7 @@ public actor DeviceRegistry {
     }
 
     public func remove(entryID: String) async throws {
+        try requireWritable()
         guard let index = items.firstIndex(where: { $0.id == entryID }) else {
             throw DeviceRegistryError.unknownEntry(entryID)
         }
@@ -152,6 +164,7 @@ public actor DeviceRegistry {
     }
 
     public func setDisposition(entryID: String, _ d: DeviceDisposition) async throws {
+        try requireWritable()
         let index = try indexOf(entryID)
         var entry = items[index]
         entry.disposition = d
@@ -159,6 +172,7 @@ public actor DeviceRegistry {
     }
 
     public func setStartOnModelMatch(entryID: String, _ on: Bool) async throws {
+        try requireWritable()
         let index = try indexOf(entryID)
         var entry = items[index]
         entry.startOnModelMatch = on
@@ -166,6 +180,15 @@ public actor DeviceRegistry {
     }
 
     // MARK: - Helpers
+
+    /// An entry made on this Mac wins over another Mac's.
+    private func preferred(_ hits: [RegisteredDevice], mac: MacIdentity) -> RegisteredDevice? {
+        hits.first(where: { $0.registeredOn.id == mac.id }) ?? hits.first
+    }
+
+    private func requireWritable() throws {
+        if let loadFailed { throw DeviceRegistryError.storageUnavailable(String(describing: loadFailed)) }
+    }
 
     private func indexOf(_ id: String) throws -> Int {
         guard let index = items.firstIndex(where: { $0.id == id }) else { throw DeviceRegistryError.unknownEntry(id) }
@@ -222,7 +245,13 @@ public actor PortableDevicesStorage: DeviceRegistryStorage {
         let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         guard digest != lastQuarantined else { return }
         try FileManager.default.createDirectory(at: paths.root, withIntermediateDirectories: true)
-        let url = paths.root.appending(path: "devices.json.corrupt-\(timestamp(Date()))")
+        let base = "devices.json.corrupt-\(timestamp(Date()))"
+        var url = paths.root.appending(path: base)
+        var n = 2
+        while FileManager.default.fileExists(atPath: url.path) {
+            url = paths.root.appending(path: "\(base)-\(n)")
+            n += 1
+        }
         try data.write(to: url, options: .atomic)
         lastQuarantined = digest
     }

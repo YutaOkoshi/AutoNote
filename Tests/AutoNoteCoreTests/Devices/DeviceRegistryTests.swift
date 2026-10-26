@@ -226,4 +226,89 @@ import AutoNoteTestSupport
         let encoded = try AutoNoteJSON.encoder().encode(DeviceRegistryFile(version: 1, devices: []))
         #expect(encoded + Data("\n".utf8) == bytes)
     }
+
+    @Test func loadFailureMakesRegistryReadOnlyUntilReloadSucceeds() async throws {
+        let existing = Data("{\"version\":1,\"devices\":[]}".utf8)
+        let storage = InMemoryRegistryStorage(initial: existing)
+        await storage.setFailures(load: true)
+        let (registry, _) = makeRegistry(storage: storage)
+        await registry.reload()
+        await #expect { try await registry.register(Self.bt) } throws: {
+            guard case DeviceRegistryError.storageUnavailable = $0 else { return false }
+            return true
+        }
+        await #expect(throws: (any Error).self) { try await registry.ignore(Self.bt) }
+        await #expect(throws: (any Error).self) { try await registry.remove(entryID: "x") }
+        #expect(await registry.match(Self.bt) == .unknown)
+        #expect(await storage.saveCount == 0)
+        #expect(await storage.backups.isEmpty)
+        await storage.setFailures()
+        await registry.reload()
+        _ = try await registry.register(Self.bt)
+        #expect(await storage.saveCount == 1)
+    }
+
+    @Test func backupFailureMakesRegistryReadOnly() async throws {
+        let storage = InMemoryRegistryStorage(initial: Data("{not json".utf8))
+        await storage.setFailures(backup: true)
+        let (registry, _) = makeRegistry(storage: storage)
+        await registry.reload()
+        await #expect(throws: (any Error).self) { try await registry.register(Self.bt) }
+        #expect(await storage.saveCount == 0)
+        #expect(await storage.data == Data("{not json".utf8))
+        await storage.setFailures()
+        await registry.reload()
+        _ = try await registry.register(Self.bt)
+        #expect(await storage.backups.count == 1)
+    }
+
+    @Test func nonEmptyLegacyArrayLoadsEntries() async throws {
+        let (src, srcStorage) = makeRegistry()
+        let entry = try await src.register(Self.bt)
+        let full = try #require(await srcStorage.data)
+        let obj = try #require(try JSONSerialization.jsonObject(with: full) as? [String: Any])
+        let array = try JSONSerialization.data(withJSONObject: try #require(obj["devices"]))
+        let (registry, _) = makeRegistry(storage: InMemoryRegistryStorage(initial: array))
+        await registry.reload()
+        #expect(await registry.entries() == [entry])
+    }
+
+    @Test func failedSaveLeavesEntriesUnchanged() async throws {
+        let (registry, storage) = makeRegistry()
+        let a = try await registry.register(Self.bt)
+        await storage.setFailures(save: true)
+        await #expect(throws: (any Error).self) { try await registry.register(Self.jack) }
+        await #expect(throws: (any Error).self) { try await registry.setDisposition(entryID: a.id, .ignored) }
+        await #expect(throws: (any Error).self) { try await registry.remove(entryID: a.id) }
+        #expect(await registry.entries() == [a])
+    }
+
+    @Test func ownMacEntryBeatsOtherMacEntry() async throws {
+        let storage = InMemoryRegistryStorage()
+        let (onB, _) = makeRegistry(storage: storage, mac: Self.macB)
+        _ = try await onB.register(Self.bt, startOnModelMatchDefault: true)
+        let (onA, _) = makeRegistry(storage: storage, mac: Self.macA)
+        await onA.reload()
+        var second = Self.bt
+        second.deviceUID = "22-22-22-22-22-22:input"
+        let own = try await onA.register(second)
+        var third = Self.bt
+        third.deviceUID = "33-33-33-33-33-33:input"
+        // Own entry has startOnModelMatch false -> unknown, not a re-registration suggestion.
+        #expect(await onA.match(third) == .unknown)
+        try await onA.setStartOnModelMatch(entryID: own.id, true)
+        #expect(await onA.match(third) == .registered(entryID: own.id, rule: .name))
+    }
+
+    @Test func portableStorageBackupNamesDoNotCollide() async throws {
+        let root = try TemporaryDirectory.make()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = AppPaths(root: root)
+        let store = PortableConfigStore(paths: paths, outputFolder: nil)
+        let storage = PortableDevicesStorage(store: store, paths: paths)
+        try await storage.backupCorrupt(Data("one".utf8))
+        try await storage.backupCorrupt(Data("two".utf8))
+        let names = try FileManager.default.contentsOfDirectory(atPath: root.path).filter { $0.hasPrefix("devices.json.corrupt-") }
+        #expect(names.count == 2)
+    }
 }
