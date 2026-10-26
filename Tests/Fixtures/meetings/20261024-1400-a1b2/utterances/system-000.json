@@ -1,0 +1,30 @@
+[
+  {
+    "start": 3,
+    "end": 7.5,
+    "speaker": "other",
+    "text": "本日はルミナ茶の発売準備についてご相談させてください。",
+    "is_final": true
+  },
+  {
+    "start": 12,
+    "end": 16,
+    "speaker": "other",
+    "text": "えー、まず発売日ですが、来週の金曜を考えています。",
+    "is_final": true
+  },
+  {
+    "start": 40,
+    "end": 46,
+    "speaker": "other",
+    "text": "価格は一本百八十円で進めたいと思います。",
+    "is_final": true
+  },
+  {
+    "start": 120,
+    "end": 121,
+    "speaker": "other",
+    "text": "えー。",
+    "is_final": true
+  }
+]

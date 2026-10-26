@@ -1,0 +1,23 @@
+[
+  {
+    "start": 10,
+    "end": 14,
+    "speaker": "me",
+    "text": "販促物の納期は来週水曜でお願いできますか。",
+    "is_final": true
+  },
+  {
+    "start": 61,
+    "end": 63,
+    "speaker": "me",
+    "text": "発売日は来週の金曜で確定",
+    "is_final": true
+  },
+  {
+    "start": 105,
+    "end": 107,
+    "speaker": "me",
+    "text": "失礼します。",
+    "is_final": true
+  }
+]

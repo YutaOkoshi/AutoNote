@@ -1,0 +1,37 @@
+[
+  {
+    "start": 8,
+    "end": 11,
+    "speaker": "me",
+    "text": "よろしくお願いします。",
+    "is_final": true
+  },
+  {
+    "start": 12.4,
+    "end": 16,
+    "speaker": "me",
+    "text": "えー、まず発売日ですが、来週の金曜を考えています。",
+    "is_final": true
+  },
+  {
+    "start": 20,
+    "end": 26,
+    "speaker": "me",
+    "text": "えーと、ルミナちゃの在庫は十分にありますか。",
+    "is_final": true
+  },
+  {
+    "start": 40.6,
+    "end": 41,
+    "speaker": "me",
+    "text": "はい。",
+    "is_final": true
+  },
+  {
+    "start": 60,
+    "end": 66,
+    "speaker": "me",
+    "text": "価格は了解しました。社内で承認を取ります。",
+    "is_final": true
+  }
+]

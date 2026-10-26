@@ -1,0 +1,23 @@
+[
+  {
+    "start": 5,
+    "end": 9,
+    "speaker": "other",
+    "text": "店頭の販促物はこちらで用意します。",
+    "is_final": true
+  },
+  {
+    "start": 60,
+    "end": 64,
+    "speaker": "other",
+    "text": "それでは発売日は来週の金曜で確定にしましょう。",
+    "is_final": true
+  },
+  {
+    "start": 100,
+    "end": 103,
+    "speaker": "other",
+    "text": "ありがとうございました。",
+    "is_final": true
+  }
+]

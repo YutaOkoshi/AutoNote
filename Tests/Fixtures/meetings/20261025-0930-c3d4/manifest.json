@@ -1,0 +1,26 @@
+{
+  "autonote_version": "0.1.0",
+  "bookmarks": [],
+  "device": {
+    "name": "import",
+    "transport": "import",
+    "uid": "import"
+  },
+  "ended_at": "2026-10-25T00:32:15Z",
+  "id": "20261025-0930-c3d4",
+  "language": "ja",
+  "pauses": [],
+  "silence_warning": false,
+  "source": "imported",
+  "started_at": "2026-10-25T00:30:15Z",
+  "status": "transcript_only",
+  "title": null,
+  "tracks": [
+    {
+      "duration_seconds": 120,
+      "relative_path": "tracks/import-000.wav",
+      "start_offset": 0,
+      "track": "mic"
+    }
+  ]
+}

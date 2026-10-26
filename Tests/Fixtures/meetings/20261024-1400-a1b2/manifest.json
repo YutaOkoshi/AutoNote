@@ -1,0 +1,25 @@
+{
+  "autonote_version" : "0.1.0",
+  "bookmarks" : [
+    { "at" : 41.5, "note" : "価格の話" },
+    { "at" : 231, "note" : null }
+  ],
+  "device" : { "name" : "Kestrel Headset 7", "transport" : "bluetooth", "uid" : "FAKE-KESTREL-0001:input" },
+  "ended_at" : "2026-10-24T05:05:12Z",
+  "id" : "20261024-1400-a1b2",
+  "language" : "ja",
+  "pauses" : [
+    { "end" : 170, "start" : 150 }
+  ],
+  "silence_warning" : false,
+  "source" : "live",
+  "started_at" : "2026-10-24T05:00:00Z",
+  "status" : "minutes_generated",
+  "title" : null,
+  "tracks" : [
+    { "duration_seconds" : 150, "relative_path" : "tracks/mic-000.wav", "start_offset" : 0, "track" : "mic" },
+    { "duration_seconds" : 142, "relative_path" : "tracks/mic-001.wav", "start_offset" : 170, "track" : "mic" },
+    { "duration_seconds" : 150, "relative_path" : "tracks/system-000.wav", "start_offset" : 0, "track" : "system" },
+    { "duration_seconds" : 142, "relative_path" : "tracks/system-001.wav", "start_offset" : 170, "track" : "system" }
+  ]
+}
