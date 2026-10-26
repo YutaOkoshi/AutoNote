@@ -22,8 +22,6 @@ private actor EventRecorder {
     var count: Int { buffer.count }
 }
 
-private struct EventWaitTimedOut: Error {}
-
 private func next(_ recorder: EventRecorder) async throws -> DeviceEvent {
     try await waitUntil { await recorder.count > 0 }
     return await recorder.take()!
