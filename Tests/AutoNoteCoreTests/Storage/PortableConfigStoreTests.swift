@@ -5,7 +5,7 @@ import AutoNoteTestSupport
 
 @Test func syncCreatesDefaultsThenCopiesNewerVaultFile() async throws {
     let v = try TemporaryDirectory.make(); let p = AppPaths(root: try TemporaryDirectory.make()); let store = PortableConfigStore(paths: p, outputFolder: v)
-    #expect(try await store.sync().createdDefaults == [.dictionary, .frontmatter, .devices])
+    #expect(try await store.sync().createdDefaults == [.dictionary, .prompt, .frontmatter, .devices])
     let f = v.appending(path: "_autonote/dictionary.md"); #expect(try String(contentsOf: f, encoding: .utf8).contains("## 用語"))
     try Data("## 用語\n- 新語\n".utf8).write(to: f)
     try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(60)], ofItemAtPath: f.path)
@@ -47,8 +47,8 @@ import AutoNoteTestSupport
     let p = AppPaths(root: try TemporaryDirectory.make())
     let off = PortableConfigStore(paths: p, outputFolder: nil)
     #expect(await off.isOutputAvailable == false)
-    let r = try await off.sync(); #expect(r.createdDefaults == [.dictionary, .frontmatter, .devices]); #expect(r.outputAvailable == false)
-    #expect(try await off.read(.prompt) == nil)
+    let r = try await off.sync(); #expect(r.createdDefaults == [.dictionary, .prompt, .frontmatter, .devices]); #expect(r.outputAvailable == false)
+    #expect(try await off.read(.prompt) == Data(DefaultPrompt.instructions.utf8))
     let v = try TemporaryDirectory.make(); let on = PortableConfigStore(paths: p, outputFolder: v)
     try await on.write(.prompt, Data("p\n".utf8))
     #expect(try Data(contentsOf: v.appending(path: "_autonote/prompt.md")) == Data("p\n".utf8))
@@ -76,7 +76,7 @@ private func existingVault(_ files: [String: String], age: TimeInterval = -86_40
     let r = try await PortableConfigStore(paths: p, outputFolder: v).sync()
     #expect(try String(contentsOf: v.appending(path: "_autonote/dictionary.md"), encoding: .utf8) == mine)
     #expect(try String(contentsOf: v.appending(path: "_autonote/devices.json"), encoding: .utf8) == "[{\"name\":\"mine\"}]\n")
-    #expect(r.toVault == [.frontmatter])
+    #expect(r.toVault == [.prompt, .frontmatter])
     #expect(r.toMirror == [.dictionary, .devices])
     #expect(try String(contentsOf: p.portableMirrorDirectory.appending(path: "dictionary.md"), encoding: .utf8) == mine)
 }
