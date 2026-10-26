@@ -212,6 +212,22 @@ protocol QueueStage: Sendable {
 - `CrashRecovery.recover` は壊れたヘッダのファイルを除外して続ける（throw しない）。生きているファイルは全部 `repairHeader` して `durationSeconds` を埋め直す
 - TestSupport の fake は `public` + 明示の `public init`。`FakeDiskSpace(bytes:)`（`calls`・`error` あり）、`FakeAudioSourceFactory`（`microphoneUIDs`・`nextMicrophone`）、`FakeTapHardware`（`startDelay`・`teardownDelay`）、`FakeMicrophoneEngine`、`FakeDeviceLookup(devices:)`、`FakeMicrophonePermission(_:)`
 
+## 8e. 計画 03 の実装で確定した変更（2026-10-26。以後の計画はこれに従う）
+
+- snake_case の JSON で `xxxUID` という名前のプロパティを持つ型（`DeviceIdentity`、`RegisteredDevice`、`RecorderSnapshot.meetingID`）は、`CodingKeys` の raw value を `xxxUid` / `meetingId` にする（`AutoNoteJSON` の `convertFromSnakeCase` は JSON キーを camelCase にしてから照合するため）。ファイル上のキーは `device_uid` / `model_uid` / `meeting_id` のまま
+- `TimerScheduling.sleep(seconds:)` は `async throws`。呼び出し側のタスクがキャンセルされたら内部のタイマーを取り消して `CancellationError` を投げる（`Task.sleep` と同じ）。`MicrophoneReattacher.reattach(uid:)` はキャンセルで `.failed` を返す
+- `_autonote/devices.json` の既定は `{"version":1,"devices":[]}`（`PortableDefaults.standard[.devices]`）。トップレベル `[]` も空として読め、次の保存で新形式になる。読み込み・退避の I/O エラー時はレジストリが空の read-only 状態になり（`match` は `.unknown`、変更系は `DeviceRegistryError.storageUnavailable`）、ファイルを上書きしない。壊れた JSON は `<data>/devices.json.corrupt-<yyyyMMdd-HHmmss>[-n]` へ一度だけ退避する（同じ内容は再退避しない）
+- `DeviceMonitor.events()` は複数購読可。各購読者は最初に接続中の候補ごとの `.present(_, .launch)` を 1 回受け取る。復帰の抑止窓は `didWake` で開く（`willSleep` と `didWake` の間の切断は `.removed` として出る）
+- `AutoRecordCoordinator` は全操作を FIFO ゲートで直列化する（`handle(event)`・`handle(action)`・`manualStart`・`stop(reason:)`・`pause`・`resume`・`cancelCountdown`・`setLanguage`・`bookmark`・タイマー・自己停止・再接続完了）。`snapshots()` は `async`。`stop` は進行中の `start` を待ってから止める（キャンセルするのは再接続タスクだけ）。`stop(reason: StopReason = .manual)`。登録の問いに機材を外した後で答えても、記憶した identity で登録・無視する
+- `RecordingSessionControl.selfStops()` は `async`。自分が要求した `StopReason` と同じ `.stopped` だけ落とし、それ以外（ディスク不足など）は自己停止として流す。`stop` の重ね呼びは禁止（Coordinator が直列化する）
+- 状態機械: 一時停止中に機材が外れて猶予中に戻った場合は一時停止のまま（再開は利用者の操作）。`AutoRecordConfig` のフィールドは `private(set)`（`init` で丸める）
+- `CoreAudioDeviceLookup.transport` は `CoreAudioHardware.transport(coreAudio:)` に委譲（`AutoAggregate` も `aggregate`）
+- CLI: `autonote dev auto-record`・`autonote dev devices [--watch]`、機材行の JSON は `Sources/autonote/DeviceJSON.swift`（`DeviceLine`）で共有。E2E 03.1〜03.3（`CHECKS` 末尾）。`run_timeout` はコマンドをバックグラウンドで起動するので stdin を渡す確認はパイプ全体を背景化して自前で待つ。`dev auto-record` の `quit`・stdin EOF・SIGINT は同じ経路（ゲート経由の `cancelCountdown()` → `stop(reason: .appTerminating)` → `run()` の取り消し → exit 0）で、状態を見て分岐しない
+- `DeviceRegistry` の変更系と `reload()` は内部ゲートで直列化され、`reload()` は読み込み完了まで既存の一覧を保つ（計画 06 の設定画面が直接呼んでも安全）。Y6 の遅延読み込みは無し: `entries()` の前に `reload()` を呼ぶ
+- 猶予中の復帰判定: UID 一致・登録項目 ID 一致に加え、USB で方式・型番（nil と `0 0` を除く）・名前が起点と同じ機材も起点の復帰とみなす（ドックの別ポートに挿し直した場合）
+- `AutoRecordCoordinator` のゲートは再入不可: `UserNotifier` / `RecordingControl` の実装から同期的に Coordinator を呼び返さない（UI のコールバックは別 Task で）
+- 利用者待ち: 計画 03 Task 10 Step 4〜7（Shokz / 3.5mm / USB の実機確認、スパイク項目 10）
+
 ## 9. Global Constraints（各計画の同名節にそのまま写す）
 
 - 最低 OS: macOS 26.0。`Package.swift` の platforms は `.macOS("26.0")`、`swift-tools-version: 6.2`、`swiftLanguageModes: [.v6]`。ツールチェーンは Swift 6.3（計画 00 と同じ）

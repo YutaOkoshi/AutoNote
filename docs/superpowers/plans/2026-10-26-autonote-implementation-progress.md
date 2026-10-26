@@ -15,7 +15,7 @@
 |---|---|---|---|
 | 01 中核モデルと保存形式 | plan-01 | **完了**（2026-10-26、HEAD 652df47） | 基点 5fd0a64。14 タスク、最終レビュー（opus）で Critical 1・Important 4・Minor 5 を修正し再レビュー clean。swift test 80 件、E2E 20 項目 PASS |
 | 02 音声取り込み | plan-02 | **完了**（2026-10-26、HEAD 9a0fd64） | 基点 4441130。16 タスク（Task 15 👤 は利用者待ち）、最終レビュー（opus）で Important 1・Minor 7 → 修正波 1 回 + 再レビュー clean。swift test 206 件、E2E 21 PASS / 0 FAIL / 1 SKIP（02.1 は許可未応答）。Task 1 と 14/16 の 👤 手順は「利用者への依頼」参照 |
-| 03 機材と自動録音 | plan-03 | 進行中（2026-10-26 開始、基点 9a0fd64） | 実行前スキャンで 22 件のずれを裁定（台帳 Y1〜Y21） |
+| 03 機材と自動録音 | plan-03 | **完了**（2026-10-26、HEAD 974aeee） | 基点 9a0fd64。11 タスク（Task 10 Step 4〜7 👤 は利用者待ち）、実行前スキャンで 22 件を裁定（Y1〜Y21）、最終レビュー（opus）で Important 2・Minor 9 → 修正波 1 回 + 再レビュー clean。swift test 348 件、E2E 24 PASS / 0 FAIL / 1 SKIP（02.1 は許可未応答） |
 | 04 文字起こし | plan-04 | 未着手 | |
 | 05 議事録と待ち行列 | plan-05 | 未着手 | |
 | 06 UI・CLI・Automations | plan-06 | 未着手 | |
@@ -114,6 +114,51 @@
 - Task 15: 👤 deferred (per brief) — recorded in master progress 「利用者への依頼」.
 - Final review (opus): Critical 0 / Important 1 (I1 ProcessTapSource.start has no timeout → 90 s freeze while permission pending; Ruling: add startTimeout = 10 s, new AudioSourceError.timedOut(call:), late objects torn down) / Minor 7 (M2 audio subs on start failure, M3 endedAt ms truncation, M4 observe skipped while paused, M5 ring keypath — in this wave; M1 withOutputClock drops tap audio when the output device has inputs — DEFERRED, must be fixed before flipping the default; M6 self-stop exit 1 — deferred; M7 already committed 91a39cc). Fix wave dispatched (fresh opus implementer, BASE 71a2d4c).
 
+### 計画 03（台帳から転記、2026-10-26）
+- Ruling Y1 (#1 devices.json default): (a)+(b) — `DeviceRegistry` reads a top-level `[]` as empty and migrates to `{"version":1,"devices":[]}` on next save; Task 4 ALSO changes `PortableDefaults.standard[.devices]` (Storage/PortableConfigStore.swift) to `{"version":1,"devices":[]}` and adjusts any test. Cost if wrong: one extra migration path.
+- Ruling Y2 (#2 snake_case round trip): explicit `CodingKeys` (`device_uid`, `model_uid`) on `RegisteredDevice` and `DeviceIdentity`; every JSON read/write in plan 03 (Tasks 4, 10, 11) uses `AutoNoteJSON` (`encoder()`/`decoder()`/`compactEncoder()`), never a bare JSONEncoder (#16 folded in).
+- Ruling Y3 (#3 selfStops): `func selfStops() async -> AsyncStream<Void>` — the subscription to `session.events()` is established before returning. Own-stop detection: `RecordingSessionControl` sets `expectingOwnStop = true` before awaiting `session.stop`, and the first `.stopped` consumed while it is set clears it and is NOT forwarded; any other `.stopped` is a self-stop. Cost: a race only if two stops overlap, which the gate prevents.
+- Ruling Y4 (#4 reentrancy): (b) — the coordinator holds the in-flight start / reattach as a `Task`; stop, disconnect, and a new grace cancel it (Reattacher checks `Task.isCancelled` between retries and before `attachMicrophone`); effects run serially on the coordinator actor. `handle(.added)` returns after scheduling the reattach, not after it completes; `reattachFallbackShowsBanner` is written against that (advance the manual timer between steps).
+- Ruling Y5 (#5 monitor subscribers): (a) — `DeviceMonitor.events()` supports multiple subscribers; each new subscriber first receives `.present(_, .launch)` for every currently-connected candidate, once. Coordinator subscribes once in `run()`.
+- Ruling Y6 (#6 initial reload): (c) — `Coordinator.run()` calls `registry.reload()` first; `DeviceRegistry.match`/`entries` lazily load if nothing was loaded yet.
+- Ruling Y6b (#6b adapter test): `adapterPassesMicrophoneUID` asserts `factory.microphoneUIDs == [uid]` and the manifest `device`; for nil the expected device is `FakeAudioSourceFactory`'s default input. Adapter tests may use `SessionHarness` via `@testable`.
+- Ruling Y7 (#7 duplication with plan 02): (a) — Task 2's Files add Modify `Audio/AudioDeviceLookup.swift`: `CoreAudioDeviceLookup.transport(_:)` delegates to `CoreAudioHardware.transport(coreAudio:).rawValue`; property-read helpers shared internal; Task 1 references `ProcessTapSource.aggregateUIDPrefix` instead of a literal.
+- Ruling Y7b (#7b GP c1): (b) — disconnect while paused then reattach → stays PA (`X, g, M+(A)` only); resuming is the user's action (spec §5.9 「再開時は機材復帰を待つ」 read as: the user's resume waits for the device, not that reattach resumes). Cost if wrong: one table cell + its test.
+- Ruling Y8 (#8 public inits/fixtures): Task 1 Files add `Sources/AutoNoteTestSupport/Devices/DeviceFixtures.swift` (public fixtures `A` `B` `U` `bt` `jack` `aggregate`, `RawAudioDevice.fixture*`, `btRef`); contract rule X8 applies (every Produces/TestSupport type: `public` + explicit `public init`); `InMemoryRegistryStorage`/`FakeMacIdentity` live in TestSupport with public members.
+- Ruling Y9 (#9 retry policy): non-retryable errors (`AudioSourceError.microphonePermission`, `RecordingError.notRecording`) → immediate `.failed`; retry only `deviceNotFound`, `coreAudio`, `timedOut`; add a test per class.
+- Ruling Y10 (#10 corrupt file loop): quarantine once per content (remember the SHA-256 of the last quarantined content; identical content is not re-quarantined); `PortableDevicesStorage.init` gains `timeZone: TimeZone = .current`.
+- Ruling Y11 (#11 effects table/snapshots): the implementer extends the effect execution to all 13 effect kinds; snapshots are emitted after state application (a `recording` snapshot without meetingID is the legitimate "starting" display); `snapshotsStreamEachTransition` expectation is derived from the state machine by the implementer (document the derivation, as ruling X2/X3 did).
+- Ruling Y12 (#12 Codable): Task 6 makes `RecorderSnapshot` and `RecorderState` `Codable` (dates via AutoNoteJSON); Task 10 encodes them with `compactEncoder()`.
+- Ruling Y13 (#13 run termination): `run()` returns when `monitor.events()` ends or the task is cancelled; `selfStops()` is consumed in a child task cancelled with `run`. Task 10 `quit`: stop the recording (if any) then cancel `run`, then exit 0.
+- Ruling Y14 (#14 harness): Task 8 Files add `Tests/AutoNoteCoreTests/Devices/CoordinatorHarness.swift` (FakeRecordingControl, FakeUserNotifier, ManualTimerScheduler, InMemoryRegistryStorage, FakeMacIdentity, DeviceMonitor over FakeAudioHardware, registered A, config closure; helper to "connect" a device = put it on the fake hardware and pump the monitor); Task 9 reuses it.
+- Ruling Y15 (#15 device JSON): Task 10 creates `Sources/autonote/DeviceJSON.swift` (DeviceIdentity → one-line JSON incl. `candidate`); Task 11 uses it; each task updates the `dev` usage text for its subcommand.
+- Ruling Y16 (#16): folded into Y2 (`AutoNoteJSON.compactEncoder()`).
+- Ruling Y17 (#17 copy duplication): `DeviceNoticeCopy.body` calls `Banner.grace(seconds:)`.
+- Ruling Y18 (#18 sleep window): plan as written (recordings spanning sleep are out of scope); note in Task 3's report.
+- Ruling Y19 (#19 e2e): Task 11 adds E2E item `03.3 dev auto-record が quit で終わる`（`printf 'quit\n' | dev auto-record` exit 0, first line `{"kind":"status","state":"idle"`）.
+- Ruling Y20 (#20): `AutoRecordCoordinator.stop(reason: StopReason = .manual)`.
+- Ruling Y21 (#21 UID split): `split(separator: ":", omittingEmptySubsequences: false)` stated in Task 1 Step 3; add tests for built-in mic, nil name, nil UID.
+- Ruling Y2 (amended): with `.convertFromSnakeCase` the decoder camel-cases the JSON key before matching CodingKeys, so raw values `"device_uid"`/`"model_uid"` never match. CodingKeys use `"deviceUid"`/`"modelUid"`; the on-disk keys remain `device_uid`/`model_uid` (round-trip test asserts this). Applies to `RegisteredDevice` in Task 4 too. — Why: AutoNoteJSON key strategy. — Cost if wrong: devices.json keys drift from snake_case.
+- Ruling Y22 (sleep cancellation): `extension TimerScheduling { func sleep(seconds:) async throws }` throws `CancellationError` promptly when the calling task is cancelled (cancels the underlying timer) — Why: Y4 relies on cancelling the reattach task; silent return would fire all retries back to back — Cost if wrong: plan text for Tasks 3/7 says non-throwing; Task 7's Reattacher must `try await` and return `.failed` on cancellation (the coordinator ignores results of a cancelled reattach).
+- Ruling (Minor 1): removals arriving between willSleep and didWake are emitted as `.removed` (window opens at didWake, per spec §11.1 "復帰から 10 秒以内") — harmless while idle; Y18 puts sleeping-while-recording out of scope; Task 10 👤 step 8 observes real behaviour. Minor 3: document only.
+- Ruling Y23 (load failure): `reload()` stays non-throwing (coordinator calls it on every `.added`); the registry records `loadFailed` with the error; while set, `register/ignore/remove/setDisposition/setStartOnModelMatch` throw `DeviceRegistryError.storageUnavailable(String)` and `match` returns `.unknown`; a later successful `reload()` clears it. A failed `backupCorrupt` is treated the same way (no overwrite of the only copy). — Why: never destroy devices.json on a transient read error — Cost if wrong: a read-only vault makes registration impossible until fixed (acceptable).
+- Ruling Y3 (amended): the adapter remembers the requested `StopReason?` and drops only a `.stopped` carrying that same reason; any other `.stopped` is a self-stop — Why: a disk-full stop racing our own stop must not be swallowed — Cost if wrong: none observed (session stops are serialized).
+- Ruling Y4 (amended): `stop` awaits an in-flight `start` and then stops (RecordingSession.start is serialized and cannot be aborted by Task cancellation); only the reattach task is cancelled. A start returning after its session ended is ignored. — Cost if wrong: a stop pressed during a slow start waits up to the 10 s start timeout.
+- Ruling Y24: `AutoRecordCoordinator.snapshots()` is `async` (goes through the gate so the initial value is consistent); `bookmark` and `handle(_ action:)` are gated too. Plan 06's RecorderPort awaits it. A registration answer given after the device was unplugged still registers/ignores it (the pending prompt remembers the identity).
+- Ruling Y25 (I1): fix — DeviceRegistry.reload builds the new list locally and assigns once after the last await; mutations are serialized (own gate); regression test for an overlapping reload/register.
+- Ruling Y26 (I2): fix — during grace, a `.usb` device whose transport, modelUID (non-nil, non "0 0") and name equal the origin's counts as the origin's return (same as UID/entryID match); `uidKind` heuristic unchanged; 👤 USB step already covers the port change. — Cost if wrong: two identical USB mics swapped during grace are treated as the same (acceptable).
+- Ruling (M1): fix — CLI `quit` always routes `stop(reason: .appTerminating)` through the gate (no-op when idle), then cancels run.
+- Ruling (M5): fix — `dev auto-record` handles SIGINT like `quit`.
+- Ruling (M9): document on `AutoRecordCoordinator` that the gate is not re-entrant (notifier/recorder must not call back into the coordinator synchronously) — plan 06 note.
+- Ruling (M2): parked — a queued attach after cancel hits a session that is detached or stopped; `attachMicrophone` on a stopped session throws and is ignored. Revisit if 👤 shows audio glitches.
+- Ruling (M3): Y6 lazy load dropped — run() reloads first and every `.added` reloads; plan 06 settings UI must call reload() before entries(). Ledger + overview note.
+- Ruling (M4, M6, M7, M8): parked — M4/M6 are 👤 observations; M7 (Continuity/unknown transport prompts) → plan 06 may filter by transport; M8 2 s bounded waits acceptable.
+- Ruling Y27: CLI quit path cancels the countdown (gated) before stop(.appTerminating) — stop is a no-op during countdown, so without it the timer could start a session just before exit (the reviewer's M1 case) — cost if wrong: one extra gated no-op call on quit.
+
+#### 最終レビュー（opus、HEAD f5fdd57）と修正波
+- Critical 0 / Important 2（I1 レジストリの reload 再入、I2 USB 別ポート復帰）/ Minor 9。修正波 1 回: 38bd152（I1）・08d8a7c（I2）・ba0199e（M1+M5）・974aeee（M9）。限定再レビュー（opus）: 5 件すべて ADDRESSED、新規の Critical/Important なし。残った Minor「quit ループ後も SIGINT が無視されたまま（遅い stop 中の 2 回目の Ctrl-C が効かない）」は保留（stop は有界、dev 専用 CLI。計画 06 のアプリ終了経路はこのハンドラを使わない）。
+- 繰り越した Minor（未対応・次の計画で該当箇所を触るときに拾う）: ManualTimerScheduler の doc summary の順序（Task 3）、Task 7 のゲート付きテストでの `defer { mic.release() }`、willSleep〜didWake 間の切断が `.removed` として出る件（裁定どおり現状維持）。
+
 ## 利用者への依頼（後回しにした 👤 手順）
 
 ### 計画 02 Task 1（TCC まとめ確認）— 2026-10-26
@@ -128,6 +173,14 @@
 1. Terminal.app（スパイクで AudioCapture 許可があった）から `scripts/e2e-check.sh` を実行し、02.1 が PASS になること（mic と system の `seconds` が 5±0.5、`status` が `too_short`）を確認する。SKIP のままなら、表示される「システムオーディオ録音」の許可ダイアログに応答してから再実行。
 2. 許可ありで `tapOnly` が受信できるか（system の `chunks` > 0）を確認する。0 のままなら `.build/debug/autonote dev record --seconds 10 --tap-layout withOutputClock --out /tmp/an-rec`（音を鳴らしながら）と比較し、`withOutputClock` だけ受信できる場合は `ProcessTapSource.init` の `layout` 既定を `.withOutputClock` に変える（裁定 X6）。
 3. 計画 02 Task 15（後回し可）: `docs/superpowers/plans/2026-10-25-autonote-02-audio-capture.md` の Task 15 Step 1〜4 のとおり、内蔵スピーカー / Shokz での穴埋め、`--voice-processing` の有無、手元の mp3 の `dev import` を実機で確かめ、結果表と要件書 §5.6・§19 を更新してコミットする。
+
+### 計画 03 Task 10 Step 4〜7（実機で自動録音を一周）— 2026-10-26
+ハーネスは実装済み（`autonote dev auto-record`）。Shokz・3.5mm・USB の挙動はハードウェアが要るので利用者に依頼する。TCC の責任プロセスは起動元の端末になるため Terminal.app から実行する（マイクとシステム音声録音の許可が要る）。
+1. `swift build && mkdir -p /tmp/an-dev/vault /tmp/an-dev/data && .build/debug/autonote dev auto-record --vault /tmp/an-dev/vault --data /tmp/an-dev/data | tee /tmp/an-dev/shokz.log` を起動し、ブラウザで音の出る動画を流しておく。
+2. 計画 03 本文 Task 10 Step 4 の 1〜8（Shokz: 初回登録 `yes <uid>` → 5 秒後に録音 → 電源オフで猶予 → 10 秒以内に戻して復帰 → 30 秒放置で停止 → WAV を聞く → `cancel` → `quit` 後の再起動で `device.connected` のみ → 任意でスリープ）を順に行い、復帰までの秒数と attach の試行回数（ログ）、`micFallback` の帯が出た回数を記録する。
+3. Step 5（3.5mm イヤホン）: 同じ 1〜5 を抜き差しで。`device.first.…` の uid が `BuiltInHeadphoneInputDevice` か、マイク無しイヤホンでも「外部マイク」が現れるかを見る。
+4. Step 6（USB、あれば）: `{"kind":"device","event":"added",…}` の行を記録（シリアルは伏せ字）。`uid_kind` が実物と合うか、別ポートで `device_uid` が変わるか、変わったときに型番一致でカウントダウンするか。
+5. Step 7: `docs/superpowers/research/2026-10-24-spike-results.md` 項目 10（USB は項目 4）の「結論」「測定値」を埋めてコミット（`docs: record auto-record hardware results (spike item 10)`）。復帰が 20 回で戻らない・声が欠ける場合は Task 7 の `retryInterval`/`maxAttempts` と要件書 §11.5 の方式を見直す必要があるので Lead に報告。
 
 ## 再開手順
 1. この表で進行中の計画を見る。そのブランチに checkout。
