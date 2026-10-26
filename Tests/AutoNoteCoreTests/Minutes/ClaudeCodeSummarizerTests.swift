@@ -124,6 +124,40 @@ import Foundation
         #expect(caseName(e) == expected)
     }
 
+    @Test func successEnvelopeProseIsNeverPatternMatchedOrQuoted() {
+        // Model prose about the meeting must not be classified as a CLI failure nor copied into the message.
+        let prose = "rate limit と context window について議論した。not logged in の件も。"
+        func classify(_ out: String, _ err: String = "") -> Result<MinutesOutput, SummarizerError> {
+            ClaudeResultClassifier.classify(ProcessResult(exitCode: 0, stdout: Data(out.utf8), stderr: Data(err.utf8), timedOut: false))
+        }
+        for out in [#"{"is_error":false,"subtype":"success","result":"\#(prose)"}"#,
+                    #"{"is_error":false,"result":"\#(prose)"}"#] {
+            guard case .failure(.invalidOutput(let message)) = classify(out, "usage limit") else {
+                Issue.record("expected invalidOutput for \(out)"); continue
+            }
+            #expect(message.hasPrefix("subtype="))
+            for needle in ["rate limit", "context window", "not logged in", "議論", "usage limit"] {
+                #expect(!message.contains(needle))
+            }
+        }
+        guard case .failure(.invalidOutput(let missing)) = classify(#"{"is_error":false,"result":"x"}"#) else {
+            Issue.record("expected invalidOutput"); return
+        }
+        #expect(missing.hasPrefix("subtype=missing"))
+    }
+
+    @Test func unmatchedErrorEnvelopeIsFailedWithItsText() {
+        func classify(_ out: String, _ err: String) -> Result<MinutesOutput, SummarizerError> {
+            ClaudeResultClassifier.classify(ProcessResult(exitCode: 1, stdout: Data(out.utf8), stderr: Data(err.utf8), timedOut: false))
+        }
+        let out = #"{"is_error":true,"subtype":"success","result":"something new"}"#
+        #expect(classify(out, "") == .failure(.failed(exitCode: 1, message: "something new")))
+        #expect(classify(out, "boom\n") == .failure(.failed(exitCode: 1, message: "something new\nboom")))
+        let long = String(repeating: "r", count: 600)
+        #expect(classify(#"{"is_error":true,"result":"\#(long)"}"#, "tail")
+                == .failure(.failed(exitCode: 1, message: String(long.prefix(500)))))
+    }
+
     @Test func classifierUsesStderrAndOrder() {
         func classify(_ out: String, _ err: String, exit: Int32 = 1, timedOut: Bool = false) -> Result<MinutesOutput, SummarizerError> {
             ClaudeResultClassifier.classify(ProcessResult(exitCode: exit, stdout: Data(out.utf8), stderr: Data(err.utf8), timedOut: timedOut))
