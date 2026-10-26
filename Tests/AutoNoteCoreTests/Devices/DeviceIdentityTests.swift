@@ -47,6 +47,8 @@ import AutoNoteTestSupport
     ("AppleUSBAudioEngine:Fictional Audio:Fictional USB Headset:ABC123XYZ:1", UIDKind.individual),
     ("AppleUSBAudioEngine:Fictional Audio:Fictional USB Headset:14200000:1", .portBased),
     ("AppleUSBAudioEngine:Fictional Audio:Fictional USB Headset::1", .portBased),
+    ("AppleUSBAudioEngine:Fictional Audio:Fictional USB Headset:14200001:1", .individual),
+    ("AppleUSBAudioEngine:Fictional Audio:Fictional USB Headset:ZZZZ0000:1", .individual),
     ("FictionalVendorDriver_0042", .unknown),
 ]) func usbUIDKindEstimate(uid: String, expected: UIDKind) {
     #expect(DeviceIdentity(raw: .fixtureUSBInput(uid: uid))!.uidKind == expected)
@@ -64,4 +66,13 @@ import AutoNoteTestSupport
     let s = String(decoding: try AutoNoteJSON.encoder().encode(id), as: UTF8.self)
     for key in ["device_uid", "model_uid", "input_channels", "uid_kind"] { #expect(s.contains("\"\(key)\"")) }
     #expect(try AutoNoteJSON.decoder().decode(DeviceIdentity.self, from: Data(s.utf8)) == id)
+}
+
+@Test func deviceIdentityWithNilModelUIDRoundTrips() throws {
+    var raw = RawAudioDevice.fixtureBluetoothInput; raw.modelUID = nil
+    let id = DeviceIdentity(raw: raw)!
+    let s = String(decoding: try AutoNoteJSON.encoder().encode(id), as: UTF8.self)
+    #expect(!s.contains("\"model_uid\" : \"")) // omitted or null, never a string
+    let back = try AutoNoteJSON.decoder().decode(DeviceIdentity.self, from: Data(s.utf8))
+    #expect(back == id); #expect(back.modelUID == nil)
 }
