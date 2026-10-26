@@ -14,7 +14,7 @@
 | 計画 | ブランチ | 状態 | 備考 |
 |---|---|---|---|
 | 01 中核モデルと保存形式 | plan-01 | **完了**（2026-10-26、HEAD 652df47） | 基点 5fd0a64。14 タスク、最終レビュー（opus）で Critical 1・Important 4・Minor 5 を修正し再レビュー clean。swift test 80 件、E2E 20 項目 PASS |
-| 02 音声取り込み | plan-02 | 未着手 | |
+| 02 音声取り込み | plan-02 | 進行中（2026-10-26 開始、基点 4441130） | Task 1 の 👤 手順は利用者待ち |
 | 03 機材と自動録音 | plan-03 | 未着手 | |
 | 04 文字起こし | plan-04 | 未着手 | |
 | 05 議事録と待ち行列 | plan-05 | 未着手 | |
@@ -71,6 +71,13 @@
 - Final re-review (opus): all 10 findings ADDRESSED, no new breakage. PLAN 01 COMPLETE at 652df47. deferred observations: I1 overlapping-channel case (earlier other-speaker utterance can win when t is rounded down); cloud-synced Vault not yet downloaded counts as absent; ISO8601DateFormatter per call; .sync-state.json must be skipped by anything enumerating portable-mirror/.
 
 ## 利用者への依頼（後回しにした 👤 手順）
+
+### 計画 02 Task 1（TCC まとめ確認）— 2026-10-26
+1. 画面のロックを解除し、表示されている「システムオーディオ録音」の許可ダイアログで「許可」を押す（AutoNote.app が起動したまま待っている）。
+2. `scripts/tcc-check.sh audio-persist` を実行（CFBundleVersion を 3→4 に上げて再ビルドし、再起動後にダイアログが出ないことと TCC.db の行を記録する）。終わったら `Resources/Info.plist` と `docs/superpowers/research/` の差分をコミット。
+3. 拒否時の挙動: システム設定 > プライバシーとセキュリティ > 画面とシステムオーディオ録音 で AutoNote をオフ → Mac を再起動 → `scripts/tcc-check.sh audio-denied` → オンに戻す。
+4. BT 出力: Shokz を接続して出力に切り替え `scripts/tcc-check.sh bt-silence`、内蔵スピーカーに戻してもう一度。
+結果が出たら `docs/superpowers/research/2026-10-24-spike-results.md` の「未測定（利用者待ち）」を埋める。`tapOnly` で callbacks=0 なら計画 02 Task 8 の既定を `.withOutputClock` に変える。
 
 ## 再開手順
 1. この表で進行中の計画を見る。そのブランチに checkout。
