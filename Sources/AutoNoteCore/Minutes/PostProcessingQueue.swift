@@ -39,6 +39,8 @@ public actor PostProcessingQueue {
     let jobStore: JobStore
     let manifests: ManifestStore
     let settingsStore: SettingsStore
+    /// The same instance the stages use, so `delete` goes through their `VaultWriter`.
+    let services: SharedVaultServices
 
     var stages: [String: any QueueStage] = [:]
     /// In-memory mirror of the saved jobs, keyed by `meeting.rawValue`.
@@ -62,8 +64,9 @@ public actor PostProcessingQueue {
     private let subscribers = Mutex(Subscribers())
 
     public init(paths: AppPaths, stages: [any QueueStage], activity: any RecordingActivity, gate: BatchGate,
-                clock: any QueueClock = SystemQueueClock()) {
+                clock: any QueueClock = SystemQueueClock(), services: SharedVaultServices = .standard) {
         self.paths = paths
+        self.services = services
         self.activity = activity
         self.gate = gate
         self.clock = clock

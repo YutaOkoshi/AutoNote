@@ -34,7 +34,7 @@ import Testing
             let stages = PostProcessingPipeline.standardStages(runner: runner(), summarizer: summarizer,
                                                                timeZone: Samples.tokyo, services: services)
             return PostProcessingQueue(paths: paths, stages: stages, activity: FakeRecordingActivity(),
-                                       gate: BatchGate(), clock: clock)
+                                       gate: BatchGate(), clock: clock, services: services)
         }
     }
 

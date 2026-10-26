@@ -60,14 +60,16 @@ private struct RetentionFixture {
     func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
 
     /// A Vault document written for `id`, then renamed by the user; returns the output folder and the renamed file.
-    func writeToVault(_ id: MeetingID) async throws -> (folder: URL, file: URL) {
+    /// With `services`, the document goes through that instance's shared writer, as a queue stage's would.
+    func writeToVault(_ id: MeetingID, services: SharedVaultServices? = nil) async throws -> (folder: URL, file: URL) {
         let folder = try TemporaryDirectory.make()
         var m = try await manifests.load(id)
         m.status = .minutesGenerated
         let doc = MeetingDocument(manifest: m, transcript: Transcript(utterances: [u(5, .me, "a")], engine: "e", language: .ja),
                                   minutes: Samples.minutes, frontmatter: .init(text: FrontmatterTemplate.defaultText),
                                   appVersion: "0.1.0", timeZone: Samples.tokyo)
-        let writer = VaultWriter(outputFolder: folder, paths: paths)
+        let writer = services?.vaultWriter(outputFolder: folder, paths: paths, now: { Date() })
+            ?? VaultWriter(outputFolder: folder, paths: paths)
         guard case .written(let file) = try await writer.write(doc) else { throw FakeError(message: "not written") }
         _ = try await writer.rebuildIndex()
         let renamed = file.deletingLastPathComponent().appending(path: "利用者が改名した定例.md")
@@ -213,8 +215,15 @@ private func eventually(timeout: Duration = .seconds(10), sourceLocation: Source
         let transcribe = ScriptedStage(name: StageName.transcribe, log: log, release: release.stream)
         let stages: [any QueueStage] = [transcribe] + [StageName.summarize, StageName.writeVault, StageName.updateIndex]
             .map { ScriptedStage(name: $0, log: log) }
+        // One isolated services instance for the (vault-writing) stages and the queue, as in production.
+        let services = SharedVaultServices()
+        let (folder, renamed) = try await f.writeToVault(id, services: services)
+        var settings = Settings()
+        settings.outputFolder = folder.path
+        try await SettingsStore(paths: f.paths).save(settings)
         let queue = PostProcessingQueue(paths: f.paths, stages: stages, activity: NeverRecording(), gate: BatchGate(),
-                                        clock: FakeQueueClock(now: f.now))
+                                        clock: FakeQueueClock(now: f.now), services: services)
+        #expect(await queue.services === services)
         await queue.enqueue(id)
         await queue.start()
         await eventually { await log.entries == [StageName.transcribe] }
@@ -225,6 +234,7 @@ private func eventually(timeout: Duration = .seconds(10), sourceLocation: Source
         #expect(await queue.snapshot().jobs.isEmpty)
         #expect(try await f.jobs.load(id) == nil)
         #expect(!f.exists(f.paths.meetingDirectory(id)))
+        #expect(!f.exists(renamed))
         await queue.runUntilIdle()
         #expect(await log.entries == [StageName.transcribe])
         #expect(try await f.jobs.load(id) == nil)

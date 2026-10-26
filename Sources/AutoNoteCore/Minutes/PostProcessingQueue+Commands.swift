@@ -58,7 +58,7 @@ extension PostProcessingQueue {
             await current.value
         }
         let outputFolder = (try? await settingsStore.load())?.outputFolder
-        try await Retention(paths: paths).deleteMeeting(id, outputFolder: outputFolder)
+        try await Retention(paths: paths, services: services).deleteMeeting(id, outputFolder: outputFolder)
         jobs[key] = nil
         progress[key] = nil
         publish()
