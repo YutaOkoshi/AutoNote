@@ -5,7 +5,9 @@
 # 同名の証明書が 2 枚になると codesign --sign "AutoNote Dev" が ambiguous で失敗するため。
 set -euo pipefail
 
-CERT_NAME="AutoNote Dev"
+# shellcheck source=config.sh
+source "$(dirname "${BASH_SOURCE[0]}")/config.sh"
+CERT_NAME="${AUTONOTE_CERT_NAME}"
 KEYCHAIN="${HOME}/Library/Keychains/login.keychain-db"
 
 # 信頼済みの（有効な）コード署名識別子として存在するか

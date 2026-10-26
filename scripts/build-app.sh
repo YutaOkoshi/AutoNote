@@ -12,8 +12,10 @@ esac
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 
-CERT_NAME="AutoNote Dev"
-BUNDLE_ID="com.yutaokoshi.autonote"
+# shellcheck source=config.sh
+source "${ROOT}/scripts/config.sh"
+CERT_NAME="${AUTONOTE_CERT_NAME}"
+BUNDLE_ID="${AUTONOTE_BUNDLE_ID}"
 APP="${ROOT}/build/AutoNote.app"
 
 if ! security find-identity -v -p codesigning | grep -q "\"${CERT_NAME}\""; then
@@ -34,6 +36,11 @@ mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
 cp "${BIN_DIR}/AutoNoteApp" "${APP}/Contents/MacOS/AutoNoteApp"
 cp "${BIN_DIR}/autonote" "${APP}/Contents/MacOS/autonote"
 cp "${ROOT}/Resources/Info.plist" "${APP}/Contents/Info.plist"
+PLIST_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${APP}/Contents/Info.plist")"
+if [[ "${PLIST_BUNDLE_ID}" != "${BUNDLE_ID}" ]]; then
+    echo "エラー: Info.plist の CFBundleIdentifier (${PLIST_BUNDLE_ID}) が scripts/config.sh の AUTONOTE_BUNDLE_ID (${BUNDLE_ID}) と違います。" >&2
+    exit 1
+fi
 
 # whisper.cpp の XCFramework（macos-arm64_x86_64 スライス）を同梱し、実行ファイルから @rpath で引けるようにする
 WHISPER_FW="${BIN_DIR}/whisper.framework"

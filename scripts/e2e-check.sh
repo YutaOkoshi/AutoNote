@@ -33,8 +33,10 @@ for arg in "$@"; do
 done
 
 APP="${ROOT}/build/AutoNote.app"
-CERT_NAME="AutoNote Dev"
-BUNDLE_ID="com.yutaokoshi.autonote"
+# shellcheck source=config.sh
+[[ -f "${ROOT}/scripts/config.sh" ]] && source "${ROOT}/scripts/config.sh"   # 無ければ 06.1 が FAIL する
+CERT_NAME="${AUTONOTE_CERT_NAME:-}"
+BUNDLE_ID="${AUTONOTE_BUNDLE_ID:-}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/autonote-e2e.XXXXXX")"
 APP_PID=""
@@ -147,6 +149,23 @@ check_codesign_verify() {
     CURRENT="4. codesign --verify --strict"
     [[ -d "${APP}" ]] || { skip "build/AutoNote.app が無い"; return; }
     if run codesign --verify --strict "${APP}"; then pass; else fail "署名の検証に失敗"; fi
+}
+
+check_identity_consistency() {
+    CURRENT="06.1 Bundle ID の一本化"
+    local cfg="${ROOT}/scripts/config.sh"
+    [[ -f "${cfg}" ]] || { LAST_LOG=""; fail "scripts/config.sh が無い"; return; }
+    local problems=() plist_id swift_id
+    [[ -n "${AUTONOTE_BUNDLE_ID:-}" && -n "${AUTONOTE_CERT_NAME:-}" ]] || problems+=("config.sh が AUTONOTE_BUNDLE_ID / AUTONOTE_CERT_NAME を定義していない")
+    plist_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${ROOT}/Resources/Info.plist" 2>/dev/null)"
+    swift_id="$(sed -n 's/.*static let bundleID *\(: *String\)\{0,1\} *= *"\([^"]*\)".*/\2/p' "${ROOT}/Sources/AutoNoteCore/IPC/AppIdentity.swift" 2>/dev/null | head -1)"
+    [[ "${plist_id}" == "${AUTONOTE_BUNDLE_ID}" ]] || problems+=("Info.plist の CFBundleIdentifier=${plist_id:-なし}")
+    [[ "${swift_id}" == "${AUTONOTE_BUNDLE_ID}" ]] || problems+=("AppIdentity.bundleID=${swift_id:-なし}")
+    local left
+    left="$(grep -n -e 'com\.yutaokoshi\.autonote' -e '"AutoNote Dev"' "${ROOT}/scripts/build-app.sh" "${ROOT}/scripts/make-dev-cert.sh" | grep -v '^[^:]*:[0-9]*:#' || true)"
+    [[ -z "${left}" ]] || problems+=("直書きが残っている: ${left//$'\n'/ ; }")
+    LAST_LOG=""
+    if [[ ${#problems[@]} -eq 0 ]]; then pass "${plist_id}"; else fail "${problems[*]}"; fi
 }
 
 check_info_plist() {
@@ -583,6 +602,7 @@ check_dev_summarize_failure() {
 # ---------------------------------------------------------------- 実行
 
 CHECKS=(
+    check_identity_consistency
     check_swift_test
     check_build_app
     check_codesign_identity
