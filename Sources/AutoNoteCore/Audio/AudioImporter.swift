@@ -48,19 +48,27 @@ public struct AudioImporter: Sendable {
             throw ImportError.unreadable(error.localizedDescription)
         }
 
-        let start = startedAt ?? Self.fileDate(url)
-        let id = MeetingID.make(start: start, timeZone: timeZone)
+        // Manifest dates are stored at millisecond precision; truncate so the saved manifest equals the returned one.
+        let resolved = startedAt ?? Self.fileDate(url)
+        let start = Self.truncatedToMilliseconds(resolved)
+        // Never reuse an existing meeting directory: failure cleanup deletes the whole directory.
+        var id = MeetingID.make(start: start, timeZone: timeZone)
+        while FileManager.default.fileExists(atPath: paths.meetingDirectory(id).path) {
+            id = MeetingID.make(start: start, timeZone: timeZone)
+        }
         let wavURL = paths.tracksDirectory(id).appending(path: "import-000.wav")
 
         do {
             try FileManager.default.createDirectory(at: wavURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let samples = try await Task.detached(priority: .utility) {
+            // Task.detached does not inherit cancellation, so forward it explicitly.
+            let work = Task.detached(priority: .utility) {
                 try Self.transcode(asset: asset, track: track, to: wavURL,
                                    assetSeconds: assetSeconds, progress: progress)
-            }.value
+            }
+            let samples = try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
             let seconds = Double(samples) / AudioChunk.sampleRate
             let manifest = Manifest(
-                id: id, title: nil, startedAt: start, endedAt: start.addingTimeInterval(seconds),
+                id: id, title: nil, startedAt: start, endedAt: Self.truncatedToMilliseconds(start.addingTimeInterval(seconds)),
                 source: .imported, device: Self.importDevice, language: language,
                 tracks: [TrackFile(track: .mic, relativePath: Self.relativePath,
                                    startOffset: TimelineTime(seconds: 0), durationSeconds: seconds)],
@@ -77,6 +85,10 @@ public struct AudioImporter: Sendable {
     }
 
     // MARK: - Private
+
+    private static func truncatedToMilliseconds(_ date: Date) -> Date {
+        Date(timeIntervalSince1970: (date.timeIntervalSince1970 * 1000).rounded(.down) / 1000)
+    }
 
     private static func fileDate(_ url: URL) -> Date {
         let values = try? url.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
@@ -127,8 +139,8 @@ public struct AudioImporter: Sendable {
                 if p.isFinite, p > lastProgress { lastProgress = p; progress(p) }
             }
         }
-        if reader.status == .failed {
-            throw ImportError.unreadable(reader.error?.localizedDescription ?? "decode failed")
+        if reader.status != .completed {
+            throw ImportError.unreadable(reader.error?.localizedDescription ?? "decode did not complete")
         }
         bytesWritten &= ~1
         try handle.seek(toOffset: 0)

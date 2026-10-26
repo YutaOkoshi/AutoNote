@@ -77,12 +77,20 @@ import AutoNoteTestSupport
                                        startOffset: TimelineTime(seconds: 0),
                                        durationSeconds: m.tracks.first?.durationSeconds)])
         #expect(abs((m.tracks.first?.durationSeconds ?? 0) - info.durationSeconds) < 0.0001)
-        #expect(abs(m.endedAt!.timeIntervalSince(m.startedAt) - info.durationSeconds) < 0.0001)
-        let saved = try await env.store.load(m.id)   // dates are stored at whole-second precision
-        #expect(saved.id == m.id && saved.tracks == m.tracks && saved.source == .imported && saved.status == .recorded)
+        #expect(abs(m.endedAt!.timeIntervalSince(m.startedAt) - info.durationSeconds) < 0.002)
+        #expect(try await env.store.load(m.id) == m)   // JSON dates are ms precision; the importer truncates to match
         // The tone survived resampling (not silence).
         let samples = try WAVFile.readSamples(wavURL)
         #expect(samples.contains { abs(Int($0)) > 8000 })
+    }
+
+    @Test func acceptsUppercaseExtension() async throws {
+        let env = try makeEnv()
+        let wav = try synthesize("wav", in: env.inputs, seconds: 1)
+        let upper = env.inputs.appending(path: "LOUD.WAV")
+        try FileManager.default.moveItem(at: wav, to: upper)
+        let m = try await env.importer.importFile(upper, language: .ja)
+        #expect(m.status == .recorded)
     }
 
     @Test func defaultsStartToFileCreationDate() async throws {
