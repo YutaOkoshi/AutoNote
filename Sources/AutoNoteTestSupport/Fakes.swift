@@ -46,12 +46,14 @@ public actor FakeAudioSource: AudioSource {
 public actor FakeLiveTranscriber: LiveTranscriber {
     private let script: [Utterance]
     private let startError: FakeError?
+    private let endsAfterScript: Bool
     private var continuation: AsyncStream<Utterance>.Continuation?
     public private(set) var fedChunks: [AudioChunk] = []
     public private(set) var startedWith: (Language, [String])?
 
-    public init(script: [Utterance], startError: FakeError? = nil) {
-        self.script = script; self.startError = startError
+    /// `endsAfterScript` ends the stream right after the script, before `finish()` (a track that dies mid-meeting).
+    public init(script: [Utterance], startError: FakeError? = nil, endsAfterScript: Bool = false) {
+        self.script = script; self.startError = startError; self.endsAfterScript = endsAfterScript
     }
 
     public func start(language: Language, hints: [String]) async throws -> AsyncStream<Utterance> {
@@ -60,6 +62,7 @@ public actor FakeLiveTranscriber: LiveTranscriber {
         let (stream, continuation) = AsyncStream<Utterance>.makeStream()
         self.continuation = continuation
         for utterance in script { continuation.yield(utterance) }
+        if endsAfterScript { continuation.finish() }
         return stream
     }
 

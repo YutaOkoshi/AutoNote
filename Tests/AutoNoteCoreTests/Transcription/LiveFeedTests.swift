@@ -137,6 +137,32 @@ import Testing
         #expect(await feed.snapshot().map(\.text) == ["聞こえる"])
     }
 
+    @Test func trackWhoseStreamEndsEarlyIsRecordedAsFailed() async throws {
+        let micT = FakeLiveTranscriber(script: [u(1, .unknown, "途中まで")], endsAfterScript: true)
+        let sysT = FakeLiveTranscriber(script: [u(2, .unknown, "相手")])
+        let feed = LiveFeed(transcribers: [.mic: micT, .system: sysT], replacer: Replacer([]),
+                            liveJSON: try TemporaryDirectory.make().appending(path: "live.json"),
+                            engineName: "Apple DictationTranscriber")
+        _ = try await feed.start(language: .ja, hints: [])
+        try await waitUntil { await feed.failures[.mic] != nil }
+        #expect(await feed.failures[.system] == nil)
+        await feed.feed(chunk(tone(0.1), at: 3, track: .system))
+        await feed.feed(chunk(tone(0.1), at: 3, track: .mic))
+        #expect(await sysT.fedChunks.count == 1)   // 相手側は流れ続ける
+        #expect(await micT.fedChunks.isEmpty)
+        let transcript = try await feed.finish()
+        #expect(await feed.failures[.mic] != nil)
+        #expect(await feed.failures[.system] == nil)
+        #expect(transcript.utterances.map(\.text) == ["途中まで", "相手"])
+    }
+
+    @Test func normalFinishRecordsNoFailure() async throws {
+        let (feed, _, _, _) = try makeFeed(mic: [u(1, .unknown, "自分")], sys: [u(2, .unknown, "相手")])
+        _ = try await feed.start(language: .ja, hints: [])
+        _ = try await feed.finish()
+        #expect(await feed.failures.isEmpty)
+    }
+
     @Test func bothTracksFailingThrows() async throws {
         let micT = FakeLiveTranscriber(script: [], startError: FakeError(message: "mic broke"))
         let sysT = FakeLiveTranscriber(script: [], startError: FakeError(message: "sys broke"))

@@ -48,6 +48,7 @@ public actor LiveFeed {
     private var markers: [Utterance] = []
     private var language: Language = .ja
     private var lastSave: ContinuousClock.Instant?
+    private var finishing = false
     private var subscriptions: [Task<Void, Never>] = []
     private var continuation: AsyncStream<[Utterance]>.Continuation?
 
@@ -74,6 +75,7 @@ public actor LiveFeed {
                 started += 1
                 subscriptions.append(Task {
                     for await u in results { self.receive(u, from: track) }
+                    self.streamEnded(track)
                 })
             } catch {
                 failures[track] = String(describing: error)
@@ -116,6 +118,7 @@ public actor LiveFeed {
 
     /// Finishes both transcribers, drains their results, writes `live.json` and ends the stream.
     public func finish() async throws -> Transcript {
+        finishing = true
         for track in [Track.mic, .system] where failures[track] == nil {
             await transcribers[track]?.finish()
         }
@@ -141,6 +144,13 @@ public actor LiveFeed {
         }
         publish()
         if u.isFinal { saveIfDue() }
+    }
+
+    /// A stream that ends before `finish()` means the track died mid-meeting (its transcriber gave up).
+    private func streamEnded(_ track: Track) {
+        guard !finishing, failures[track] == nil else { return }
+        failures[track] = "live stream ended unexpectedly"
+        publish()
     }
 
     private func addMarker(_ text: String, at time: TimelineTime) {
