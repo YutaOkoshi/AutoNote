@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 public enum PortableFile: String, CaseIterable, Sendable {
     case dictionary = "dictionary.md"
@@ -44,46 +45,77 @@ public actor PortableConfigStore {
 
     public var isOutputAvailable: Bool { Self.directoryExists(outputFolder) }
 
+    /// Per file (`allCases` order) when the output folder is available:
+    /// - same content on both sides → nothing to copy;
+    /// - only one side has it → copy it to the other; neither → write the default to both;
+    /// - both differ → the Vault wins when the mirror is unchanged since the last sync or the mirror was
+    ///   synced with another folder (or none); the mirror wins when the Vault is unchanged since the last
+    ///   sync; both changed → newer modification date, tie → Vault.
+    /// Defaults written while the folder is unavailable are recorded as synced, so they never overwrite a real Vault.
     public func sync() throws -> PortableSyncReport {
         let fm = FileManager.default
         var report = PortableSyncReport(outputAvailable: isOutputAvailable)
         try fm.createDirectory(at: paths.portableMirrorDirectory, withIntermediateDirectories: true)
-        guard let vaultDir = vaultDirectory, report.outputAvailable else {
+        var state = loadState()
+        guard let vaultDir = vaultDirectory, let folderKey, report.outputAvailable else {
             for file in PortableFile.allCases where !fm.fileExists(atPath: mirrorURL(file).path) {
                 guard let data = defaults[file] else { continue }
                 try put(data, at: mirrorURL(file), modified: nil)
+                state.files[file.rawValue] = .init(lastSyncedSha256: Self.sha256(data))
                 report.createdDefaults.append(file)
             }
+            try saveState(state)
             return report
         }
         try fm.createDirectory(at: vaultDir, withIntermediateDirectories: true)
+        let sameFolder = state.outputFolder == folderKey
         for file in PortableFile.allCases {
             let vault = vaultURL(file, in: vaultDir), mirror = mirrorURL(file)
-            let vaultDate = Self.modificationDate(vault), mirrorDate = Self.modificationDate(mirror)
-            switch (vaultDate, mirrorDate) {
-            case let (vd?, md?):
-                if try Data(contentsOf: vault) == Data(contentsOf: mirror) { continue }
-                if md > vd {
-                    try put(Data(contentsOf: mirror), at: vault, modified: md)
-                    report.toVault.append(file)
+            let vaultData = fm.fileExists(atPath: vault.path) ? try Data(contentsOf: vault) : nil
+            let mirrorData = fm.fileExists(atPath: mirror.path) ? try Data(contentsOf: mirror) : nil
+            let synced: Data?
+            switch (vaultData, mirrorData) {
+            case let (v?, m?):
+                if v == m { synced = v; break }
+                let last = sameFolder ? state.files[file.rawValue]?.lastSyncedSha256 : nil
+                let vaultWins: Bool
+                if !sameFolder || Self.sha256(m) == last {
+                    vaultWins = true
+                } else if Self.sha256(v) == last {
+                    vaultWins = false
                 } else {
-                    try put(Data(contentsOf: vault), at: mirror, modified: vd)
-                    report.toMirror.append(file)
+                    let vd = Self.modificationDate(vault) ?? .distantPast, md = Self.modificationDate(mirror) ?? .distantPast
+                    vaultWins = vd >= md
                 }
-            case let (vd?, nil):
-                try put(Data(contentsOf: vault), at: mirror, modified: vd)
+                if vaultWins {
+                    try put(v, at: mirror, modified: Self.modificationDate(vault))
+                    report.toMirror.append(file)
+                    synced = v
+                } else {
+                    try put(m, at: vault, modified: Self.modificationDate(mirror))
+                    report.toVault.append(file)
+                    synced = m
+                }
+            case let (v?, nil):
+                try put(v, at: mirror, modified: Self.modificationDate(vault))
                 report.toMirror.append(file)
-            case let (nil, md?):
-                try put(Data(contentsOf: mirror), at: vault, modified: md)
+                synced = v
+            case let (nil, m?):
+                try put(m, at: vault, modified: Self.modificationDate(mirror))
                 report.toVault.append(file)
+                synced = m
             case (nil, nil):
-                guard let data = defaults[file] else { continue }
+                guard let data = defaults[file] else { synced = nil; break }
                 let now = Date()
                 try put(data, at: vault, modified: now)
                 try put(data, at: mirror, modified: now)
                 report.createdDefaults.append(file)
+                synced = data
             }
+            state.files[file.rawValue] = synced.map { .init(lastSyncedSha256: Self.sha256($0)) }
         }
+        state.outputFolder = folderKey
+        try saveState(state)
         return report
     }
 
@@ -103,10 +135,61 @@ public actor PortableConfigStore {
         if let dir = vaultDirectory, isOutputAvailable {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             try put(data, at: vaultURL(file, in: dir), modified: now)
+            // Both sides now hold `data`. A state kept for another folder is left alone: the next sync
+            // re-baselines against this folder. An offline write never touches the state, so the next
+            // sync sees the mirror as changed.
+            var state = loadState()
+            if state.outputFolder == folderKey {
+                state.files[file.rawValue] = .init(lastSyncedSha256: Self.sha256(data))
+                try saveState(state)
+            }
         }
     }
 
     // MARK: - Helpers
+
+    /// `portable-mirror/.sync-state.json`: which folder the mirror was last synced with, and each file's content then.
+    struct SyncState: Codable, Equatable {
+        struct FileState: Codable, Equatable { var lastSyncedSha256: String }
+        var outputFolder: String?
+        var files: [String: FileState]
+
+        init(outputFolder: String? = nil, files: [String: FileState] = [:]) {
+            self.outputFolder = outputFolder; self.files = files
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            outputFolder = try c.decodeIfPresent(String.self, forKey: .outputFolder)
+            files = try c.decodeIfPresent([String: FileState].self, forKey: .files) ?? [:]
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(outputFolder, forKey: .outputFolder)
+            try c.encode(files, forKey: .files)
+        }
+
+        private enum CodingKeys: String, CodingKey { case outputFolder, files }
+    }
+
+    private var stateURL: URL { paths.portableMirrorDirectory.appending(path: ".sync-state.json") }
+
+    /// A missing or unreadable state counts as "never synced".
+    private func loadState() -> SyncState {
+        guard let data = try? Data(contentsOf: stateURL) else { return SyncState() }
+        return (try? AutoNoteJSON.decoder().decode(SyncState.self, from: data)) ?? SyncState()
+    }
+
+    private func saveState(_ state: SyncState) throws {
+        try AutoNoteJSON.encoder().encode(state).write(to: stateURL, options: .atomic)
+    }
+
+    private var folderKey: String? { outputFolder?.resolvingSymlinksInPath().standardizedFileURL.path }
+
+    private static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
 
     private var vaultDirectory: URL? { outputFolder?.appending(path: "_autonote", directoryHint: .isDirectory) }
     private func vaultURL(_ file: PortableFile, in dir: URL) -> URL { dir.appending(path: file.rawValue) }
