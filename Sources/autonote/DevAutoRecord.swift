@@ -4,7 +4,7 @@ import Foundation
 /// `autonote dev auto-record --vault <dir> --data <dir> [--countdown N] [--grace N] [--lang ja|en|auto]`
 /// Runs the real device monitor, registry and recorder behind `AutoRecordCoordinator`. Prints one JSON object per
 /// line on stdout (`status`, `notice`, `withdraw`, `device`, `bookmark`, `error`) and reads one command per line on
-/// stdin. EOF on stdin is `quit`. Exit codes: 0 after `quit`, 2 usage, 1 setup failure.
+/// stdin. EOF on stdin and SIGINT are `quit`. Exit codes: 0 after `quit`, 2 usage, 1 setup failure.
 enum DevAutoRecord {
     static let usage = "usage: autonote dev auto-record --vault <dir> --data <dir> [--countdown N] [--grace N] [--lang ja|en|auto]"
         + "\n  stdin: yes|no|never <uid>, start <uid>, cancel, manual, pause, resume, bookmark [note], lang ja|en|auto, stop, quit"
@@ -46,6 +46,16 @@ enum DevAutoRecord {
             DevCommands.printError("error: \(error)")
             return 1
         }
+
+        // stdin lines and SIGINT feed one command stream; SIGINT (default action ignored first) queues `quit`, so
+        // Ctrl-C takes the same stop path as typing it. Installed before `run()` starts.
+        let (commands, commandSink) = AsyncStream<String>.makeStream()
+        signal(SIGINT, SIG_IGN)
+        let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global())
+        sigint.setEventHandler { commandSink.yield("quit") }
+        sigint.resume()
+        defer { sigint.cancel() }
+        readStdinLines(into: commandSink)
 
         let out = LineWriter()
         let timer = TaskTimerScheduler()
@@ -91,15 +101,15 @@ enum DevAutoRecord {
 
         let runTask = Task { await coordinator.run() }
 
-        for await line in stdinLines() {
+        for await line in commands {
             if await execute(line, coordinator: coordinator, monitor: monitor, out: out) == .quit { break }
         }
 
-        // quit (or EOF): stop a session in progress first (Y13), then wind down.
-        let state = await coordinator.current().state
-        if state == .recording || state == .paused || state == .grace {
-            await coordinator.stop(reason: .appTerminating)
-        }
+        // quit, EOF or SIGINT: no state check outside the gate. Both calls go through the coordinator's gate and are
+        // no-ops when they do not apply: a countdown is cancelled so its timer cannot start a session, and a session
+        // in progress is stopped (Y13). Only then is `run()` cancelled.
+        await coordinator.cancelCountdown()
+        await coordinator.stop(reason: .appTerminating)
         runTask.cancel()
         await monitor.stop()
         await out.waitUntilWritten(await coordinator.current())
@@ -161,14 +171,12 @@ enum DevAutoRecord {
         return .continue
     }
 
-    /// Lines from stdin, read on a detached thread; finishes at EOF.
-    private static func stdinLines() -> AsyncStream<String> {
-        let (stream, continuation) = AsyncStream<String>.makeStream()
+    /// Feeds stdin lines into `sink` from a detached thread and finishes it at EOF.
+    private static func readStdinLines(into sink: AsyncStream<String>.Continuation) {
         Thread.detachNewThread {
-            while let line = readLine() { continuation.yield(line) }
-            continuation.finish()
+            while let line = readLine() { sink.yield(line) }
+            sink.finish()
         }
-        return stream
     }
 
     private struct BookmarkLine: Encodable {
