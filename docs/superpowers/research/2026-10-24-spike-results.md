@@ -93,6 +93,18 @@
   - **計画 02 Task 1 の再確認（2026-10-26、AutoNote.app 単体を `open` で起動、`scripts/tcc-check.sh dictation`）**: `tccutil reset SpeechRecognition com.yutaokoshi.autonote` の後、開発メニュー「Dictation を確認」で `say -v Kyoko` の合成音声（約 4 秒）を認識。`SFSpeechRecognizer.authorizationStatus` は前後とも 0（未決定）、tccd には preflight の問い合わせ（`AUTHREQ_CTX ... kTCCServiceSpeechRecognition, preflight=yes`）だけが出て `AUTHREQ_PROMPTING`（ダイアログ）は無し、TCC.db に `kTCCServiceSpeechRecognition` の行は作られなかった。本文「本日の定例会議を始めます議題は3つあります」（21 字、2.83 秒）。**AutoNote.app 単体でも DictationTranscriber は音声認識の許可なしで動く**。`Resources/Info.plist` に `NSSpeechRecognitionUsageDescription` は足さない（画面ロック中の測定だが、ダイアログの有無は tccd のログで判定した）。ログは [2026-10-24-spike-raw/plan02-task1-tcc.log](2026-10-24-spike-raw/plan02-task1-tcc.log)
   - §6.2 の SFSpeechRecognizer の「1 分制限」は「60 秒ごとに結果が区切られ、isFinal は最後の区間だけ」と書き換え、使うなら区間の連結が要ると明記する。DictationTranscriber と同じモデルと見られるので、予備としての価値は「macOS 26 未満でも動く」ことだけ（最低 OS は 26.0 なので実質なし）
 
+- 発話の区切り（計画 04 Task 9、2026-10-27、Intel、DictationTranscriber、`tools/samples/ja-segments.wav` 77.5 秒＝架空の会議発言 10 文、文の間に 1.5 秒の沈黙、`dev transcribe --engine dictation --realtime --segmentation <案>`）:
+
+  | 案 | 確定件数 | 最長の発話 | 確定遅延の中央値（wall − end） |
+  |---|---|---|---|
+  | default（エンジン任せ） | 2 | 60.01 秒 | 5.87 秒 |
+  | frequent（`.frequentFinalization`） | 2 | 60.01 秒 | 5.83 秒 |
+  | silence（自前の沈黙検出 → `finalize(through:)`） | 10 | 8.98 秒 | 4.10 秒 |
+
+  - 採った案: **silence**（`SegmentationStrategy.current == .silenceFinalize`）。判定基準（件数 8〜13、最長 ≤ 15 秒、遅延中央値 ≤ 3.0 秒）を 3 つとも満たす案は無く、silence だけが件数と最長を満たした。default と frequent は 60 秒で 1 件に区切られる（スパイクと同じ挙動で、frequent の効果は見えなかった）。満たさなかった基準は 3（遅延中央値 4.10 秒）。
+  - 遅延は発話ごとの遅れではなく累積のずれ: silence の確定遅延は 0.41 → 1.07 → 1.82 → … → 6.94 秒と 1 文あたり約 0.7 秒ずつ増える（総計 wall 83.2 秒 ＞ 音声 77.5 秒）。1 文目は 0.41 秒で、増え分は実時間より遅く流れる部分（送出ペース・認識の遅れの累積）で、区切りの方式ではなく実時間の再生の仕方に由来すると見られる。原因の切り分けは未実施。実マイクでは累積しない見込みだが、マイク確認は未なので未検証。
+  - マイク確認は未（Step 4 は利用者が居ないので飛ばした）。SpeechTranscriber 側は計画 04 Task 12。
+
 ## 項目 3: Intel 機で process tap から実際に音声データが届くこと（作成・破棄は確認済み）
 
 - 結論: 届く（許可あり）。Intel x86_64 / macOS 26.6.2 で全システム音の tap から Float32 の PCM を受信し WAV に書けた。**「許可なし時の挙動」は本スパイクでは再現できなかった**。(a) Orca で許可をオフにして同じプロセス系統から実行 → 音が届いた（tccd は拒否を記録）。(b) 許可状態が未確認の Terminal.app から実行 → ダイアログなしで音が届いた。自己署名 `.app` 単体で、再起動後に再確認する（計画 02 の最初のタスク）。

@@ -7,6 +7,7 @@
 # 出力（tools/ は .gitignore 済み。コミットしない）:
 #   tools/samples/ja-5min.wav  日本語 約 5 分（16kHz モノラル 16bit）
 #   tools/samples/en-30s.wav   英語 約 30 秒（16kHz モノラル 16bit。日本語とは別ファイルのまま）
+#   tools/samples/ja-segments.wav  日本語 10 文（文の間に 1.5 秒の沈黙。発話の区切りの比較用、計画 04 Task 9）
 #
 # 使い方: scripts/make-sample-audio.sh
 #   JA_VOICE    日本語ボイス（既定: Kyoko。無ければ say -v '?' の ja_JP の先頭）
@@ -43,7 +44,7 @@ mkdir -p "$OUT"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-for f in ja-5min.txt en-30s.txt; do
+for f in ja-5min.txt en-30s.txt ja-segments.txt; do
     [ -f "$SRC/$f" ] || { echo "参照テキストが無い: $SRC/$f" >&2; exit 1; }
 done
 
@@ -51,6 +52,11 @@ done
 say -v "$JA_VOICE" -r "$RATE" -o "$TMP/ja.aiff" -f "$SRC/ja-5min.txt"
 afconvert -f WAVE -d LEI16@16000 -c 1 "$TMP/ja.aiff" "$OUT/ja-5min.wav"
 log "ja-5min.wav: $(duration "$OUT/ja-5min.wav") 秒、参照テキスト $(wc -l < "$SRC/ja-5min.txt" | tr -d ' ') 行"
+
+# 1b. 日本語 10 文（文の間に [[slnc 1500]]。発話の区切り方の比較用）
+say -v "$JA_VOICE" -r "$RATE" -o "$TMP/seg.aiff" -f "$SRC/ja-segments.txt"
+afconvert -f WAVE -d LEI16@16000 -c 1 "$TMP/seg.aiff" "$OUT/ja-segments.wav"
+log "ja-segments.wav: $(duration "$OUT/ja-segments.wav") 秒"
 
 # 2. 英語 約 30 秒
 say -v "$EN_VOICE" -o "$TMP/en.aiff" -f "$SRC/en-30s.txt"
