@@ -62,8 +62,8 @@ public actor VaultWriter {
         let data = Data(document.render().utf8)
         try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: target, options: .atomic)
-        if let existing, existing != target { try? fm.removeItem(at: existing) }
         try save(VaultWriteRecord(meeting: id, relativePath: relativePath(of: target), sha256: Self.sha256(data), writtenAt: now()))
+        if let existing, existing != target { try fm.removeItem(at: existing) }
         return .written(target)
     }
 
@@ -111,8 +111,11 @@ public actor VaultWriter {
 
     /// Scanner URLs can spell the folder differently (`/private/var` vs `/var`); re-root them on `outputFolder`.
     private func locateAll(_ id: MeetingID) throws -> [URL] {
-        try VaultScanner.locate(id, in: outputFolder).map {
-            outputFolder.appending(path: relativePath(of: $0.resolvingSymlinksInPath()))
+        let prefix = outputFolder.path.hasSuffix("/") ? outputFolder.path : outputFolder.path + "/"
+        return try VaultScanner.locate(id, in: outputFolder).compactMap {
+            let resolved = $0.resolvingSymlinksInPath()
+            guard resolved.path.hasPrefix(prefix) else { return nil }
+            return outputFolder.appending(path: relativePath(of: resolved))
         }
     }
 

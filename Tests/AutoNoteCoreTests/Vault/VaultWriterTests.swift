@@ -30,6 +30,8 @@ private func url(_ o: VaultWriteOutcome) throws -> URL { guard case .written(let
     let w = try writer(); let first = try url(await w.write(doc(status: .transcriptOnly, minutes: nil)))
     #expect(first.lastPathComponent == "2026-10-24_140000.md"); #expect(try url(await w.write(doc())).lastPathComponent == "2026-10-24_1400_プロジェクト定例.md")
     #expect(!FileManager.default.fileExists(atPath: first.path))
+    let renamed = try url(await w.write(doc()))
+    #expect(await w.record(for: Samples.manifest.id)?.relativePath == "2026/\(renamed.lastPathComponent)")
 }
 @Test func titledFileIsNotRenamedUnlessAsked() async throws {
     let w = try writer(); let f = try url(await w.write(doc()))
