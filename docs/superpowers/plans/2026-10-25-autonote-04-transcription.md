@@ -351,7 +351,7 @@ loop {
 progress(1.0); return RepetitionFilter.clean(kept) → Utterance
 ```
 
-`RepetitionFilter.clean` の規則［私の判断。要件書 §6.4 の繰り返し除去］: (1) 空白・句読点を除くと空のセグメントを捨てる (2) 本文全体が `hallucinations`（`ご視聴ありがとうございました`、`ご清聴ありがとうございました`、`チャンネル登録よろしくお願いします`、`Thank you for watching.`）と一致するセグメントを捨てる (3) 直前に残したセグメントと正規化後の本文が同じなら捨てる (4) セグメント内で 1〜15 文字の同じ並びが 4 回以上続いたら 1 回に縮める。
+`RepetitionFilter.clean` の規則［私の判断。要件書 §6.4 の繰り返し除去］: (1) 空白・句読点を除くと空のセグメントを捨てる (2) 本文全体が `hallucinations`（`ご視聴ありがとうございました`、`ご清聴ありがとうございました`、`チャンネル登録よろしくお願いします`、`Thank you for watching.`）と一致するセグメントを捨てる (3) 直前に残したセグメントと正規化後の本文が同じなら捨てる (4) セグメント内で 1〜15 文字の同じ並びが 4 回以上続いたら 1 回に縮める。ただし数字（半角 0-9・全角 ０-９）と桁区切り（`,` `.` `、`）だけからなる並びは縮めない（`10000円` を `10円` にしないため）(修正: 最終レビュー I1、2026-10-27)。
 
 - [ ] **Step 1: ヒントの渡し方を決める**
 Run: `grep -n 'carry_initial_prompt\|n_max_text_ctx\|no_context' tools/whisper.cpp/include/whisper.h && grep -n 'n_max_text_ctx' tools/whisper.cpp/src/whisper.cpp`

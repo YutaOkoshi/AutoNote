@@ -35,4 +35,17 @@ import Testing
         #expect(RepetitionFilter.clean(segs(["はいはい"])).map(\.text) == ["はいはい"])
         #expect(RepetitionFilter.clean(segs(["はいはいはい"])).map(\.text) == ["はいはいはい"])
     }
+
+    @Test func keepsNumbers() {
+        #expect(RepetitionFilter.clean(segs(["売上は10000円です"])).map(\.text) == ["売上は10000円です"])
+        #expect(RepetitionFilter.clean(segs(["100000人"])).map(\.text) == ["100000人"])
+        #expect(RepetitionFilter.clean(segs(["１００００円"])).map(\.text) == ["１００００円"])
+        #expect(RepetitionFilter.clean(segs(["0.0.0.0.0"])).map(\.text) == ["0.0.0.0.0"])
+        #expect(RepetitionFilter.clean(segs(["0,000,000,000,000"])).map(\.text) == ["0,000,000,000,000"])
+    }
+
+    @Test func nonDigitUnitsStillCollapse() {
+        #expect(RepetitionFilter.clean(segs(["そうそうそうそうそう"])).map(\.text) == ["そう"])
+        #expect(RepetitionFilter.clean(segs(["1円1円1円1円"])).map(\.text) == ["1円"])
+    }
 }

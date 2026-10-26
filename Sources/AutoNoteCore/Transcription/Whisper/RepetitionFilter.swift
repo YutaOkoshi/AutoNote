@@ -11,7 +11,8 @@ enum RepetitionFilter {
 
     /// (1) drops segments that are empty without whitespace/punctuation, (2) drops segments that are a
     /// hallucination phrase, (3) drops a segment equal (normalized) to the previously kept one, and
-    /// (4) collapses a 1–15 character run repeated 4+ times in a row to a single copy.
+    /// (4) collapses a 1–15 character run repeated 4+ times in a row to a single copy, except a run made only
+    /// of digits and digit separators (`10000円` stays as is).
     static func clean(_ s: [WhisperSegment]) -> [WhisperSegment] {
         var kept: [WhisperSegment] = []
         var lastKey: String?
@@ -43,7 +44,7 @@ enum RepetitionFilter {
                 while i + (count + 1) * unit <= chars.count, chars[(i + count * unit)..<(i + (count + 1) * unit)] == pattern {
                     count += 1
                 }
-                if count >= minCount {
+                if count >= minCount && !isNumeric(pattern) {
                     out.append(contentsOf: pattern)
                     i += count * unit
                     continue outer
@@ -53,6 +54,14 @@ enum RepetitionFilter {
             i += 1
         }
         return String(out)
+    }
+
+    private static let digits = Set("0123456789０１２３４５６７８９")
+    private static let digitSeparators = Set(",.、")
+
+    /// A unit with at least one digit and nothing but digits (ASCII or full-width) and `,` `.` `、`.
+    private static func isNumeric(_ unit: ArraySlice<Character>) -> Bool {
+        unit.contains(where: digits.contains) && unit.allSatisfy { digits.contains($0) || digitSeparators.contains($0) }
     }
 }
 
