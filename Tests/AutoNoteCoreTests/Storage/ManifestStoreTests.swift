@@ -42,3 +42,13 @@ import AutoNoteTestSupport
     try await store.save(older); try await store.save(Samples.manifest)
     #expect(await store.all().map(\.id) == [Samples.manifest.id, older.id])
 }
+
+@Test func manifestSaveLoadKeepsSubSecondDates() async throws {
+    let store = ManifestStore(paths: AppPaths(root: try TemporaryDirectory.make()))
+    // JSON keeps milliseconds, so take the current time at millisecond precision.
+    let ms = (Date().timeIntervalSince1970 * 1000).rounded(.down)
+    var m = Samples.manifest
+    m.startedAt = Date(timeIntervalSince1970: ms / 1000); m.endedAt = Date(timeIntervalSince1970: (ms + 12_345) / 1000)
+    try await store.save(m)
+    #expect(try await store.load(m.id) == m)
+}
