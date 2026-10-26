@@ -4,6 +4,7 @@ import Synchronization
 /// Final (batch) transcription with whisper. Pausing aborts whisper at the next segment boundary and
 /// restarts from the end of the last completed segment after `resume()`. Utterances come back with
 /// `speaker: .unknown` and times relative to the file (Task 11 assigns speaker and start offset).
+/// A segment over audio with less than `SilenceDetector`'s minimum speech is dropped (whisper hallucinates on silence).
 public actor WhisperBatchTranscriber: BatchTranscriber {
     private let core: any WhisperCore
     private let gate: BatchGate
@@ -16,7 +17,8 @@ public actor WhisperBatchTranscriber: BatchTranscriber {
     public func transcribe(
         file: URL, language: Language, hints: [String], progress: @Sendable @escaping (Double) -> Void
     ) async throws -> [Utterance] {
-        let samples = PCMAudio.floats(try PCMAudio.readMono16k(file))
+        let pcm = try PCMAudio.readMono16k(file)
+        let samples = PCMAudio.floats(pcm)
         let total = Double(samples.count) / PCMAudio.sampleRate
         let prompt = WhisperPrompt.make(hints: hints)
         let kept = Locked<[WhisperSegment]>([])
@@ -61,7 +63,9 @@ public actor WhisperBatchTranscriber: BatchTranscriber {
             offset = kept.withLock { $0.last?.end } ?? offset   // 最後に完了したセグメントの終わりから再開
         }
         report(1.0)
-        return RepetitionFilter.clean(kept.withLock { $0 }).map {
+        let detector = SilenceDetector()
+        let audible = kept.withLock { $0 }.filter { detector.hasSpeech(in: pcm, from: $0.start, to: $0.end) }
+        return RepetitionFilter.clean(audible).map {
             Utterance(start: TimelineTime(seconds: $0.start), end: TimelineTime(seconds: $0.end),
                       speaker: .unknown, text: $0.text, isFinal: true)
         }

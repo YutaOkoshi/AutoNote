@@ -9,7 +9,7 @@ import Testing
         progress: @Sendable @escaping (Double) -> Void = { _ in }
     ) async throws -> [Utterance] {
         try await WhisperBatchTranscriber(core: core, gate: BatchGate())
-            .transcribe(file: try wavFile(seconds: seconds), language: language, hints: hints, progress: progress)
+            .transcribe(file: try wavFile(tone(seconds)), language: language, hints: hints, progress: progress)
     }
 
     @Test func segmentsBecomeFinalUtterances() async throws {
@@ -37,7 +37,7 @@ import Testing
     @Test func cancellationStopsAndThrows() async throws {
         let core = FakeWhisperCore(
             segments: (0..<20).map { .init(start: Double($0), end: Double($0 + 1), text: "\($0)") }, delay: .milliseconds(100))
-        let file = try wavFile(seconds: 20)
+        let file = try wavFile(tone(20))
         let t = Task {
             try await WhisperBatchTranscriber(core: core, gate: BatchGate())
                 .transcribe(file: file, language: .ja, hints: [], progress: { _ in })
@@ -55,7 +55,7 @@ import Testing
         let core = FakeWhisperCore(
             segments: [.init(start: 0, end: 2, text: "一"), .init(start: 2, end: 4, text: "二"), .init(start: 4, end: 6, text: "三")],
             delay: .milliseconds(200))
-        let file = try wavFile(seconds: 6)
+        let file = try wavFile(tone(6))
         let t = Task {
             try await WhisperBatchTranscriber(core: core, gate: gate).transcribe(file: file, language: .ja, hints: [], progress: { _ in })
         }
@@ -76,7 +76,7 @@ import Testing
         let gate = BatchGate()
         await gate.pause()
         let core = FakeWhisperCore(segments: [.init(start: 0, end: 2, text: "一")])
-        let file = try wavFile(seconds: 2)
+        let file = try wavFile(tone(2))
         let t = Task {
             try await WhisperBatchTranscriber(core: core, gate: gate).transcribe(file: file, language: .ja, hints: [], progress: { _ in })
         }
@@ -93,7 +93,7 @@ import Testing
         let gate = BatchGate()
         await gate.pause()
         let core = FakeWhisperCore(segments: [.init(start: 0, end: 2, text: "一")])
-        let file = try wavFile(seconds: 2)
+        let file = try wavFile(tone(2))
         let t = Task {
             try await WhisperBatchTranscriber(core: core, gate: gate).transcribe(file: file, language: .ja, hints: [], progress: { _ in })
         }
@@ -131,5 +131,22 @@ import Testing
         #expect(core.requests[0].mode == .batch)
         #expect(core.requests[0].offsetSeconds == 0)
         #expect(core.requests[0].samples.count == 4 * 16_000)
+    }
+
+    @Test func silentSegmentIsDropped() async throws {
+        // 0–2 s silence, 2–4 s tone: the segment over silence is a hallucination, the one over the tone is speech
+        let core = FakeWhisperCore(segments: [.init(start: 0, end: 2, text: "本日の動画でお会いしましょう"),
+                                              .init(start: 2, end: 4, text: "よろしく")])
+        let u = try await WhisperBatchTranscriber(core: core, gate: BatchGate())
+            .transcribe(file: try wavFile(silence(2) + tone(2)), language: .ja, hints: [], progress: { _ in })
+        #expect(u.map(\.text) == ["よろしく"])
+    }
+
+    @Test func segmentWithTooLittleSpeechIsDropped() async throws {
+        // 1.9–2.1 s overlaps only 0.1 s of tone (< 0.3 s)
+        let core = FakeWhisperCore(segments: [.init(start: 1.9, end: 2.1, text: "ん"), .init(start: 2.1, end: 4, text: "はい")])
+        let u = try await WhisperBatchTranscriber(core: core, gate: BatchGate())
+            .transcribe(file: try wavFile(silence(2) + tone(2)), language: .ja, hints: [], progress: { _ in })
+        #expect(u.map(\.text) == ["はい"])
     }
 }

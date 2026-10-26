@@ -15,10 +15,10 @@ func partial(_ seconds: Double, _ text: String) -> Utterance {
     Utterance(start: TimelineTime(seconds: seconds), end: nil, speaker: .unknown, text: text, isFinal: false)
 }
 
-/// A 16 kHz mono silent WAV of the given length in a fresh temporary folder.
-func wavFile(seconds: Double) throws -> URL {
-    let url = try TemporaryDirectory.make().appending(path: "silence.wav")
-    try PCMAudio.writeWAV(silence(seconds), to: url)
+/// A 16 kHz mono WAV of the given samples in a fresh temporary folder.
+func wavFile(_ samples: [Int16]) throws -> URL {
+    let url = try TemporaryDirectory.make().appending(path: "audio.wav")
+    try PCMAudio.writeWAV(samples, to: url)
     return url
 }
 
