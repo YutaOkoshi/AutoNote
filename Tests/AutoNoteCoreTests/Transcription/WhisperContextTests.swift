@@ -42,6 +42,27 @@ private let realModel = ProcessInfo.processInfo.environment["AUTONOTE_TEST_WHISP
         #expect(outcome == .aborted)
     }
 
+    /// live モードのトークンは文字の途中で切れない（バイト単位の BPE を UTF-8 の境界でつなぐ）。
+    @Test(.enabled(if: realModel != nil && FileManager.default.isExecutableFile(atPath: "/usr/bin/say")))
+    func realLiveTokensAreWholeCharacters() async throws {
+        let dir = try TemporaryDirectory.make()
+        let aiff = dir.appending(path: "ja.aiff")
+        let say = Process()
+        say.executableURL = URL(fileURLWithPath: "/usr/bin/say")
+        say.arguments = ["-v", "Kyoko", "-o", aiff.path, "東京都庁で会議を始めます。議題は予算です。"]
+        try say.run(); say.waitUntilExit()
+        try #require(say.terminationStatus == 0)
+        let core = try WhisperContext(modelURL: URL(fileURLWithPath: realModel!), machine: .current(), threads: 2)
+        let tokens = Mutex<[TimedToken]>([])
+        let request = WhisperRunRequest(
+            samples: PCMAudio.floats(try PCMAudio.readMono16k(aiff)), offsetSeconds: 0, language: .ja, prompt: nil, mode: .live)
+        let outcome = try await core.run(request, onSegment: { _, t in tokens.withLock { $0 += t } }, onProgress: { _ in }, shouldAbort: { false })
+        #expect(outcome == .completed)
+        let all = tokens.withLock { $0 }
+        #expect(!all.isEmpty)
+        #expect(all.allSatisfy { !$0.text.contains("\u{FFFD}") && $0.start <= $0.end })
+    }
+
     /// `offset_ms` を使うと、セグメントの時刻は渡した音声の先頭からの秒になる（オフセットを含む）。
     @Test(.enabled(if: realModel != nil && FileManager.default.isExecutableFile(atPath: "/usr/bin/say")))
     func realCoreSegmentsAreAbsoluteWithOffset() async throws {

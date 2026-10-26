@@ -1,3 +1,4 @@
+import Foundation
 import Synchronization
 
 /// Pauses the batch transcription while a recording is running (要件書 §13). Plan 05's queue calls
@@ -5,7 +6,7 @@ import Synchronization
 /// whisper's abort check can poll it.
 public actor BatchGate {
     private let paused = Mutex(false)
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
 
     public init() {}
 
@@ -15,14 +16,26 @@ public actor BatchGate {
 
     public func resume() {
         paused.withLock { $0 = false }
-        let pending = waiters
+        let pending = waiters.values
         waiters.removeAll()
         pending.forEach { $0.resume() }
     }
 
-    /// Returns at once when not paused; otherwise waits for `resume()`.
+    /// Returns at once when not paused; otherwise waits for `resume()`. Also returns promptly when the
+    /// waiting task is cancelled (the caller checks cancellation afterwards; the gate stays paused).
     public func waitIfPaused() async {
         guard isPaused else { return }
-        await withCheckedContinuation { waiters.append($0) }
+        let id = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled { continuation.resume() } else { waiters[id] = continuation }
+            }
+        } onCancel: {
+            Task { await self.release(id) }
+        }
+    }
+
+    private func release(_ id: UUID) {
+        waiters.removeValue(forKey: id)?.resume()
     }
 }

@@ -72,6 +72,23 @@ import Testing
         #expect(u.map(\.text) == ["一", "二", "三"])
     }
 
+    @Test func cancellationWhilePausedThrowsPromptly() async throws {
+        let gate = BatchGate()
+        await gate.pause()
+        let core = FakeWhisperCore(segments: [.init(start: 0, end: 2, text: "一")])
+        let file = try wavFile(seconds: 2)
+        let t = Task {
+            try await WhisperBatchTranscriber(core: core, gate: gate).transcribe(file: file, language: .ja, hints: [], progress: { _ in })
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        let cancelledAt = ContinuousClock.now
+        t.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await t.value }
+        #expect(ContinuousClock.now - cancelledAt < .seconds(1))
+        #expect(gate.isPaused)
+        #expect(core.runCount == 0)
+    }
+
     @Test func pausedGateHoldsTheFirstRun() async throws {
         let gate = BatchGate()
         await gate.pause()

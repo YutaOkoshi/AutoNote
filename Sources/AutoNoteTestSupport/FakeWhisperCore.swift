@@ -3,7 +3,7 @@ import Foundation
 import Synchronization
 
 /// Scripted `WhisperCore`. Each run emits, in order, the segments that start at or after the request's
-/// `offsetSeconds` (waiting `delay` before each) and checks `shouldAbort` after every one.
+/// `offsetSeconds` (waiting `delay` before each, without throwing on cancellation) and checks `shouldAbort` after every one.
 /// `init(fixedText:)` is for live windows: one segment spanning the window and one token at its start.
 public final class FakeWhisperCore: WhisperCore, @unchecked Sendable {
     private enum Script {
@@ -47,7 +47,7 @@ public final class FakeWhisperCore: WhisperCore, @unchecked Sendable {
             return shouldAbort() ? .aborted : .completed
         case let .segments(all, delay):
             for segment in all where segment.start >= r.offsetSeconds {
-                if delay > .zero { try await Task.sleep(for: delay) }
+                if delay > .zero { try? await Task.sleep(for: delay) }   // 取り消しでも投げない（中断は shouldAbort で伝わる）
                 emit(segment, [], onSegment)
                 let span = total - r.offsetSeconds
                 onProgress(span > 0 ? min(1, max(0, (segment.end - r.offsetSeconds) / span)) : 1)

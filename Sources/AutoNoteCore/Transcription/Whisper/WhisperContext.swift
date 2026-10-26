@@ -157,13 +157,18 @@ private final class RunCallbacks: @unchecked Sendable {
         }
     }
 
+    /// Raw token bytes joined on UTF-8 character boundaries (byte-level BPE may split a character).
     private func tokens(_ context: OpaquePointer, _ state: OpaquePointer, _ segment: Int32) -> [TimedToken] {
         let eot = whisper_token_eot(context)
-        return (0..<whisper_full_n_tokens_from_state(state, segment)).compactMap { j in
+        var assembler = WhisperTokenAssembler()
+        var out: [TimedToken] = []
+        for j in 0..<whisper_full_n_tokens_from_state(state, segment) {
             let data = whisper_full_get_token_data_from_state(state, segment, j)
-            guard data.id < eot, let text = whisper_full_get_token_text_from_state(context, state, segment, j) else { return nil }
-            return TimedToken(start: Double(data.t0) / 100, end: Double(data.t1) / 100, text: String(cString: text))
+            guard data.id < eot, let text = whisper_full_get_token_text_from_state(context, state, segment, j) else { continue }
+            let bytes = Array(UnsafeRawBufferPointer(start: text, count: strlen(text)))
+            out += assembler.append(bytes: bytes, t0: Double(data.t0) / 100, t1: Double(data.t1) / 100)
         }
+        return out + assembler.flush()
     }
 }
 
