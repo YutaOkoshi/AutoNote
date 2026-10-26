@@ -12,11 +12,14 @@ public enum TranscriptMarkdown {
         }
     }
 
-    /// Anchor of the last utterance starting at or before `time`, else the first utterance's; nil without utterances.
+    /// Candidates are utterances whose displayed second (`floor(start)`) is at or before `time`. Picks the last
+    /// candidate that contains `time` (`start <= time <= end ?? start`), else the last candidate, else the first
+    /// utterance; nil without utterances.
     public static func linkTarget(for time: TimelineTime, utterances: [Utterance], anchors: [String]) -> String? {
         guard !utterances.isEmpty, anchors.count == utterances.count else { return nil }
-        let index = utterances.lastIndex(where: { $0.start <= time }) ?? 0
-        return anchors[index]
+        let candidates = utterances.indices.filter { utterances[$0].start.seconds.rounded(.down) <= time.seconds }
+        let containing = candidates.last { utterances[$0].start <= time && (utterances[$0].end ?? utterances[$0].start) >= time }
+        return anchors[containing ?? candidates.last ?? 0]
     }
 
     public static func render(_ utterances: [Utterance], pauses: [PauseInterval]) -> String {
