@@ -58,9 +58,25 @@ private struct Fixture {
     func job(_ id: MeetingID = Fixture.firstID) async throws -> Job? { try await jobs.load(id) }
 }
 
-private func waitFor(_ queue: PostProcessingQueue, _ condition: @Sendable (QueueSnapshot) -> Bool) async -> QueueSnapshot? {
-    for await snapshot in queue.snapshots() where condition(snapshot) { return snapshot }
-    return nil
+/// First snapshot matching `condition`; records an issue and returns nil after `timeout` of real time.
+private func waitFor(_ queue: PostProcessingQueue, timeout: Duration = .seconds(10),
+                     sourceLocation: SourceLocation = #_sourceLocation,
+                     _ condition: @escaping @Sendable (QueueSnapshot) -> Bool) async -> QueueSnapshot? {
+    let found = await withTaskGroup(of: QueueSnapshot?.self) { group in
+        group.addTask {
+            for await snapshot in queue.snapshots() where condition(snapshot) { return snapshot }
+            return nil
+        }
+        group.addTask {
+            try? await Task.sleep(for: timeout)
+            return nil
+        }
+        let first = await group.next() ?? nil
+        group.cancelAll()
+        return first
+    }
+    if found == nil { Issue.record("timed out waiting for a queue snapshot", sourceLocation: sourceLocation) }
+    return found
 }
 
 @Suite struct PostProcessingQueueTests {
@@ -246,9 +262,72 @@ private func waitFor(_ queue: PostProcessingQueue, _ condition: @Sendable (Queue
         #expect(second.completedStages.contains(StageName.automations))
         #expect(try await f.manifests.load(Fixture.secondID).status == .minutesGenerated)
         #expect(approved.values(Fixture.secondID) == [false])
-        await #expect(throws: QueueError.unknownMeeting(MeetingID(rawValue: "nope"))) {
-            try await queue.resolveOverwrite(MeetingID(rawValue: "nope"), overwrite: true)
-        }
+        // a missing job is a logged no-op
+        try await queue.resolveOverwrite(MeetingID(rawValue: "nope"), overwrite: true)
+        #expect(try await f.job(MeetingID(rawValue: "nope")) == nil)
+    }
+
+    @Test func resolveOverwriteIgnoresJobsNotAwaitingConfirmation() async throws {
+        let f = try Fixture()
+        try await f.saveManifest()
+        let release = AsyncStream<Void>.makeStream()
+        let summarize = ScriptedStage(name: StageName.summarize, log: f.log, release: release.stream)
+        let queue = f.queue(f.stages([StageName.summarize: summarize]))
+        await queue.enqueue(Fixture.firstID)
+        let manifestBefore = try await f.manifests.load(Fixture.firstID)
+
+        // .pending
+        let pending = try #require(try await f.job())
+        try await queue.resolveOverwrite(Fixture.firstID, overwrite: false)
+        try await queue.resolveOverwrite(Fixture.firstID, overwrite: true)
+        #expect(try await f.job() == pending)
+
+        // .running (summarize held open)
+        await queue.start()
+        _ = await waitFor(queue) { $0.jobs.first?.stage == StageName.summarize && $0.jobs.first?.state == .running }
+        let running = try #require(try await f.job())
+        #expect(running.state == .running)
+        try await queue.resolveOverwrite(Fixture.firstID, overwrite: false)
+        try await queue.resolveOverwrite(Fixture.firstID, overwrite: true)
+        #expect(try await f.job() == running)
+        #expect(try await f.manifests.load(Fixture.firstID) == manifestBefore)
+
+        release.continuation.yield()
+        _ = await waitFor(queue) { $0.jobs.isEmpty }
+        await queue.stop()
+        let done = try #require(try await f.job())
+        #expect(done.state == .done)
+        #expect(done.overwriteApproved == false)
+        #expect(try await f.manifests.load(Fixture.firstID) == manifestBefore)
+    }
+
+    @Test func rerunWhileStageRunsResetsAndBumpsGeneration() async throws {
+        let f = try Fixture()
+        try await f.saveManifest()
+        let release = AsyncStream<Void>.makeStream()
+        let write = ScriptedStage(name: StageName.writeVault, log: f.log, release: release.stream)
+        let queue = f.queue(f.stages([StageName.writeVault: write]))
+        await queue.start()
+        await queue.enqueue(Fixture.firstID)
+        _ = await waitFor(queue) { $0.jobs.first?.stage == StageName.writeVault && $0.jobs.first?.state == .running }
+        try await queue.rerun(Fixture.firstID, from: StageName.summarize)
+        let reset = try #require(try await f.job())
+        #expect(reset.generation == 1)
+        #expect(reset.completedStages == [StageName.transcribe])
+        #expect(reset.state == .pending)
+        #expect(reset.attempts == 0)
+
+        // The loop picks the job up again: summarize, then write_vault (held once more).
+        _ = await waitFor(queue) { $0.jobs.first?.stage == StageName.writeVault && $0.jobs.first?.state == .running }
+        release.continuation.yield()
+        _ = await waitFor(queue) { $0.jobs.isEmpty }
+        await queue.stop()
+        let job = try #require(try await f.job())
+        #expect(job.state == .done)
+        #expect(job.generation == 1)
+        #expect(job.completedStages == StageName.all)
+        #expect(await f.log.entries == [StageName.transcribe, StageName.summarize, StageName.writeVault,
+                                        StageName.summarize, StageName.writeVault, StageName.updateIndex])
     }
 
     @Test func rateLimitedJobRerunsSummarizeWithNewGeneration() async throws {
@@ -309,17 +388,18 @@ private func waitFor(_ queue: PostProcessingQueue, _ condition: @Sendable (Queue
         let f = try Fixture()
         try await f.saveManifest()
         let interrupted = Job(id: Fixture.firstID.rawValue, meeting: Fixture.firstID, stages: StageName.all,
-                              completedStages: [StageName.transcribe], state: .running, attempts: 1,
+                              completedStages: [StageName.transcribe], state: .running, attempts: 3,
                               lastError: nil, notBefore: nil, createdAt: f.clock.now())
         try await f.jobs.save(interrupted)
         let release = AsyncStream<Void>.makeStream()
-        let write = ScriptedStage(name: StageName.writeVault, log: f.log, release: release.stream)
-        let queue = f.queue(f.stages([StageName.writeVault: write]))
+        let summarize = ScriptedStage(name: StageName.summarize, log: f.log, release: release.stream)
+        let queue = f.queue(f.stages([StageName.summarize: summarize]))
         await queue.start()
-        // While write_vault is held open, summarize has been counted once (attempts reset on success).
-        let running = await waitFor(queue) { $0.jobs.first?.stage == StageName.writeVault && $0.jobs.first?.state == .running }
+        // Recovery gives back the interrupted attempt (3 -> 2); re-running summarize counts it again (-> 3).
+        // Counting the recovery as an attempt would show 4.
+        let running = await waitFor(queue) { $0.jobs.first?.stage == StageName.summarize && $0.jobs.first?.state == .running }
         #expect(running != nil)
-        #expect(try await f.job()?.attempts == 1)
+        #expect(try await f.job()?.attempts == interrupted.attempts)
         release.continuation.yield()
         let done = await waitFor(queue) { $0.jobs.isEmpty }
         #expect(done != nil)

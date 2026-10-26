@@ -54,6 +54,8 @@ public actor PostProcessingQueue {
     var recordingTask: Task<Void, Never>?
     /// Rate-limit rounds of a summarize rerun in flight (the waiting job keeps them in `attempts`).
     var rateLimitRounds: [String: Int] = [:]
+    /// Meetings with a `rerun` in progress; no stage of theirs may start until the reset is saved.
+    var rerunsInProgress: Set<String> = []
     private var runToken = 0
     private var stopping = false
     private var wakeContinuation: CheckedContinuation<Void, Never>?
@@ -203,10 +205,13 @@ public actor PostProcessingQueue {
         guard StageName.all.contains(stage) else { throw QueueError.unknownStage(stage) }
         await ensureLoaded()
         guard jobs[id.rawValue] != nil else { throw QueueError.unknownMeeting(id) }
-        if jobs[id.rawValue]?.state == .running {
+        // Hold the job first so the loop cannot start its next stage while we wait for the current one.
+        rerunsInProgress.insert(id.rawValue)
+        defer { rerunsInProgress.remove(id.rawValue) }
+        while jobs[id.rawValue]?.state == .running, let current = stepTask {
             // The one step in flight is this job's; cancelling it puts the job back to `.pending`.
-            stepTask?.cancel()
-            await stepTask?.value
+            current.cancel()
+            await current.value
         }
         guard var job = jobs[id.rawValue] else { throw QueueError.unknownMeeting(id) }
         Self.resetForRerun(&job, from: stage)
@@ -232,12 +237,16 @@ public actor PostProcessingQueue {
         wake()
     }
 
-    /// `true` re-runs `write_vault` allowed to overwrite; `false` leaves the Vault alone and finishes the job.
+    /// Answers an overwrite confirmation: `true` re-runs `write_vault` allowed to overwrite; `false` leaves
+    /// the Vault alone and finishes the job. Only a job awaiting confirmation (`.waiting`, no `notBefore`)
+    /// is touched; anything else (missing job, other state, e.g. a stale notification) is logged and ignored.
     public func resolveOverwrite(_ id: MeetingID, overwrite: Bool) async throws {
         await ensureLoaded()
-        guard var job = jobs[id.rawValue] else { throw QueueError.unknownMeeting(id) }
+        guard var job = jobs[id.rawValue], job.state == .waiting, job.notBefore == nil else {
+            Self.logger.info("resolveOverwrite \(id.rawValue, privacy: .public): not awaiting confirmation, ignored")
+            return
+        }
         job.lastError = nil
-        job.notBefore = nil
         if overwrite {
             job.overwriteApproved = true
             job.state = .pending
@@ -245,6 +254,8 @@ public actor PostProcessingQueue {
             Self.logger.info("resolveOverwrite \(id.rawValue, privacy: .public): overwrite")
             wake()
         } else {
+            // Manifest first: if it cannot be updated, the job stays awaiting confirmation.
+            try await manifests.update(id) { $0.status = .minutesGenerated }
             for stage in [StageName.writeVault, StageName.updateIndex, StageName.automations]
             where !job.completedStages.contains(stage) {
                 job.completedStages.append(stage)
@@ -253,7 +264,6 @@ public actor PostProcessingQueue {
             job.state = .done
             await persist(job)
             Self.logger.info("resolveOverwrite \(id.rawValue, privacy: .public): keep, done")
-            try await manifests.update(id) { $0.status = .minutesGenerated }
         }
     }
 
@@ -352,6 +362,7 @@ public actor PostProcessingQueue {
     }
 
     func isRunnable(_ job: Job, now: Date) -> Bool {
+        if rerunsInProgress.contains(job.meeting.rawValue) { return false }
         if isRecording && job.nextStage == StageName.transcribe { return false }
         switch job.state {
         case .pending: return true
@@ -396,7 +407,13 @@ public actor PostProcessingQueue {
 
     private func runStep(_ id: MeetingID) async {
         let key = id.rawValue
-        let settings = (try? await settingsStore.load()) ?? Settings()
+        let settings: Settings
+        do {
+            settings = try await settingsStore.load()
+        } catch {
+            Self.logger.error("job \(key, privacy: .public): settings unreadable, using defaults")
+            settings = Settings()
+        }
         guard var job = jobs[key], isRunnable(job, now: clock.now()) else { return }
 
         // A finished job picked again is a rate-limited one whose hour is up (or was retried).
@@ -427,6 +444,7 @@ public actor PostProcessingQueue {
 
         job.state = .running
         job.attempts += 1
+        job.notBefore = nil
         await persist(job)
         if Task.isCancelled {
             job.state = .pending
