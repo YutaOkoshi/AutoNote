@@ -185,6 +185,20 @@ protocol QueueStage: Sendable {
 - 計画 05 の Task 14 の任意 👤（Swift 実装から実の `claude` を 1 回呼ぶ）は残す。費用は 1 回分
 - 一時停止・ブックマークの印はリアルタイム表示では `Utterance`（話者 `.unknown`、`isMarker`）として流す（計画 04）。計画 06 はこれを表示する
 
+## 8c. 計画 01 の実装で確定した変更（2026-10-26。以後の計画はこれに従う）
+
+- protocol 宣言のファイル名は `Audio/AudioProtocols.swift`・`Transcription/TranscriptionProtocols.swift`・`Minutes/MinutesProtocols.swift`（SwiftPM は同じターゲット内で同名の `Protocols.swift` を許さない）。計画 02〜05 の `Protocols.swift` という記述はこれに読み替える
+- §3 のすべてのモデル型は `Equatable` と `Hashable` も持つ（`Transcript` を含む）
+- `AutoNoteJSON` の日付は ISO-8601 のミリ秒付き（`2026-10-24T05:00:00.000Z`）で書き、読みはミリ秒の有無どちらも受ける。保存した `Date` はミリ秒精度になるので、テストで等値比較するときは保存→読込の往復後の値と比べる
+- 保存する型（`Manifest` `Settings` `Job` など）に後から項目を足すときは optional か `decodeIfPresent` にする。必須項目を足すと古いファイルが読めなくなり、`ManifestStore.all()` から黙って消える
+- `VaultWriter` と `PortableConfigStore` は出力フォルダごとに 1 インスタンスを共有する（計画 05 と 06 が別々に作らない。actor 内でしか排他しない）。配線は計画 06 Task 13 の `AppEnvironment.make`
+- `PortableConfigStore` は `portable-mirror/.sync-state.json`（`output_folder`、ファイルごとの `last_synced_sha256`）で同期状態を持つ。写しが前回の同期から変わっていなければ Vault を正とし、出力フォルダを付け替えたときは Vault 側の既存ファイルを残す。無効時に書いた既定値は同期済みとして記録される
+- `TranscriptMarkdown.linkTarget`: `floor(start) ≤ t` の発話のうち、`start ≤ t ≤ (end ?? start)` で t を含む最後の発話を優先し、無ければ最後の候補
+- `FrontmatterTemplate`: 自由文の変数（`title` `device` `transcript_engine` と未知の変数）は厳格に引用符で囲む（英数字・空白・`_` `-` `.` 以外を含む、数字・`-` `.` で始まる、真偽・null 語、のとき）。構造化された値（`date` `start` `end` `duration_min` `status` `autonote_id` `autonote` `language`）は従来規則
+- `HintBudget.fit(_:limit:separator: String = ", ")`。計画 04 は `separator: "、"` を渡す
+- `AutoNoteJSON.compactEncoder()`（1 行、キー順固定、ミリ秒付き日付）を計画 02 Task 14 が足し、`dev` サブコマンドの 1 行 JSON 出力に使う
+- `SettingsStore.init(paths:timeZone: TimeZone = .current)`。`autonote` CLI は `AutoNoteTestSupport` に依存する（`dev render-fixture` のため）
+
 ## 9. Global Constraints（各計画の同名節にそのまま写す）
 
 - 最低 OS: macOS 26.0。`Package.swift` の platforms は `.macOS("26.0")`、`swift-tools-version: 6.2`、`swiftLanguageModes: [.v6]`。ツールチェーンは Swift 6.3（計画 00 と同じ）
