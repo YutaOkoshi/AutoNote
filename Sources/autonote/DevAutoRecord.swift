@@ -116,18 +116,21 @@ enum DevAutoRecord {
         guard let command = parts.first.map(String.init) else { return .continue }
         let argument = parts.count > 1 ? String(parts[1]).trimmingCharacters(in: .whitespaces) : nil
 
-        func ref(_ uid: String) async -> DeviceRef {
-            // The coordinator only reads the UID; the rest is for completeness when the device is still connected.
-            await monitor.connected().first(where: { $0.deviceUID == uid })?.deviceRef
-                ?? DeviceRef(name: uid, uid: uid, transport: DeviceTransport.unknown.rawValue)
+        /// The connected device's ref, or nil after printing an error line.
+        func ref(_ uid: String) async -> DeviceRef? {
+            if let device = await monitor.connected().first(where: { $0.deviceUID == uid }) { return device.deviceRef }
+            await out.error("unknown device uid: \(uid)")
+            return nil
         }
 
         switch (command, argument) {
         case ("yes", let uid?), ("no", let uid?), ("never", let uid?):
             let answer: RegisterAnswer = command == "yes" ? .yes : command == "no" ? .no : .never
-            await coordinator.handle(.registerDevice(await ref(uid), answer: answer))
+            guard let ref = await ref(uid) else { return .continue }
+            await coordinator.handle(.registerDevice(ref, answer: answer))
         case ("start", let uid?):
-            await coordinator.handle(.startNow(await ref(uid)))
+            guard let ref = await ref(uid) else { return .continue }
+            await coordinator.handle(.startNow(ref))
         case ("cancel", nil):
             await coordinator.cancelCountdown()
         case ("manual", nil):
@@ -256,21 +259,25 @@ struct ConsoleUserNotifier: UserNotifier {
 
             init(title: String, action: UserNoticeAction) {
                 self.title = title
+                (self.action, command) = Self.describe(action)
+            }
+
+            /// The action's case name and, for the device actions, the stdin line that performs it.
+            private static func describe(_ action: UserNoticeAction) -> (String, String?) {
                 switch action {
-                case .cancelCountdown:
-                    self.action = "cancelCountdown"; command = "cancel"
-                case .startNow(let ref):
-                    self.action = "startNow"; command = "start \(ref.uid)"
-                case .registerDevice(let ref, let answer):
-                    self.action = "registerDevice"
-                    switch answer {
-                    case .yes: command = "yes \(ref.uid)"
-                    case .no: command = "no \(ref.uid)"
-                    case .never: command = "never \(ref.uid)"
-                    }
-                default:
-                    // Only the device notices carry actions here; name the case for anything else.
-                    self.action = String(describing: action).prefix { $0 != "(" }.description; command = nil
+                case .cancelCountdown: ("cancelCountdown", "cancel")
+                case .startNow(let ref): ("startNow", "start \(ref.uid)")
+                case .registerDevice(let ref, .yes): ("registerDevice", "yes \(ref.uid)")
+                case .registerDevice(let ref, .no): ("registerDevice", "no \(ref.uid)")
+                case .registerDevice(let ref, .never): ("registerDevice", "never \(ref.uid)")
+                case .openMeeting: ("openMeeting", nil)
+                case .retry: ("retry", nil)
+                case .resolveOverwrite: ("resolveOverwrite", nil)
+                case .transcribeTooShort: ("transcribeTooShort", nil)
+                case .discardTooShort: ("discardTooShort", nil)
+                case .recoverInterrupted: ("recoverInterrupted", nil)
+                case .discardInterrupted: ("discardInterrupted", nil)
+                case .openPrivacySettings: ("openPrivacySettings", nil)
                 }
             }
         }
