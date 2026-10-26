@@ -1,3 +1,4 @@
+import AutoNoteCore
 import AutoNoteTestSupport
 import Foundation
 
@@ -14,8 +15,12 @@ enum DevCommands {
         case "import": return await DevImport.run(rest)
         case "auto-record": return await DevAutoRecord.run(rest)
         case "devices": return await DevDevices.run(rest)
+        case "engines": return await DevEngines.run(rest)
+        case "transcribe": return await DevTranscribe.run(rest)
+        case "models": return await DevModels.run(rest)
         default:
-            return usageError([renderFixtureUsage, DevRecord.usage, DevImport.usage, DevAutoRecord.usage, DevDevices.usage].joined(separator: "\n"))
+            return usageError([renderFixtureUsage, DevRecord.usage, DevImport.usage, DevAutoRecord.usage, DevDevices.usage,
+                               DevEngines.usage, DevTranscribe.usage, DevModels.usage].joined(separator: "\n"))
         }
     }
 
@@ -57,6 +62,15 @@ enum DevCommands {
         } catch {
             printError("error: \(error)")
             return 1
+        }
+    }
+
+    /// Parses `[--data <dir>]` (nothing else); without it, `AppPaths.resolve()`. nil on any other argument.
+    static func dataPaths(_ args: [String]) -> AppPaths? {
+        switch args.count {
+        case 0: return AppPaths.resolve()
+        case 2 where args[0] == "--data": return AppPaths(root: URL(filePath: args[1], directoryHint: .isDirectory))
+        default: return nil
         }
     }
 

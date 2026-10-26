@@ -2,7 +2,7 @@
 # AutoNote の E2E 動作確認。リポジトリの成果物が「実際に動く」ことを人の手なしで確かめる。
 #
 # 使い方: scripts/e2e-check.sh [--quick] [--verbose]
-#   --quick     時間のかかる項目（swift test / build-app / Spikes build）を飛ばす（SKIP と表示）
+#   --quick     時間のかかる項目（swift test / build-app / Spikes build / 04.3・04.4 の whisper）を飛ばす（SKIP と表示）
 #   --verbose   各コマンドの出力をそのまま見せる（既定は FAIL のときだけ末尾 20 行）
 # 環境変数（FAIL 検出の確認用。副作用なしで期待値だけを変える）:
 #   E2E_EXPECT_VERSION   autonote --version の期待値（既定: Sources/AutoNoteCore/AutoNoteVersion.swift の値）
@@ -519,6 +519,79 @@ check_dev_auto_record_quit() {
     pass "status idle の後 exit 0"
 }
 
+check_dev_engines() {
+    CURRENT="04.1 dev engines が機種とエンジン一覧の JSON を出す"
+    command -v jq >/dev/null 2>&1 || { skip "jq が無い"; return; }
+    cli_or_skip || return
+    # --data は空の作業ディレクトリ（利用者の設定・モデルに左右されないように）
+    run_timeout 30 "${AUTONOTE_CLI}" dev engines --data "${WORK}/engines-data"; local code=$?
+    [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
+    if jq -e '(.machine == "intel" or .machine == "appleSilicon") and (.live | length > 0) and .defaults.batch.model == "large-v3-turbo"' \
+        "${LAST_LOG}" >/dev/null 2>&1; then
+        pass "machine $(jq -r .machine "${LAST_LOG}")、resolved.live $(jq -r '.resolved.live.kind // "null"' "${LAST_LOG}")"
+    else
+        fail "machine / live / defaults.batch.model が期待と違う（または JSON でない）"
+    fi
+}
+
+# 日本語ボイス: scripts/make-sample-audio.sh と同じ選び方（JA_VOICE → Kyoko → say -v '?' の ja_JP の先頭）。無ければ空
+ja_voice() {
+    if [[ -n "${JA_VOICE:-}" ]]; then printf '%s' "${JA_VOICE}"; return; fi
+    if say -v '?' 2>/dev/null | grep -q '^Kyoko '; then printf 'Kyoko'; return; fi
+    say -v '?' 2>/dev/null | grep 'ja_JP' | head -1 | sed -E 's/ +ja_JP.*//; s/ *\(.*\)$//'
+}
+
+# dev transcribe の出力（LAST_LOG の JSON 行）から、本文のある確定の件数
+count_finals() { grep '^{' "${LAST_LOG}" | jq -s '[.[] | select(.final == true and (.text | length > 0))] | length' 2>/dev/null || echo 0; }
+
+check_dev_transcribe_dictation() {
+    CURRENT="04.2 dev transcribe dictation が say の短い WAV を文字にする"
+    command -v say >/dev/null 2>&1 || { skip "say が無い"; return; }
+    command -v jq >/dev/null 2>&1 || { skip "jq が無い"; return; }
+    local voice; voice="$(ja_voice)"
+    [[ -n "${voice}" ]] || { skip "日本語ボイスが無い"; return; }
+    cli_or_skip || return
+    run say -v "${voice}" --file-format=WAVE --data-format=LEI16@16000 -o "${WORK}/short.wav" "本日の定例を始めます。議題は三つです。" \
+        || { fail "say が失敗"; return; }
+    run_timeout 60 "${AUTONOTE_CLI}" dev transcribe "${WORK}/short.wav" --engine dictation; local code=$?
+    if [[ ${code} -eq 3 ]]; then skip "$(grep -m 1 '^unavailable:' "${LAST_LOG}")"; return; fi
+    if [[ ${code} -eq 124 ]]; then fail "60 秒以内に終わらない"; return; fi
+    [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
+    local finals; finals="$(count_finals)"
+    if [[ "${finals}" -ge 1 ]]; then pass "${voice}、確定 ${finals} 件"; else fail "本文のある確定が無い"; fi
+}
+
+# 04.3 / 04.4 共通: ggml-base で ja-5min.wav の先頭 10 秒を <engine> で文字起こしする
+dev_transcribe_whisper_head() {
+    local engine="$1"
+    [[ "${QUICK}" -eq 1 ]] && { skip "--quick"; return; }
+    command -v jq >/dev/null 2>&1 || { skip "jq が無い"; return; }
+    local model=tools/whisper.cpp/models/ggml-base.bin wav=tools/samples/ja-5min.wav
+    [[ -f "${wav}" ]] || { skip "${wav} が無い（scripts/make-sample-audio.sh）"; return; }
+    [[ -f "${model}" ]] || { skip "${model} が無い（scripts/setup-whisper.sh）"; return; }
+    cli_or_skip || return
+    run_timeout 180 "${AUTONOTE_CLI}" dev transcribe "${wav}" --engine "${engine}" --model-path "${model}" --max-seconds 10; local code=$?
+    if [[ ${code} -eq 3 ]]; then skip "$(grep -m 1 '^unavailable:' "${LAST_LOG}")"; return; fi
+    if [[ ${code} -eq 124 ]]; then fail "180 秒以内に終わらない"; return; fi
+    [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
+    local finals late
+    finals="$(count_finals)"
+    late="$(grep '^{' "${LAST_LOG}" | jq -s '[.[] | select(has("start") and .start >= 10.5)] | length' 2>/dev/null || echo 1)"
+    [[ "${finals}" -ge 1 ]] || { fail "本文のある確定が無い"; return; }
+    [[ "${late}" -eq 0 ]] || { fail "start ≥ 10.5 の発話が ${late} 件"; return; }
+    pass "確定 ${finals} 件、$(grep '"summary"' "${LAST_LOG}" | jq -r '"RTF \(.summary.rtf)"')"
+}
+
+check_dev_transcribe_whisper() {
+    CURRENT="04.3 dev transcribe whisper が base で先頭 10 秒を文字にする"
+    dev_transcribe_whisper_head whisper
+}
+
+check_dev_transcribe_whisper_live() {
+    CURRENT="04.4 dev transcribe whisper-live が base で先頭 10 秒を文字にする"
+    dev_transcribe_whisper_head whisper-live
+}
+
 # ---------------------------------------------------------------- 実行
 
 CHECKS=(
@@ -546,6 +619,10 @@ CHECKS=(
     check_dev_devices
     check_dev_devices_watch
     check_dev_auto_record_quit
+    check_dev_engines
+    check_dev_transcribe_dictation
+    check_dev_transcribe_whisper
+    check_dev_transcribe_whisper_live
 )
 
 ensure_whisper_xcframework   # 失敗しても続ける（swift test などの項目が FAIL を出す）
