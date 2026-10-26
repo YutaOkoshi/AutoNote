@@ -9,11 +9,11 @@ public enum PortableFile: String, CaseIterable, Sendable {
 }
 
 public enum PortableDefaults {
-    /// Plan 05 adds the `prompt` default; plan 03 defines the shape of `devices.json`.
+    /// Plan 05 adds the `prompt` default; `devices.json` holds `{"version": 1, "devices": [...]}` (plan 03).
     public static let standard: [PortableFile: Data] = [
         .dictionary: Data(DictionaryFile.defaultMarkdown.utf8),
         .frontmatter: Data(FrontmatterTemplate.defaultText.utf8),
-        .devices: Data("[]\n".utf8),
+        .devices: Data("{\n  \"devices\" : [\n\n  ],\n  \"version\" : 1\n}\n".utf8),
     ]
 }
 
