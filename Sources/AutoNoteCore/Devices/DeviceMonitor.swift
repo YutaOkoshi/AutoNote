@@ -27,14 +27,27 @@ public actor DeviceMonitor {
     private var loop: Task<Void, Never>?
     private var powerForwarder: Task<Void, Never>?
     private var subscribers: [UUID: AsyncStream<DeviceEvent>.Continuation] = [:]
+    /// Bumped by every `start()` and `stop()`, so inputs still in flight from an ended session are ignored.
+    private var session = 0
 
     public init(hardware: any AudioHardwareQuerying, power: any SleepWakeObserving, timer: any TimerScheduling,
                 wakeWindowSeconds: Double = 10) {
         self.hardware = hardware; self.power = power; self.timer = timer; self.wakeWindowSeconds = wakeWindowSeconds
     }
 
+    deinit {
+        observation?.cancel()
+        windowTimer?.cancel()
+        loop?.cancel()
+        powerForwarder?.cancel()
+        inputs?.finish()
+        subscribers.values.forEach { $0.finish() }
+    }
+
     /// Each subscriber first receives `.present(_, .launch)` for every connected candidate, then the shared live events.
     /// The first subscriber starts observing the hardware, which can throw; on failure nothing is left running.
+    /// A subscriber that joins inside a post-wake window can later see `.removed` for a device it was never told about
+    /// (a held removal) or a second `.present` (`.launch` then `.wake`). The intended use is one subscriber, the Coordinator.
     public func events() throws -> AsyncStream<DeviceEvent> {
         if observation == nil { try start() }
         let (stream, continuation) = AsyncStream<DeviceEvent>.makeStream()
@@ -51,6 +64,7 @@ public actor DeviceMonitor {
 
     /// Cancels the hardware observation and finishes every subscriber's stream. A later `events()` starts afresh.
     public func stop() {
+        session += 1
         observation?.cancel(); observation = nil
         inputs?.finish(); inputs = nil
         loop?.cancel(); loop = nil
@@ -72,15 +86,17 @@ public actor DeviceMonitor {
         powerForwarder = Task {
             for await event in powerEvents { continuation.yield(.power(event)) }
         }
+        session += 1
+        let token = session
         loop = Task { [weak self] in
-            for await input in stream { await self?.handle(input) }
+            for await input in stream { await self?.handle(input, session: token) }
         }
     }
 
     private func unsubscribe(_ id: UUID) { subscribers[id] = nil }
 
-    private func handle(_ input: Input) {
-        guard observation != nil else { return }
+    private func handle(_ input: Input, session token: Int) {
+        guard token == session, observation != nil else { return }
         switch input {
         case .hardwareChanged:
             let change = diff.update(with: hardware.snapshot())

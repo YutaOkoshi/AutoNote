@@ -32,10 +32,11 @@ public final class ManualTimerScheduler: TimerScheduling, @unchecked Sendable {
         return Timer(scheduler: self, id: id)
     }
 
+    /// Negative `seconds` count as 0.
     /// Runs every action due within `seconds`, in deadline order (ties in scheduling order), awaiting each one.
     /// Actions scheduled by a running action also run if they fall due before the target time.
     public func advance(by seconds: Double) async {
-        let target = lock.withLock { current + seconds }
+        let target = lock.withLock { current + max(0, seconds) }
         while let entry = popDue(by: target) { await entry.action() }
         lock.withLock { current = target }
     }
