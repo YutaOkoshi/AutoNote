@@ -2,21 +2,21 @@
   {
     "start": 3,
     "end": null,
-    "speaker": "unknown",
+    "speaker": "me",
     "text": "えーと、取り込んだ録音の確認です。",
     "is_final": true
   },
   {
     "start": 30,
     "end": null,
-    "speaker": "unknown",
+    "speaker": "me",
     "text": "um, this part is in English.",
     "is_final": true
   },
   {
     "start": 62,
     "end": null,
-    "speaker": "unknown",
+    "speaker": "me",
     "text": "以上です。",
     "is_final": true
   }
