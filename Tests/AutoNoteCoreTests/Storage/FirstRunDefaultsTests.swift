@@ -89,6 +89,21 @@ private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath:
     #expect(FirstRunDefaults.outputFolder(forInput: "/a/b ", paths: f.paths, isDataDirectoryOverridden: false, home: f.home) == "/a/b")
 }
 
+@Test func tildeExpandsToHome() throws {
+    let f = try Fixture()
+    let home = f.home.path(percentEncoded: false).replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+    #expect(FirstRunDefaults.outputFolder(forInput: "~/Documents/AutoNote", paths: f.paths, isDataDirectoryOverridden: false, home: f.home) == f.defaultPath)
+    #expect(FirstRunDefaults.outputFolder(forInput: "~/Documents/AutoNote/", paths: f.paths, isDataDirectoryOverridden: false, home: f.home) == f.defaultPath)
+    #expect(f.defaultPath == home + "/Documents/AutoNote")
+    #expect(FirstRunDefaults.outputFolder(forInput: "~", paths: f.paths, isDataDirectoryOverridden: false, home: f.home) == home)
+}
+
+@Test func trailingSlashIsStripped() throws {
+    let f = try Fixture()
+    #expect(FirstRunDefaults.outputFolder(forInput: "/a/b/", paths: f.paths, isDataDirectoryOverridden: false, home: f.home) == "/a/b")
+    #expect(FirstRunDefaults.outputFolder(forInput: "/", paths: f.paths, isDataDirectoryOverridden: false, home: f.home) == "/")
+}
+
 @Test func modelToDownload() {
     #expect(FirstRunDefaults.modelToDownload(installed: [], isDataDirectoryOverridden: false) == "base")
     #expect(FirstRunDefaults.modelToDownload(installed: ["small"], isDataDirectoryOverridden: false) == nil)

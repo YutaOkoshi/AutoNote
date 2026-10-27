@@ -30,7 +30,16 @@ public enum FirstRunDefaults {
         if trimmed.isEmpty {
             return pathString(defaultOutputFolder(paths: paths, isDataDirectoryOverridden: isDataDirectoryOverridden, home: home))
         }
-        return trimmed
+        // `~` and `~/…` mean the home folder (the UI shows the default that way); a trailing `/` is dropped so
+        // the result compares equal to the default path.
+        var path = trimmed
+        if path == "~" {
+            path = pathString(home)
+        } else if path.hasPrefix("~/") {
+            path = pathString(home) + "/" + path.dropFirst(2)
+        }
+        while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        return path
     }
 
     public static func modelToDownload(installed: [String], isDataDirectoryOverridden: Bool) -> String? {
