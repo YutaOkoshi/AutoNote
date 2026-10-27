@@ -157,4 +157,87 @@ import Testing
         #expect(try await f.manifests.load(f.manifest.id).status == .failed)
         #expect(!FileManager.default.fileExists(atPath: f.paths.transcriptFile(f.manifest.id, .final).path))
     }
+    // MARK: - No batch engine installed
+
+    private func noEngineStage() -> TranscribeStage {
+        TranscribeStage(resolveRunner: { _ in nil }, services: SharedVaultServices())
+    }
+
+    @Test func noEngineUsesLiveAsFinal() async throws {
+        let f = try await setUp()
+        try writeLive(f, [u(1, .me, "はじめます"), u(3, .other, "よろしくお願いします")])
+        var j = job(f)
+        try await noEngineStage().run(&j, context: context(f))
+        let label = Transcript.liveSubstituteEngineLabel
+        #expect(label == "Apple 音声入力（リアルタイム版）")
+        #expect(j.transcriptEngine == label)
+        #expect(j.lastError == nil)
+        #expect(try await f.manifests.load(f.manifest.id).status == .transcribed)
+        let raw = try read(f.paths.transcriptFile(f.manifest.id, .raw))
+        #expect(raw.engine == label)
+        let final = try read(f.paths.transcriptFile(f.manifest.id, .final))
+        #expect(final.engine == label)
+        #expect(final.utterances.count == 2)
+    }
+
+    @Test func noEngineAndEmptyLiveIsNoSpeech() async throws {
+        let f = try await setUp()
+        try writeLive(f, [])
+        var j = job(f)
+        await #expect(throws: StageError.failed(reason: "no_speech")) {
+            try await noEngineStage().run(&j, context: context(f))
+        }
+        #expect(try await f.manifests.load(f.manifest.id).status == .failed)
+        #expect(!FileManager.default.fileExists(atPath: f.paths.transcriptFile(f.manifest.id, .final).path))
+    }
+
+    @Test func noEngineAndNoLiveFileIsNoSpeech() async throws {
+        let f = try await setUp()
+        var j = job(f)
+        await #expect(throws: StageError.failed(reason: "no_speech")) {
+            try await noEngineStage().run(&j, context: context(f))
+        }
+        #expect(try await f.manifests.load(f.manifest.id).status == .failed)
+    }
+
+    @Test func markersOnlyIsNoSpeech() async throws {
+        let f = try await setUp()
+        let markers = [
+            Utterance(start: TimelineTime(seconds: 1), speaker: .unknown,
+                      text: LiveFeed.bookmarkMarkerText(nil), isFinal: true),
+            Utterance(start: TimelineTime(seconds: 2), speaker: .unknown,
+                      text: LiveFeed.bookmarkMarkerText("決定事項"), isFinal: true),
+            Utterance(start: TimelineTime(seconds: 3), speaker: .unknown,
+                      text: LiveFeed.pauseMarkerText, isFinal: true),
+        ]
+        #expect(markers.allSatisfy(LiveFeed.isMarker))
+        try writeLive(f, markers)
+        var j = job(f)
+        await #expect(throws: StageError.failed(reason: "no_speech")) {
+            try await noEngineStage().run(&j, context: context(f))
+        }
+        #expect(try await f.manifests.load(f.manifest.id).status == .failed)
+    }
+
+    @Test func resolvesOnEveryRun() async throws {
+        let f = try await setUp()
+        try writeLive(f, [u(1, .me, "はじめます")])
+        let runner = FinalTranscriptionRunner(
+            transcriber: FakeBatchTranscriber(results: ["mic-0.wav": [u(1, .unknown, "はじめます")]]),
+            engineName: engine, paths: f.paths, gate: BatchGate())
+        let languages = Mutex<[Language]>([])
+        let stage = TranscribeStage(resolveRunner: { language in
+            let count = languages.withLock { $0.append(language); return $0.count }
+            return count == 1 ? nil : runner
+        }, services: SharedVaultServices())
+
+        var first = job(f)
+        try await stage.run(&first, context: context(f))
+        #expect(first.transcriptEngine == Transcript.liveSubstituteEngineLabel)
+
+        var second = job(f)
+        try await stage.run(&second, context: context(f))
+        #expect(second.transcriptEngine == "whisper.cpp large-v3-turbo")
+        #expect(languages.withLock { $0 } == [.ja, .ja])
+    }
 }

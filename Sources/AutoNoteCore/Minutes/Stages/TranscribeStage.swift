@@ -2,22 +2,48 @@ import Foundation
 import os
 
 /// Runs plan 04's final transcription; when it fails, falls back to the live transcript (spec §6.4).
+/// The batch engine is resolved per job; when none is installed the live transcript becomes the final one,
+/// or the job fails with `no_speech` when the live transcript holds no utterances.
 /// Re-running the final pass later is plan 06's `rerun(id, from: "transcribe")`.
 public struct TranscribeStage: QueueStage {
     private static let logger = Logger(subsystem: "com.yutaokoshi.autonote", category: "TranscribeStage")
 
     public let name = StageName.transcribe
-    private let runner: FinalTranscriptionRunner
+    private let resolveRunner: @Sendable (Language) async -> FinalTranscriptionRunner?
     private let services: SharedVaultServices
 
+    /// `resolveRunner` is called at the start of every run with the meeting's language; `nil` means no batch
+    /// engine is available, and the live transcript stands in as the final one.
+    public init(resolveRunner: @escaping @Sendable (Language) async -> FinalTranscriptionRunner?,
+                services: SharedVaultServices = .standard) {
+        self.resolveRunner = resolveRunner; self.services = services
+    }
+
     public init(runner: FinalTranscriptionRunner, services: SharedVaultServices = .standard) {
-        self.runner = runner; self.services = services
+        self.init(resolveRunner: { _ in runner }, services: services)
     }
 
     public func run(_ job: inout Job, context: StageContext) async throws {
         let id = job.meeting
         let manifest = try await context.manifests.update(id) { $0.status = .transcribing }
         let dictionary = try await loadDictionary(context)
+        let resolved = await resolveRunner(manifest.language)
+
+        guard let runner = resolved else {
+            guard let live = readLive(id, context.paths), live.utterances.contains(where: { !LiveFeed.isMarker($0) })
+            else {
+                Self.logger.notice("\(id.rawValue, privacy: .public): no batch engine and no live speech")
+                try await context.manifests.update(id) { $0.status = .failed }
+                throw StageError.failed(reason: "no_speech")
+            }
+            Self.logger.notice("\(id.rawValue, privacy: .public): no batch engine, using the live transcript as final")
+            let engine = Transcript.liveSubstituteEngineLabel
+            try writeFallback(live, engine: engine, dictionary: dictionary,
+                              fillerRemoval: context.settings.fillerRemoval, id: id, paths: context.paths)
+            job.transcriptEngine = engine
+            try await context.manifests.update(id) { $0.status = .transcribed }
+            return
+        }
 
         let engine: String
         do {

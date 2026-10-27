@@ -205,6 +205,12 @@ import Testing
         #expect(UpdateIndexStage().name == "update_index")
     }
 
+    @Test func standardStagesAcceptResolver() {
+        let stages = PostProcessingPipeline.standardStages(resolveRunner: { _ in nil })
+        #expect(stages.map(\.name) == [StageName.transcribe, StageName.summarize, StageName.writeVault,
+                                         StageName.updateIndex])
+    }
+
     @Test func acceptShortRecordingEnqueues() async throws {
         let f = try await setUp(status: .tooShort)
         let queue = f.queue(summarizer: Self.succeeding)

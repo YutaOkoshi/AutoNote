@@ -25,6 +25,10 @@ public struct Transcript: Codable, Equatable, Hashable, Sendable {
     public static func fallbackEngineLabel(live: String) -> String {
         "\(live)（確定版の失敗によりリアルタイム版で代用）"
     }
+
+    /// `transcript_engine` label used when no batch engine is installed and the live transcript becomes the
+    /// final one. With no engine at all the live side can only be Apple's dictation (whisper live needs a model too).
+    public static let liveSubstituteEngineLabel = "Apple 音声入力（リアルタイム版）"
 }
 
 public struct Bookmark: Codable, Equatable, Hashable, Sendable {
