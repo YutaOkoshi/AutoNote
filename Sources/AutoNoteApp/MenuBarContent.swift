@@ -169,28 +169,3 @@ private struct DevMenu: View {
         }
     }
 }
-
-// MARK: - Windows
-
-/// Launch item 4 (§11.6): shown once, until OK.
-struct ConsentNoticeView: View {
-    let shell: AppShell
-    @Environment(\.dismissWindow) private var dismissWindow
-
-    var body: some View {
-        VStack(spacing: 16) {
-            Text("録音は相手の同意を得て行ってください")
-                .font(.headline)
-                .multilineTextAlignment(.center)
-            Button("OK") {
-                shell.consentAccepted()
-                dismissWindow(id: AppShell.consentWindowID)
-            }
-            .keyboardShortcut(.defaultAction)
-            .accessibilityLabel("OK")
-            .accessibilityIdentifier("consent.ok")
-        }
-        .padding(24)
-        .frame(minWidth: 320)
-    }
-}

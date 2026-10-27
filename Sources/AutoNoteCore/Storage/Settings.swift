@@ -40,9 +40,13 @@ public struct Settings: Codable, Equatable, Sendable {
     public var startOnModelMatch: Bool = false
     public var audioRetentionDays: Int = 30
     public var shortcuts: Shortcuts = Shortcuts()
-    public var consentNoticeShown: Bool = false
+    /// True once the first launch has run (output folder default, main window opened). JSON `first_run_completed`.
+    public var firstRunCompleted: Bool = false
 
     public init() {}
+
+    /// Read-only legacy key (`consent_notice_shown` after the snake-case conversion); never encoded.
+    private enum LegacyKeys: String, CodingKey { case consentNoticeShown }
 
     private static func clamp(_ v: Int, _ lo: Int, _ hi: Int) -> Int { min(max(v, lo), hi) }
 
@@ -65,6 +69,10 @@ public struct Settings: Codable, Equatable, Sendable {
         startOnModelMatch = try c.decodeIfPresent(Bool.self, forKey: .startOnModelMatch) ?? startOnModelMatch
         audioRetentionDays = try c.decodeIfPresent(Int.self, forKey: .audioRetentionDays) ?? audioRetentionDays
         shortcuts = try c.decodeIfPresent(Shortcuts.self, forKey: .shortcuts) ?? shortcuts
-        consentNoticeShown = try c.decodeIfPresent(Bool.self, forKey: .consentNoticeShown) ?? consentNoticeShown
+        // Backward compatibility: settings written while the consent notice existed carry `consent_notice_shown`.
+        // Either key being true means the first run is done; only `first_run_completed` is written.
+        let legacy = try decoder.container(keyedBy: LegacyKeys.self)
+        let legacyShown = try legacy.decodeIfPresent(Bool.self, forKey: .consentNoticeShown) ?? false
+        firstRunCompleted = (try c.decodeIfPresent(Bool.self, forKey: .firstRunCompleted) ?? false) || legacyShown
     }
 }

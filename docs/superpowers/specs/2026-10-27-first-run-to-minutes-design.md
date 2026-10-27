@@ -8,7 +8,7 @@ AutoNote を初めて入れた人が、**説明を読まずに、録音を止め
 
 ## ゴール
 
-- 初回起動 → 同意 → 録音 → 停止 → 議事録が自動で開く、を利用者の設定なしで通す（成功基準: 被験者テスト課題 3 を 2 名とも完遂）。
+- 初回起動 → 録音 → 停止 → 議事録が自動で開く、を利用者の設定なしで通す（成功基準: 被験者テスト課題 3 を 2 名とも完遂）。
 - 準備（保存先・文字起こしモデル・Claude Code）の状態と、足りないときの次の一手が、窓の中に見える。
 - 録音中に「音を拾えている」ことが見える。
 - 失敗は「何が・なぜ・次に何をするか」を同じ場所に出す。内部名は出さない。
@@ -28,7 +28,7 @@ AutoNote を初めて入れた人が、**説明を読まずに、録音を止め
 
 ## 決めたこと（利用者の決定）
 
-1. **同意 OK のあと**: メインウィンドウを開く。会議 0 件の空状態に、入口の案内・準備の状態・「録音を開始」ボタンを載せる（モックアップ B 案）。
+1. **初回起動**: メインウィンドウを開く（同意ウィンドウは出さない。利用者の決定 2026-10-27）。会議 0 件の空状態に、入口の案内・準備の状態・「録音を開始」ボタンを載せる（モックアップ B 案）。
 2. **確定版の文字起こし**: 初回起動で whisper `base` を裏でダウンロードする。終わるまでは Apple 音声入力（ライブ）の文字起こしで議事録を作る。
 3. **要約器**: Claude Code は前提条件。無ければ「入れ方を見る」「もう一度探す」の導線だけ出す。
 4. **保存先**: 初回に `~/Documents/AutoNote` を自動で作ってそこに書く。Obsidian の Vault にしたい人は後から設定で変える。
@@ -37,7 +37,7 @@ AutoNote を初めて入れた人が、**説明を読まずに、録音を止め
 ## 画面（決めた形）
 
 ### 0. 同意ウィンドウ
-今のまま（「録音は相手の同意を得て行ってください」＋ OK）。OK で `consentNoticeShown = true` を保存し、**メインウィンドウを開く**（`AppShell.open(mainWindowID)`）。その後のマイク許可要求は今の順序（起動項目 5）のまま。
+同意ウィンドウは出さない（利用者の決定 2026-10-27。初回起動はメインウィンドウを直接開く）。起動項目 4 は「`firstRunCompleted == false`（JSON `first_run_completed`。旧キー `consent_notice_shown` も後方互換で読み、どちらかが true なら true）なら `AppShell.open(mainWindowID)` で開き、`firstRunCompleted = true` を保存する」。2 回目以降はウィンドウを自動では開かない。そのあとのマイク許可要求（起動項目 5）は未決定なら毎回。
 
 ### 1. メインウィンドウ: ツールバー
 - 左ペイン上のサイドバー切替はそのまま。右の取り込みアイコンの**左**に主ボタンを置く:
@@ -144,7 +144,7 @@ public struct Readiness: Sendable, Equatable {
 - `AppPorts` に `readiness: any ReadinessPort`（`current()`, `updates()`, `redetectClaude()`, `retryModelDownload()`, `installGuide()` = 公式インストール手順の URL を `opener` で開く）。
 
 ### 既定値の確定（起動項目に追加）
-`AppDelegate` の起動順で、`AppEnvironment.make` の前に `FirstRunDefaults.apply(settings:paths:isDataDirectoryOverridden:)`:
+`AppDelegate` の起動順で、`AppEnvironment.make` の前に**毎回の起動で** `FirstRunDefaults.apply(settings:paths:isDataDirectoryOverridden:)`（初回は書類フォルダの許可ダイアログがここで出てよい）。起動の順序は 既定値（項目 0）→ サービス構築（項目 1）→ 初回ならメインウィンドウ（項目 4）→ マイク許可要求（項目 5）:
 - `outputFolder == nil || ""` → 既定パスを作って保存。既定パス: 通常は `~/Documents/AutoNote`、`AUTONOTE_DATA_DIR` 配下で動いているときは `<data dir>/vault`（E2E・開発で `~/Documents` を触らない。X22 と同じ考え方）。作成に失敗したら nil のままにして、準備カードが「保存先を作れませんでした」［保存先を変える］を出す。
 - whisper: `ModelManager.installed()` に batch で使えるモデルが 1 つも無く、`AUTONOTE_DATA_DIR` 配下でなければ `download("base")` を開始（二重起動は `ModelManager` が畳む）。進捗は `Readiness.model` へ。失敗しても起動は続く。`AUTONOTE_DATA_DIR` 配下では開始しない（E2E は `Readiness.model == .none` を期待値にする）。
 - claude: 既存の `ClaudeLocator.fillDefaultPath` をそのまま使う。`Readiness.claude` は `claudePath` が実行可能ファイルかで判定。
@@ -188,7 +188,7 @@ public struct FailureExplanation: Sendable, Equatable {
 
 - 単体: `Readiness` の合成、`FirstRunDefaults`（nil → 既定パス、override 時は data dir 配下、作成失敗で nil）、`FailureExplanation` 全行、`TranscribeStage` の「エンジンなし→ライブ代用、発話 0→no_speech」、`MenuBarPresentation` の新しい項目と表記、短い録音の秒表示。
 - E2E（`scripts/e2e-check.sh` に追加）: 07.1 起動後に `<DATA>/vault` と `settings.json` の `output_folder`、07.2 `Readiness.model == .none`（override 下でダウンロードしない）、07.3 メニューに「保存先が見つかりません」が**出ない**（既定パスがあるため）、07.4 `autonote status --json` の失敗 `message` が従来形式のまま（CLI 互換）。
-- 実機（Lead が AX ツールで）: 新しいデータ領域で 同意 → 録音 90 秒（音声あり: `say` で読み上げ）→ 停止 → 議事録が自動で開く。Claude Code のパスを空にした状態で失敗帯の文言。
+- 実機（Lead が AX ツールで）: 新しいデータ領域で 起動（メインウィンドウが開く）→ 録音 90 秒（音声あり: `say` で読み上げ）→ 停止 → 議事録が自動で開く。Claude Code のパスを空にした状態で失敗帯の文言。
 - 被験者テスト: `docs/superpowers/research/2026-10-27-ux-audit/zero-context-brief.md` を 2 名で再実行し、課題 3 を 2 名とも完遂。
 
 ## 作る人に任せること

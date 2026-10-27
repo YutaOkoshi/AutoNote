@@ -18,14 +18,6 @@ struct AutoNoteApp: App {
         }
         .defaultLaunchBehavior(.suppressed)
 
-        // Launch item 4 (§11.6).
-        Window("AutoNote", id: AppShell.consentWindowID) {
-            ConsentNoticeView(shell: appDelegate.shell)
-        }
-        .windowResizability(.contentSize)
-        .defaultLaunchBehavior(.suppressed)
-        .restorationBehavior(.disabled)
-
         // Plan 06 Task 15. Opened by 設定… (activate first, then `openSettings`) and by the main window's band.
         SwiftUI.Settings {
             SettingsView(shell: appDelegate.shell)

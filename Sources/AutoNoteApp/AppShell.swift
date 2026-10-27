@@ -12,13 +12,9 @@ private let logger = Logger(subsystem: AppIdentity.bundleID, category: "AppShell
 @MainActor @Observable
 final class AppShell {
     static let mainWindowID = "main"
-    static let consentWindowID = "consent"
 
     /// Nil until `AppEnvironment.make` finishes.
     var env: AppEnvironment?
-
-    /// Called by the consent window's OK (launch item 4 → item 5).
-    @ObservationIgnored var consentAccepted: @MainActor () -> Void = {}
 
     /// True while the main window is on screen (`MainWindow`'s `onAppear` / `onDisappear`). Minutes that finish while
     /// it is open are selected there; the window is never opened or brought forward for them.

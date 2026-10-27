@@ -35,3 +35,23 @@ import AutoNoteTestSupport
     #expect(old.audioRetentionDays == 7 && new.audioRetentionDays == 30)
     #expect(try await store.load() == new)
 }
+
+@Test func firstRunCompletedReadsTheLegacyKeyAndWritesOnlyTheNewOne() async throws {
+    // 旧キー consent_notice_shown（同意画面があった頃）を後方互換で読む。どちらかが true なら true。書き出しは新キーのみ
+    let p = AppPaths(root: try TemporaryDirectory.make()); try p.createBaseDirectories()
+    let store = SettingsStore(paths: p)
+    #expect(try await store.load().firstRunCompleted == false)
+    for (json, expected) in [(#"{"consent_notice_shown":true}"#, true), (#"{"first_run_completed":true}"#, true),
+                             (#"{"consent_notice_shown":false,"first_run_completed":true}"#, true),
+                             (#"{"consent_notice_shown":true,"first_run_completed":false}"#, true),
+                             (#"{"consent_notice_shown":false}"#, false)] {
+        try Data(json.utf8).write(to: p.settingsFile)
+        #expect(try await store.load().firstRunCompleted == expected, "\(json)")
+    }
+    try Data(#"{"consent_notice_shown":true}"#.utf8).write(to: p.settingsFile)
+    _ = try await store.update { $0.audioRetentionDays = 7 }
+    let written = try String(contentsOf: p.settingsFile, encoding: .utf8)
+    #expect(written.contains("\"first_run_completed\""))
+    #expect(!written.contains("consent_notice_shown"))
+    #expect(try await store.load().firstRunCompleted)
+}

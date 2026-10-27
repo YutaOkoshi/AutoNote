@@ -229,10 +229,10 @@ check_app_launch() {
     [[ -x "${bin}" ]] || { skip "build/AutoNote.app が無い"; return; }
     have_gui || { skip "GUI が無い環境（CI か WindowServer なし）"; return; }
     # 利用者の実データを使わない: 使い捨てのデータ領域に設定・Automation・フィクスチャの会議を置いて起動する。
-    # launch_at_login=false と consent_notice_shown=true で、ログイン項目の登録や初回の案内を出さない
+    # launch_at_login=false と first_run_completed=true で、ログイン項目の登録や初回のメインウィンドウを出さない
     local fix="${ROOT}/Tests/Fixtures/meetings/${E2E_MEETING_ID}"
     mkdir -p "${DATA}/recordings/${E2E_MEETING_ID}" "${DATA}/transcripts/${E2E_MEETING_ID}"
-    printf '{"launch_at_login": false, "consent_notice_shown": true}\n' >"${DATA}/settings.json"
+    printf '{"launch_at_login": false, "first_run_completed": true}\n' >"${DATA}/settings.json"
     ( umask 077; cat >"${DATA}/automations.json" <<'JSON'
 [{"name": "e2e-echo", "enabled": true, "on": "minutes_generated", "command": "echo \"$AUTONOTE_EVENT $AUTONOTE_MEETING_ID\" > \"$AUTONOTE_E2E_OUT\"", "timeout_sec": 30}]
 JSON
