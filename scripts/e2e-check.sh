@@ -307,6 +307,35 @@ check_first_run_no_download() {
     pass "ggml-* 0 個"
 }
 
+# 07.3: メニューを開いて項目名を読む。既定の保存先があるので「保存先が見つかりません」は出ない
+check_menu_no_folder_warning() {
+    CURRENT="07.3 メニューに「保存先が見つかりません」が出ない"
+    app_or_skip || return
+    local proc="${E2E_MENUBAR_PROCESS:-AutoNoteApp}" idx="${E2E_MENUBAR_INDEX:-2}"
+    local names code
+    run_timeout 10 osascript \
+        -e "tell application \"System Events\" to tell process \"${proc}\" to click menu bar item 1 of menu bar ${idx}" \
+        -e "delay 0.5" \
+        -e "tell application \"System Events\" to tell process \"${proc}\" to set n to name of every menu item of menu 1 of menu bar item 1 of menu bar ${idx}" \
+        -e "tell application \"System Events\" to key code 53" \
+        -e "return n"
+    code=$?
+    if [[ ${code} -ne 0 ]]; then
+        # 開いたままにしない
+        osascript -e 'tell application "System Events" to key code 53' >/dev/null 2>&1
+        if grep -Eqi 'assistive|補助アクセス|-25211|-1743|Not authorized to send Apple events' "${LAST_LOG}"; then
+            skip "アクセシビリティ（または Apple Events）の権限が無い: $(tail -n 1 "${LAST_LOG}")"
+        else
+            fail "osascript が失敗（exit ${code}）"
+        fi
+        return
+    fi
+    names="$(cat "${LAST_LOG}")"
+    [[ "${names}" == *録音開始* ]] || { fail "メニュー項目に「録音開始」が無い"; return; }
+    [[ "${names}" != *保存先が見つかりません* ]] || { fail "メニュー項目に「保存先が見つかりません」がある"; return; }
+    pass "「録音開始」あり、「保存先が見つかりません」なし"
+}
+
 # 06.3〜06.6 の前提: 項目 7 で起動したアプリが生きていること。生きていなければ skip して 1 を返す
 app_or_skip() {
     if [[ -n "${APP_PID}" ]] && kill -0 "${APP_PID}" 2>/dev/null; then return 0; fi
@@ -773,6 +802,7 @@ CHECKS=(
     check_app_launch
     check_first_run_output_folder
     check_first_run_no_download
+    check_menu_no_folder_warning
     check_status_over_socket
     check_failure_message_compat
     check_bookmark_not_recording

@@ -3,7 +3,7 @@ import AutoNoteCore
 import ServiceManagement
 import SwiftUI
 
-/// 一般: output folder, launch at login, `claude`, summarizer, CLI install line, what leaves the Mac.
+/// 一般: 保存先 (the output folder), launch at login, `claude`, summarizer, CLI install line, what leaves the Mac.
 struct GeneralTab: View {
     let env: AppEnvironment
 
@@ -29,12 +29,21 @@ struct GeneralTab: View {
         return "sudo mkdir -p /usr/local/bin && sudo ln -sf \"\(cli)\" /usr/local/bin/autonote"
     }
 
+    /// Where minutes go when the field is left empty (`FirstRunDefaults.defaultOutputFolder`), as the path string
+    /// `outputFolder(forInput:)` saves (no trailing slash).
+    private var defaultFolder: String {
+        FirstRunDefaults.outputFolder(
+            forInput: "", paths: env.paths, isDataDirectoryOverridden: env.isDataDirectoryOverridden)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Form {
-                Section("出力フォルダ") {
+                Section("保存先") {
                     HStack {
-                        TextField("出力フォルダ", text: $outputFolder, prompt: Text("未設定"))
+                        TextField(
+                            "保存先", text: $outputFolder,
+                            prompt: Text(ReadinessPresentation.abbreviate(defaultFolder, home: NSHomeDirectory())))
                             .labelsHidden()
                         Button("選ぶ…") { pickFolder() }
                     }
@@ -111,8 +120,21 @@ struct GeneralTab: View {
     }
 
     private func save() {
-        let folder = Self.nilIfBlank(outputFolder), path = Self.nilIfBlank(claudePath), model = Self.nilIfBlank(claudeModel)
+        // Empty means the default folder, never nil; the default is created here so saving it never leaves a
+        // 保存先 that does not exist.
+        let folder = FirstRunDefaults.outputFolder(
+            forInput: outputFolder, paths: env.paths, isDataDirectoryOverridden: env.isDataDirectoryOverridden)
+        let path = Self.nilIfBlank(claudePath), model = Self.nilIfBlank(claudeModel)
         let login = launchAtLogin, kind = summarizerKind
+        if folder == defaultFolder {
+            do {
+                try FileManager.default.createDirectory(
+                    at: URL(filePath: folder, directoryHint: .isDirectory), withIntermediateDirectories: true)
+            } catch {
+                saveState = .failed("保存先を作れませんでした")
+                return
+            }
+        }
         Task {
             do {
                 let (saved, result) = try await SettingsSaving.save(env) {

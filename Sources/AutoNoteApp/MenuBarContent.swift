@@ -40,7 +40,12 @@ struct MenuBarContent: View {
 
     var body: some View {
         if let model = shell.env?.model {
-            ForEach(Array(model.menuBar(now: Date()).items.enumerated()), id: \.offset) { _, item in
+            let items = model.menuBar(now: Date()).items
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                // One divider before the first ⚠ item of a run.
+                if case .readinessIssue = item, index == 0 || !Self.isReadinessIssue(items[index - 1]) {
+                    Divider()
+                }
                 row(item, model: model)
             }
         } else {
@@ -56,14 +61,20 @@ struct MenuBarContent: View {
         switch item {
         case .status(let line):
             Text(line)
-        case .startRecording:
+        case .startRecording(let shortcut):
             Button("録音開始") { run(model, .start) }
-        case .stop:
+                .keyboardShortcut(shortcut.flatMap { KeyboardShortcut($0) })
+        case .stop(let shortcut):
             Button("停止") { run(model, .stop) }
-        case .pause:
+                .keyboardShortcut(shortcut.flatMap { KeyboardShortcut($0) })
+        case .pause(let shortcut):
             Button("一時停止") { run(model, .pause) }
+                .keyboardShortcut(shortcut.flatMap { KeyboardShortcut($0) })
+        case .readinessIssue(.outputFolder, let title):
+            Button(title) { shell.showSettings(.general, using: openSettings) }
         case .readinessIssue(_, let title):
-            Text(title)
+            // claude (and model, which the menu never lists): the window's readiness card or failure band has the fixes.
+            Button(title) { shell.open(AppShell.mainWindowID) }
         case .resume:
             Button("再開") { run(model, .resume) }
         case .bookmark:
@@ -84,13 +95,10 @@ struct MenuBarContent: View {
             Divider()
             Button("ウィンドウを開く") { shell.open(AppShell.mainWindowID) }
         case .openLatestMinutes(let enabled):
-            Button("最新の議事録を開く") { run(model, .openLatestMinutes) }
+            Button(enabled ? "最新の議事録を開く" : "最新の議事録を開く（まだありません）") { run(model, .openLatestMinutes) }
                 .disabled(!enabled)
         case .settings:
-            Button("設定…") {
-                NSApp.activate(ignoringOtherApps: true)
-                openSettings()
-            }
+            Button("設定…") { shell.showSettings(.general, using: openSettings) }
             .keyboardShortcut(",")
             Divider()
             DevMenu()
@@ -103,6 +111,24 @@ struct MenuBarContent: View {
 
     private func run(_ model: AppModel, _ action: UserAction) {
         Task { await model.perform(action) }
+    }
+
+    private static func isReadinessIssue(_ item: MenuItem) -> Bool {
+        if case .readinessIssue = item { true } else { false }
+    }
+}
+
+extension KeyboardShortcut {
+    /// The menu's hint for a recording hot key. Only a single-character key name maps to a `KeyEquivalent`; F keys and
+    /// other named keys give nil, so the item shows no hint.
+    init?(_ combo: KeyCombo) {
+        guard combo.keyName.count == 1, let ch = combo.keyName.first else { return nil }
+        var mods: EventModifiers = []
+        if combo.modifiers & KeyCombo.controlKey != 0 { mods.insert(.control) }
+        if combo.modifiers & KeyCombo.optionKey != 0 { mods.insert(.option) }
+        if combo.modifiers & KeyCombo.shiftKey != 0 { mods.insert(.shift) }
+        if combo.modifiers & KeyCombo.cmdKey != 0 { mods.insert(.command) }
+        self.init(KeyEquivalent(ch), modifiers: mods)
     }
 }
 

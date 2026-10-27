@@ -10,27 +10,35 @@ enum SettingsTab: Hashable {
 /// The settings window (plan 06 Task 15): eight tabs. Each tab loads what it shows when it appears and writes it
 /// with its own 「保存」.
 struct SettingsView: View {
-    let shell: AppShell
+    @Bindable var shell: AppShell
 
     var body: some View {
         if let env = shell.env {
-            TabView {
+            TabView(selection: $shell.settingsTab) {
                 GeneralTab(env: env)
                     .tabItem { Label("一般", systemImage: "gearshape") }
+                    .tag(SettingsTab.general)
                 DevicesTab(env: env)
                     .tabItem { Label("機材", systemImage: "headphones") }
+                    .tag(SettingsTab.devices)
                 TranscriptionTab(env: env)
                     .tabItem { Label("文字起こし", systemImage: "text.bubble") }
+                    .tag(SettingsTab.transcription)
                 DictionaryTab(env: env)
                     .tabItem { Label("辞書", systemImage: "character.book.closed") }
+                    .tag(SettingsTab.dictionary)
                 MinutesTab(env: env)
                     .tabItem { Label("議事録", systemImage: "doc.text") }
+                    .tag(SettingsTab.minutes)
                 AutomationsTab(env: env)
                     .tabItem { Label("Automations", systemImage: "gearshape.2") }
+                    .tag(SettingsTab.automations)
                 RetentionTab(env: env)
                     .tabItem { Label("保持", systemImage: "clock.arrow.circlepath") }
+                    .tag(SettingsTab.retention)
                 ShortcutsTab(env: env)
                     .tabItem { Label("ショートカット", systemImage: "keyboard") }
+                    .tag(SettingsTab.shortcuts)
             }
             .frame(minWidth: 700, idealWidth: 720, minHeight: 560, idealHeight: 620)
         } else {
