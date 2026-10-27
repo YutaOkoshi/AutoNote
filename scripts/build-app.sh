@@ -3,6 +3,8 @@
 # 使い方: scripts/build-app.sh [debug|release]   （既定は debug）
 #   AUTONOTE_CODESIGN_IDENTITY  署名に使う identity（既定は scripts/config.sh の AUTONOTE_CERT_NAME = 「AutoNote Dev」）。
 #                               CI では `-`（アドホック署名）を渡す。指定したときは証明書を作らない（管理者認証が要らない）
+#   AUTONOTE_BUILD_ARCHS        空白区切りのアーキテクチャ（例 "arm64 x86_64"）。指定するとそれぞれに --arch を付けて
+#                               ユニバーサルにビルドする（成果物は .build/apple/Products/<構成>）。未設定ならホストのみ
 set -euo pipefail
 
 CONF="${1:-debug}"
@@ -31,9 +33,17 @@ if [[ ! -f "${ROOT}/tools/whisper.xcframework/Info.plist" ]]; then
     "${ROOT}/scripts/build-whisper-xcframework.sh"
 fi
 
-swift build -c "${CONF}" --product AutoNoteApp
-swift build -c "${CONF}" --product autonote
-BIN_DIR="$(swift build -c "${CONF}" --show-bin-path)"
+BUILD_ARGS=(-c "${CONF}")
+for arch in ${AUTONOTE_BUILD_ARCHS:-}; do
+    BUILD_ARGS+=(--arch "${arch}")
+done
+if [[ -n "${AUTONOTE_BUILD_ARCHS:-}" ]]; then
+    echo "アーキテクチャ: ${AUTONOTE_BUILD_ARCHS}（AUTONOTE_BUILD_ARCHS）"
+fi
+
+swift build "${BUILD_ARGS[@]}" --product AutoNoteApp
+swift build "${BUILD_ARGS[@]}" --product autonote
+BIN_DIR="$(swift build "${BUILD_ARGS[@]}" --show-bin-path)"
 
 rm -rf "${APP}"
 mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
