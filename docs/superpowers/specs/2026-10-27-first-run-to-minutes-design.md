@@ -79,11 +79,12 @@ AutoNote を初めて入れた人が、**説明を読まずに、録音を止め
 - 本文に 1 文: 「文字起こし → 議事録の作成 → 保存 の順に進みます。終わると議事録がここに開きます。」
 - **1 分未満**: 帯を「32 秒の録音です。1 分未満なので自動では処理しません。文字起こしと議事録を作りますか？」［作る］［削除］にする（モックの「議事録は作りません」は処理の実態と合わないので、この文言に差し替えた。Lead の判断）。一覧の行の長さは 1 分未満なら「32 秒」、以上は今のまま「4 分」。帯と詳細ビューの二重表示は帯だけにする。
 
-### 5. できた（自動で開く）
-- `.minutesGenerated` になった会議が **この起動中に録音・停止した会議** なら、メインウィンドウを開いて（閉じていれば開く、他アプリの前面には出ない: `NSApp.activate` はしない）その会議を選択する。取り込み・再生成・再実行では自動で開かない。
+### 5. できた（議事録を見せる）
+- **前面には出さない。通知だけ**（利用者の決定）。`.minutesGenerated` になった会議が **この起動中に録音・停止した会議** で、メインウィンドウが**開いているなら**、その会議を選択して完了ビューを出す（`NSApp.activate` も `orderFront` もしない。X37 の `AppShell.open` は使わない）。ウィンドウが閉じていれば何もせず、通知「議事録ができました」のタップで今までどおり開く（X37 の経路でよい）。取り込み・再生成・再実行では選択を変えない。
 - 完了ビューの先頭に緑の帯「✓ 議事録を保存しました — `~/Documents/AutoNote/2026-10-27_1400_発売準備会議.md`」を出す（この会議を次に選び直すまで）。
 - ツールバーに「Finder で表示」（`NSWorkspace.activateFileViewerSelecting`）を常設。「Obsidian で開く」は Obsidian が無ければ**非表示**（今は薄表示で理由なし）。
 - 通知は今のまま 1 通（「議事録ができました」→ タップで同じ画面）。
+- 「止めたら議事録が開いている」の意味はこうなる: 窓を開いたまま待っていれば議事録がそこに現れる。窓を閉じていれば通知が来て、タップで開く。
 
 ### 6. 失敗
 右ペインの帯（赤）に `何が — なぜ`、右にボタン 1〜2 個。本文は、文字起こしがあればそれを表示（「文字起こしはできています。議事録は再実行で作れます」）。
@@ -171,8 +172,7 @@ public struct FailureExplanation: Sendable, Equatable {
 - `QueueItemDTO.message`（= `job.lastError`）と `stage` から表を引く。純粋関数なので `Tests/AutoNoteCoreTests/Presentation/FailureExplanationTests.swift` で全行を固定する。
 
 ### 自動オープン
-- `AppModel` に `recordedThisSession: Set<MeetingID>`（`.started` イベントで追加）と `minutesReady: ((MeetingID, path: String)) -> Void` のフック。`AppEnvironment.relayQueueNotices` が `NoticeRelay.notices` から `.minutesGenerated(id)` を得たとき（`NoticeRelay` は純粋関数。呼ぶのは App 側）、`id` が集合にあれば `AppShell.open(mainWindowID)` → `model.selectedMeetingID = id` → `model.justSaved = (id, path)`（緑の帯の元）。
-- 前面に出すかどうか: §画面 5 を参照（利用者の決定待ち → 決まり次第ここに転記）。
+- `AppModel` に `recordedThisSession: Set<MeetingID>`（`.started` イベントで追加）と `minutesReady: ((MeetingID, path: String)) -> Void` のフック。`AppEnvironment.relayQueueNotices` が `NoticeRelay.notices` から `.minutesGenerated(id)` を得たとき（`NoticeRelay` は純粋関数。呼ぶのは App 側）、`id` が集合にあり、かつメインウィンドウが開いている（`AppShell.isMainWindowOpen`、`MainWindow` の `onAppear/onDisappear` で立てる）ときだけ `model.selectedMeetingID = id` → `model.justSaved = (id, path)`（緑の帯の元）。ウィンドウは開かない・前面にしない（利用者の決定）。
 - `.minutesGenerated` の通知は今のとおり 1 通。
 
 ## 制約
