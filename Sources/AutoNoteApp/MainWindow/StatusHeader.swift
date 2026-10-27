@@ -1,29 +1,41 @@
 import AppKit
+import AVFoundation
 import AutoNoteCore
 import SwiftUI
 
 /// The bands above the detail column (§5.3, §9.5): the recording state with the elapsed time whatever is selected,
-/// the grace countdown, the disk warning, the output folder, the last error and the notices that need an answer.
+/// the grace countdown and input meter, the green 「録音を保存しました」 band, the disk warning, the readiness bands
+/// (only once there are meetings; the empty state shows the card instead), the last error and the notices that
+/// need an answer.
 struct StatusHeader: View {
     let env: AppEnvironment
     let model: AppModel
-    @Environment(\.openSettings) private var openSettings
-    /// Nil until the settings were read; then whether `outputFolder` is set (ruling X35).
-    @State private var outputFolderConfigured: Bool?
+    let shell: AppShell
+    /// The capture microphone's name, read once when recording starts; nil hides it.
+    @State private var micName: String?
 
     var body: some View {
         VStack(spacing: 0) {
+            if let stopped = model.stoppedBand {
+                Band(systemImage: "checkmark.circle.fill", tint: .green) {
+                    Text(ProcessingPresentation.stoppedBand(seconds: stopped.seconds))
+                    Spacer()
+                }
+            }
             recordingBand
             if let warning = model.diskWarning {
                 Band(systemImage: "externaldrive.badge.exclamationmark", tint: .orange) { Text(warning) }
             }
-            if !model.outputFolderAvailable, let configured = outputFolderConfigured {
-                Band(systemImage: "folder.badge.questionmark", tint: .orange) {
-                    Text(configured ? "出力フォルダが見つかりません" : "出力フォルダが未設定です")
-                    Spacer()
-                    Button("設定を開く") {
-                        NSApp.activate(ignoringOtherApps: true)
-                        openSettings()
+            if !model.meetings.isEmpty {
+                ForEach(ReadinessPresentation.bands(model.readiness, home: NSHomeDirectory()), id: \.item) { row in
+                    let isModel = row.item == .model
+                    Band(systemImage: isModel ? "arrow.down.circle" : "exclamationmark.triangle",
+                         tint: isModel ? .secondary : .orange) {
+                        Text(row.band)
+                        Spacer()
+                        ForEach(row.actions, id: \.self) { action in
+                            ReadinessActionButton(action: action, model: model, shell: shell)
+                        }
                     }
                 }
             }
@@ -34,10 +46,13 @@ struct StatusHeader: View {
                 promptBand(NoticeContent.make(notice))
             }
         }
-        // Re-read whenever availability flips: setting or clearing the folder in Settings flips it within 30 s.
-        .task(id: model.outputFolderAvailable) {
-            let folder = (try? await env.settings.load())?.outputFolder
-            outputFolderConfigured = !(folder ?? "").isEmpty
+        .onChange(of: model.recorder.state, initial: true) { _, new in
+            // Once per recording (or when the window opens mid-recording); pause and grace keep the name.
+            if new == .recording, micName == nil {
+                micName = AVCaptureDevice.default(for: .audio)?.localizedName
+            } else if new == .idle || new == .countdown {
+                micName = nil
+            }
         }
     }
 
@@ -53,6 +68,13 @@ struct StatusHeader: View {
                         Text("開始中…")
                     } else if let seconds = model.elapsedSeconds {
                         Text(MenuBarPresentation.clock(seconds)).monospacedDigit()
+                    }
+                    LevelMeter(bars: model.inputLevel?.bars ?? 0)
+                    if model.inputLevel?.quiet == true {
+                        Text("音を拾えていません").foregroundStyle(.orange)
+                    }
+                    if let micName {
+                        Text(micName).foregroundStyle(.secondary).lineLimit(1)
                     }
                     if state == .grace, let line = Self.statusLine(model.menuBar(now: context.date)) {
                         Text(line).foregroundStyle(.orange)

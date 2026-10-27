@@ -29,7 +29,13 @@ struct RecordingDetailView: View {
             .disabled(!active)
             .padding(12)
             Divider()
-            LiveTranscriptView(lines: model.live.lines)
+            if model.live.lines.isEmpty {
+                Text("聞き取り中…")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                LiveTranscriptView(lines: model.live.lines)
+            }
         }
     }
 

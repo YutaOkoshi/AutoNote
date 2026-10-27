@@ -10,16 +10,21 @@ struct MainWindow: View {
     let shell: AppShell
 
     var body: some View {
-        Group {
+        // The open flag hangs off a stable container, not the branch, so switching from 起動中… to the content
+        // never leaves it false while the window is on screen.
+        ZStack {
             if let env = shell.env {
-                MainWindowContent(env: env, model: env.model)
+                MainWindowContent(env: env, model: env.model, shell: shell)
             } else {
                 ProgressView("起動中…")
                     .frame(minWidth: 720, minHeight: 480)
             }
         }
-        .onAppear { shell.isMainWindowOpen = true }
-        .onDisappear { shell.isMainWindowOpen = false }
+        .background {
+            Color.clear
+                .onAppear { shell.isMainWindowOpen = true }
+                .onDisappear { shell.isMainWindowOpen = false }
+        }
     }
 }
 
@@ -54,6 +59,7 @@ struct ImportCandidate: Identifiable {
 private struct MainWindowContent: View {
     let env: AppEnvironment
     let model: AppModel
+    let shell: AppShell
     @State private var importCandidate: ImportCandidate?
     @State private var unsaved = UnsavedEditsGuard()
 
@@ -82,16 +88,21 @@ private struct MainWindowContent: View {
                 .navigationSplitViewColumnWidth(min: 260, ideal: 300)
         } detail: {
             VStack(spacing: 0) {
-                StatusHeader(env: env, model: model)
+                StatusHeader(env: env, model: model, shell: shell)
                 detail
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(minWidth: 820, minHeight: 520)
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
+            // The record actions sit left of the import icon. No keyboard shortcut; 停止 asks nothing.
+            ToolbarItemGroup(placement: .primaryAction) {
+                ForEach(Array(MainToolbar.actions(for: model.recorder.state).enumerated()), id: \.offset) { _, action in
+                    recordButton(action)
+                }
                 Button("音声ファイルを取り込む…", systemImage: "square.and.arrow.down") { pickFile() }
                     .help("音声ファイルを取り込む…")
+                    .accessibilityLabel("音声ファイルを取り込む…")
             }
         }
         .dropDestination(for: URL.self) { urls, _ in
@@ -128,10 +139,36 @@ private struct MainWindowContent: View {
         } else if [.recording, .paused, .grace].contains(model.recorder.state) {
             // Nothing selected while recording (or the row is not listed yet: 開始中…): the live view.
             RecordingDetailView(model: model)
+        } else if model.meetings.isEmpty {
+            EmptyStateView(model: model, shell: shell)
         } else {
             ContentUnavailableView("会議を選んでください", systemImage: "list.bullet.rectangle",
                                    description: Text("音声ファイルをここへドラッグすると取り込めます"))
         }
+    }
+
+    @ViewBuilder private func recordButton(_ action: UserAction) -> some View {
+        switch action {
+        case .start:
+            Button { run(.start) } label: { Label("録音を開始", systemImage: "record.circle").labelStyle(.titleAndIcon) }
+                .buttonStyle(.borderedProminent)
+                .accessibilityLabel("録音を開始")
+        case .stop:
+            Button { run(.stop) } label: { Label("停止", systemImage: "stop.fill").labelStyle(.titleAndIcon) }
+                .accessibilityLabel("停止")
+        case .resume:
+            Button { run(.resume) } label: { Label("再開", systemImage: "play.fill").labelStyle(.titleAndIcon) }
+                .accessibilityLabel("再開")
+        case .cancelCountdown:
+            Button { run(.cancelCountdown) } label: { Label("取り消す", systemImage: "xmark.circle").labelStyle(.titleAndIcon) }
+                .accessibilityLabel("取り消す")
+        default:
+            EmptyView()
+        }
+    }
+
+    private func run(_ action: UserAction) {
+        Task { await model.perform(action) }
     }
 
     private static func isSupported(_ url: URL) -> Bool {
