@@ -8,3 +8,4 @@ tools/
 *.p12
 *.pem
 __pycache__/
+.superpowers/
