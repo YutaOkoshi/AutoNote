@@ -187,6 +187,8 @@ struct ConsentNoticeView: View {
                 dismissWindow(id: AppShell.consentWindowID)
             }
             .keyboardShortcut(.defaultAction)
+            .accessibilityLabel("OK")
+            .accessibilityIdentifier("consent.ok")
         }
         .padding(24)
         .frame(minWidth: 320)
