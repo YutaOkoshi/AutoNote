@@ -378,11 +378,16 @@ public enum UserAction: Equatable, Sendable {
     }
 
     /// Shows the band for `bandDuration`, and selects the stopped meeting even when another one is selected (GUI #8),
-    /// unless the open editor has unsaved edits.
+    /// unless the open editor has unsaved edits. A too-short or failed recording gets no band: its own band (作る /
+    /// 削除, or the failure) already says what happened, and the green one vanishing above it would shift its buttons.
     private func showStoppedBand(_ m: Manifest) {
+        if selectedMeetingID == nil || !hasUnsavedEdits() { selectedMeetingID = m.id }
+        guard m.status != .tooShort, m.status != .failed else {
+            stoppedBand = nil
+            return
+        }
         let band = StoppedBand(id: m.id, seconds: Int(m.duration ?? 0))
         stoppedBand = band
-        if selectedMeetingID == nil || !hasUnsavedEdits() { selectedMeetingID = m.id }
         let duration = bandDuration
         Task { [weak self] in
             try? await Task.sleep(for: duration)

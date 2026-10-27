@@ -400,6 +400,31 @@ import AutoNoteTestSupport
         #expect(model.stoppedBand == AppModel.StoppedBand(id: m1, seconds: 252))
     }
 
+    @Test func stoppedTooShortShowsNoSavedBand() async {
+        // 1 分未満の録音は「作る／削除」の帯が出るので、上に積まれて 5 秒で消える緑の帯は出さない（消えた瞬間に
+        // ［作る］が上へずれて押し間違える。被験者 2・3・4）。失敗した録音も同じ。1 分以上は従来どおり出る。
+        let fakes = FakePorts()
+        let (model, task) = await start(fakes, bandDuration: .seconds(60))
+        defer { task.cancel() }
+        var short = manifest(m1, seconds: 12)
+        short.status = .tooShort
+        await fakes.events.send(.stopped(short, .manual))
+        await waitUntil { model.selectedMeetingID == m1 }
+        await model.settle()
+        #expect(model.stoppedBand == nil)
+        var failed = manifest(m2, seconds: 120)
+        failed.status = .failed
+        await fakes.events.send(.stopped(failed, .manual))
+        await waitUntil { model.selectedMeetingID == m2 }
+        await model.settle()
+        #expect(model.stoppedBand == nil)
+        var long = manifest(m1, seconds: 75)
+        long.status = .recorded
+        await fakes.events.send(.stopped(long, .manual))
+        await waitUntil { model.stoppedBand != nil }
+        #expect(model.stoppedBand == AppModel.StoppedBand(id: m1, seconds: 75))
+    }
+
     @Test func stoppedBandClearsAfterDuration() async {
         let fakes = FakePorts()
         let (model, task) = await start(fakes, bandDuration: .milliseconds(100))
