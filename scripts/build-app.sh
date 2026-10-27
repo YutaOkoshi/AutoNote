@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # AutoNote.app を組み立てて「AutoNote Dev」で署名する。
 # 使い方: scripts/build-app.sh [debug|release]   （既定は debug）
+#   AUTONOTE_CODESIGN_IDENTITY  署名に使う identity（既定は scripts/config.sh の AUTONOTE_CERT_NAME = 「AutoNote Dev」）。
+#                               CI では `-`（アドホック署名）を渡す。指定したときは証明書を作らない（管理者認証が要らない）
 set -euo pipefail
 
 CONF="${1:-debug}"
@@ -14,11 +16,13 @@ cd "${ROOT}"
 
 # shellcheck source=config.sh
 source "${ROOT}/scripts/config.sh"
-CERT_NAME="${AUTONOTE_CERT_NAME}"
+CERT_NAME="${AUTONOTE_CODESIGN_IDENTITY:-${AUTONOTE_CERT_NAME}}"
 BUNDLE_ID="${AUTONOTE_BUNDLE_ID}"
 APP="${ROOT}/build/AutoNote.app"
 
-if ! security find-identity -v -p codesigning | grep -q "\"${CERT_NAME}\""; then
+if [[ -n "${AUTONOTE_CODESIGN_IDENTITY:-}" ]]; then
+    echo "署名 identity: ${CERT_NAME}（AUTONOTE_CODESIGN_IDENTITY。証明書は作らない）"
+elif ! security find-identity -v -p codesigning | grep -q "\"${CERT_NAME}\""; then
     "${ROOT}/scripts/make-dev-cert.sh"
 fi
 
