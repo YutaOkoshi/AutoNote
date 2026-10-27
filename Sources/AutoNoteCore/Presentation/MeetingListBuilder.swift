@@ -7,8 +7,11 @@ public enum MeetingListBuilder {
     public static let untitled = "（無題）"
     public static let waitingLabel = "処理待ち"
 
+    /// A meeting the output folder does not hold (it was written to a previous output folder) keeps the title and
+    /// path of the note last written, while that file exists (`fileExists`).
     public static func build(index: [IndexEntry], manifests: [Manifest], queue: QueueStatus, outputFolder: URL?,
-                             timeZone: TimeZone = .current) -> [MeetingRow] {
+                             timeZone: TimeZone = .current,
+                             fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> [MeetingRow] {
         let entries = Dictionary(index.map { ($0.meetingID, $0) }, uniquingKeysWith: { a, _ in a })
         let byID = Dictionary(manifests.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let jobs = Dictionary(queue.items.map { ($0.meetingID, $0) }, uniquingKeysWith: { _, b in b })
@@ -18,13 +21,18 @@ public enum MeetingListBuilder {
             let entry = entries[id]
             let manifest = byID[id]
             var row = MeetingRow(id: id.rawValue)
-            row.title = entry?.title ?? manifest?.title.flatMap { $0.isEmpty ? nil : $0 } ?? untitled
+            row.title = entry?.title ?? manifest?.title.flatMap { $0.isEmpty ? nil : $0 }
+                ?? manifest?.noteTitle.flatMap { $0.isEmpty ? nil : $0 } ?? untitled
             row.startedAt = manifest?.startedAt ?? entry.flatMap { parseStart($0, timeZone: timeZone) } ?? Date(timeIntervalSince1970: 0)
             row.durationMinutes = entry?.durationMinutes ?? manifest?.duration.map { Int(($0 / 60).rounded()) }
             row.durationSeconds = manifest?.duration.map { Int($0.rounded(.down)) }
             row.state = manifest.map { state(of: $0.status) } ?? state(ofIndexStatus: entry?.status ?? "")
             if row.state == .processing { row.progressLabel = waitingLabel }
-            if let entry, let outputFolder { row.filePath = outputFolder.appending(path: "\(entry.linkPath).md").path }
+            if let entry, let outputFolder {
+                row.filePath = outputFolder.appending(path: "\(entry.linkPath).md").path
+            } else if let path = manifest?.notePath, fileExists(path) {
+                row.filePath = path
+            }
             row.silenceWarning = manifest?.silenceWarning ?? false
             row.summaryFirstLine = entry.flatMap { $0.firstLine.isEmpty ? nil : $0.firstLine }
             if let job = jobs[id.rawValue] { apply(job, to: &row) }

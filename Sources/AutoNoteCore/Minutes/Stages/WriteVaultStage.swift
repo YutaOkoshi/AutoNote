@@ -51,12 +51,14 @@ public struct WriteVaultStage: QueueStage {
 
         // Every Vault-folder I/O (frontmatter read and the write) maps to a retry whose reason carries no path.
         let outcome: VaultWriteOutcome
+        var noteTitle: String?
         do {
             let frontmatterText = try await store.read(.frontmatter).map { String(decoding: $0, as: UTF8.self) }
                 ?? FrontmatterTemplate.defaultText
             let document = MeetingDocument(manifest: manifest, transcript: final, minutes: minutes,
                                            frontmatter: FrontmatterTemplate(text: frontmatterText),
                                            appVersion: AutoNoteVersion.current, timeZone: timeZone)
+            noteTitle = document.hasTitle ? document.title : nil
             outcome = try await writer.write(document, policy: job.overwriteApproved ? .force : .ifUnchanged)
         } catch is CancellationError {
             throw CancellationError()
@@ -70,8 +72,14 @@ public struct WriteVaultStage: QueueStage {
         }
 
         switch outcome {
-        case .written:
-            _ = try await context.manifests.update(id) { $0.status = status }
+        case .written(let url):
+            let notePath = Self.notePath(of: url, in: outputFolder)
+            let noteTitle = noteTitle
+            _ = try await context.manifests.update(id) {
+                $0.status = status
+                $0.notePath = notePath
+                $0.noteTitle = noteTitle
+            }
             job.overwriteApproved = false
             Self.logger.info("\(id.rawValue, privacy: .public): note written (\(status.rawValue, privacy: .public))")
         case .conflict(let url):
@@ -94,6 +102,12 @@ public struct WriteVaultStage: QueueStage {
             return nil
         }
         return minutes
+    }
+
+    /// The absolute path of a written note, spelled under `folder` as the settings name it (the writer resolves
+    /// symlinks, so `/var` would come back as `/private/var`): the same spelling the list builds from the index.
+    static func notePath(of file: URL, in folder: URL) -> String {
+        folder.appending(path: relativePath(of: file, in: folder)).path
     }
 
     /// `file` relative to `folder` with `/` separators; both are resolved so `/var` and `/private/var` match.

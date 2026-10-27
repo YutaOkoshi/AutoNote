@@ -316,7 +316,14 @@ public struct MeetingsAdapter: MeetingsPort {
                 try FileManager.default.createDirectory(at: minutesURL.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try AutoNoteJSON.encoder().encode(m).write(to: minutesURL, options: .atomic)
             }
-            _ = try await wrapping { try await manifests.update(id) { $0.title = title } }
+            let notePath = WriteVaultStage.notePath(of: url, in: vault.folder)
+            _ = try await wrapping {
+                try await manifests.update(id) {
+                    $0.title = title
+                    $0.notePath = notePath
+                    $0.noteTitle = title
+                }
+            }
             // The note is saved; a stale index is fixed by the next write, so its failure is only logged.
             do { _ = try await vault.writer.rebuildIndex() } catch {
                 logger.error("\(id.rawValue, privacy: .public): index rebuild failed (\(String(describing: type(of: error)), privacy: .public))")

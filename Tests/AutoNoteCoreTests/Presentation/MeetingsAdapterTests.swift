@@ -78,6 +78,40 @@ import AutoNoteTestSupport
         #expect(try await f.manifests.load(f.id).title == "二回目")
     }
 
+    @Test func rowsKeepTitleAndPathAfterOutputFolderChange() async throws {
+        // 被験者 4: 完成した会議のあとで保存先を変えると、一覧が「（無題）」に戻り「Finder で表示」「最新の議事録を
+        // 開く」が無効になった。書いた議事録は古いフォルダに残るので、そのタイトルとパスを引き続き使う。
+        let f = try await Fixture()
+        try AutoNoteJSON.encoder().encode(Samples.minutes).write(to: f.paths.minutesFile(f.id))
+        var settings = Settings()
+        settings.outputFolder = f.folder.path
+        let context = StageContext(paths: f.paths, settings: settings, manifests: f.manifests,
+                                   now: { Date(timeIntervalSince1970: 1_800_000_000) }, reportProgress: { _ in })
+        var job = Job(id: f.id.rawValue, meeting: f.id, stages: StageName.all,
+                      completedStages: [StageName.transcribe, StageName.summarize], state: .running, attempts: 0,
+                      lastError: nil, notBefore: nil, createdAt: Date(timeIntervalSince1970: 1_800_000_000))
+        try await WriteVaultStage(timeZone: Samples.tokyo, services: SharedVaultServices()).run(&job, context: context)
+        _ = try await f.output.rebuild(outputFolder: f.folder.path)
+        let before = try #require(try await f.adapter.rows().first)
+        #expect(before.title == "プロジェクト定例")
+        let path = try #require(before.filePath)
+        #expect(FileManager.default.fileExists(atPath: path))
+
+        let other = try TemporaryDirectory.make().appending(path: "新しい保存先", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        _ = try await f.output.rebuild(outputFolder: other.path)
+        let after = try #require(try await f.adapter.rows().first)
+        #expect(after.title == "プロジェクト定例")
+        #expect(after.filePath == path)
+        #expect(after.state == .minutesGenerated)
+        #expect(try await f.adapter.latestMinutesFile()?.path == path)
+        #expect(FileManager.default.fileExists(atPath: path))   // the note is not moved
+
+        // A note that no longer exists gives no path (「Finder で表示」 stays disabled).
+        try FileManager.default.removeItem(atPath: path)
+        #expect(try await f.adapter.rows().first?.filePath == nil)
+    }
+
     @Test func saveWithoutOutputFolderFails() async throws {
         let f = try await Fixture()
         _ = try await f.output.rebuild(outputFolder: nil)

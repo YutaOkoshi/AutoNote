@@ -52,6 +52,26 @@ import AutoNoteTestSupport
         #expect(row.filePath == nil)
     }
 
+    @Test func noteOutsideOutputFolderKeepsTitleAndPath() throws {
+        // 保存先を変えたあと: 今の保存先に無い会議は、最後に書いた議事録のタイトルとパスを使う（ファイルがある間だけ）
+        var m = manifest("20261024-1400-a1b2", status: .minutesGenerated)
+        m.notePath = "/Users/u/Documents/AutoNote/2026/2026-10-24_1400_定例.md"
+        m.noteTitle = "定例"
+        let kept = try #require(MeetingListBuilder.build(index: [], manifests: [m], queue: .empty, outputFolder: folder,
+                                                         fileExists: { _ in true }).first)
+        #expect(kept.title == "定例")
+        #expect(kept.filePath == m.notePath)
+        let gone = try #require(MeetingListBuilder.build(index: [], manifests: [m], queue: .empty, outputFolder: folder,
+                                                         fileExists: { _ in false }).first)
+        #expect(gone.filePath == nil)
+        // The output folder's own note wins.
+        let indexed = try #require(MeetingListBuilder.build(index: [entry("20261024-1400-a1b2", title: "Vault のタイトル")],
+                                                            manifests: [m], queue: .empty, outputFolder: folder,
+                                                            fileExists: { _ in true }).first)
+        #expect(indexed.title == "Vault のタイトル")
+        #expect(indexed.filePath == "/tmp/Vault/Meetings/2026/2026-10-24_1400_定例.md")
+    }
+
     @Test func indexTitleWins() throws {
         let rows = MeetingListBuilder.build(index: [entry("20261024-1400-a1b2", title: "Vault のタイトル")],
                                             manifests: [manifest("20261024-1400-a1b2", status: .minutesGenerated, title: "manifest のタイトル")],
