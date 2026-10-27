@@ -335,6 +335,26 @@ check_automation_run() {
     pass "${got}"
 }
 
+check_recording_main_thread() {
+    CURRENT="06.7 録音開始のあと主スレッドが回り続けない"
+    app_or_skip || return
+    cli_or_skip || return
+    # 2026-10-27: メニューバーのラベルの TimelineView が SwiftUI の更新を抜けられず、録音開始から終了まで主スレッドが
+    # 100 % で回り、ウィンドウもアクセシビリティも固まった。録音を始めて 3 秒後の CPU と、System Events から
+    # メニューバー項目が読めることで再発を見る。マイク許可が無い環境では start が失敗するので skip
+    if ! AUTONOTE_DATA_DIR="${DATA}" run_timeout 10 "${AUTONOTE_CLI}" start; then skip "autonote start が失敗（マイク許可が無い環境か）"; return; fi
+    sleep 3
+    local cpu item
+    cpu="$(ps -o %cpu= -p "${APP_PID}" | tr -d ' ')"
+    item="$(osascript -e 'with timeout of 5 seconds
+tell application "System Events" to tell process "AutoNoteApp" to get title of menu bar item 1 of menu bar 2
+end timeout' 2>&1)"
+    AUTONOTE_DATA_DIR="${DATA}" run_timeout 20 "${AUTONOTE_CLI}" stop || { fail "autonote stop が失敗"; return; }
+    [[ "${cpu%.*}" -lt 60 ]] || { LAST_LOG="${WORK}/app.log"; fail "録音開始 3 秒後の CPU が ${cpu} %（期待 60 % 未満）"; return; }
+    [[ "${item}" == *:* ]] || { LAST_LOG=""; fail "メニューバー項目の経過時間が読めない: ${item}"; return; }
+    pass "CPU ${cpu} %、メニューバー「${item}」"
+}
+
 check_automation_log_and_socket() {
     CURRENT="06.6 Automation のログとソケットの後始末"
     app_or_skip || return
@@ -706,6 +726,7 @@ CHECKS=(
     check_status_over_socket
     check_bookmark_not_recording
     check_automation_run
+    check_recording_main_thread
     check_automation_log_and_socket
     check_cer
     check_whisper

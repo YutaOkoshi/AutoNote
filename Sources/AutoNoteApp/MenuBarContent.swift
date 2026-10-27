@@ -16,17 +16,18 @@ struct MenuBarLabel: View {
     }
 
     @ViewBuilder private var content: some View {
-        if let model = shell.env?.model, [.recording, .paused, .grace].contains(model.recorder.state) {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                let p = model.menuBar(now: context.date)
-                HStack(spacing: 4) {
-                    Image(systemName: p.symbol)
-                    if let title = p.title { Text(title).monospacedDigit() }
-                }
+        // No `TimelineView` here: `AppModel` already ticks `elapsedSeconds` once a second while recording, paused or in
+        // the grace period, and a periodic timeline inside a menu-bar label re-entered SwiftUI's update pass without
+        // end (main thread at 100 %, the window and accessibility frozen from 録音開始 until quit; found 2026-10-27).
+        let p = shell.env.map { $0.model.menuBar(now: Date()) }
+        if let p, let title = p.title {
+            HStack(spacing: 4) {
+                Image(systemName: p.symbol)
+                Text(title).monospacedDigit()
             }
         } else {
-            // Idle or countdown: `waveform`, or `hourglass` while a job runs (`MenuBarPresentation.symbol`).
-            Image(systemName: shell.env.map { $0.model.menuBar(now: Date()).symbol } ?? "waveform")
+            // Idle or countdown: `waveform` alone (plan 00 E2E 7b reads that name), or `hourglass` while a job runs.
+            Image(systemName: p?.symbol ?? "waveform")
         }
     }
 }
