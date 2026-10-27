@@ -73,12 +73,12 @@ macOS（26.0 以降）のメニューバーで会議を録音し、文字起こ�
 
 ## CI / リリース（GitHub Actions）
 
-- `.github/workflows/ci.yml`: main・`plan-*` への push と PR で、macOS 26（`macos-26`、Xcode 26.6）上で `swift build` と `swift test`（時間依存のテストが負荷で落ちることがあるので、失敗したら `--no-parallel` で 1 回だけ再実行）を走らせる。docs/ と `*.md` だけの変更では走らない。同じブランチの古い実行は取り消す。whisper.xcframework と `.build` はキャッシュする
-- `.github/workflows/release.yml`: main への push で `Resources/Info.plist` の `CFBundleShortVersionString` を読み、`v<version>` のタグが無ければ arm64（`macos-26`）と x86_64（`macos-26-intel`）でビルド・テストし、アドホック署名の `AutoNote-<version>-macos-<arch>.zip` を添えた GitHub Release を作る。タグがあれば何もしない
+- `.github/workflows/ci.yml`: main への push・PR・手動実行（workflow_dispatch）で、macOS 26（`macos-26`、Xcode 26.6）上で `swift build` と `swift test`（時間依存のテストが負荷で落ちることがあるので、失敗したら `--no-parallel` で 1 回だけ再実行）を走らせる。開発ブランチへの push だけでは走らない（PR を開くと走る）。docs/ と `*.md` だけの変更でも走らない。同じブランチの古い実行は取り消す。whisper.xcframework と `.build` はキャッシュする
+- `.github/workflows/release.yml`: main への push か手動実行で `Resources/Info.plist` の `CFBundleShortVersionString` を読み、`v<version>` のタグが無ければ `macos-26` の 1 ジョブでビルド・テストし、arm64 + x86_64 のユニバーサルでアドホック署名した `AutoNote-<version>-macos-universal.zip` を添えた GitHub Release を作る。タグがあれば何もしない
 - バージョンの上げ方: `Resources/Info.plist` の `CFBundleShortVersionString`（例 0.1.0 → 0.2.0）と `CFBundleVersion`（ビルド番号。1 つ上げる）の 2 か所を直して main に push する
 - 配布物は Developer ID 署名・公証をしていない。初回は右クリック →「開く」か `xattr -d com.apple.quarantine AutoNote.app`
-- 無料枠の目安: private リポジトリの GitHub Free は月 2,000 分。macOS ランナーは Linux の約 10 倍の速さで枠を減らす（分単価 $0.062 対 $0.006）ので、macOS で使えるのは実質 月 約 200 分。CI 1 回（キャッシュあり）を 10 分前後とすると 月 約 20 回。リリース 1 回は macOS 2 ジョブで 約 30〜40 分（= 300〜400 分ぶん）。支払い方法を登録していなければ、枠を超えると止まるだけで課金はされない
-- CI と同じアドホック署名の .app を手元で作るなら `AUTONOTE_CODESIGN_IDENTITY=- scripts/build-app.sh release`
+- 無料枠の目安: private リポジトリの GitHub Free は月 2,000 分で、macOS ランナーは Linux の約 10 倍の速さで枠を減らす（分単価 $0.062 対 $0.006）ので、月の実機枠は 約 200 分。CI 1 回 ≒ 実機 8〜10 分（月 約 20 回）、Release 1 回 ≒ 実機 15〜20 分（バージョンを上げた main への push では CI も同時に走る）。キャッシュが切れた回は whisper のビルドで 10 分ほど増える。支払い方法を登録していなければ、枠を超えると止まるだけで課金はされない
+- CI と同じ .app を手元で作るなら `AUTONOTE_BUILD_ARCHS="arm64 x86_64" AUTONOTE_CODESIGN_IDENTITY=- scripts/build-app.sh release`（`AUTONOTE_BUILD_ARCHS` を付けなければホストのアーキテクチャだけ、`AUTONOTE_CODESIGN_IDENTITY` を付けなければ `AutoNote Dev` で署名）
 
 ## 設定値: `scripts/config.sh`
 
