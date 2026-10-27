@@ -12,10 +12,9 @@ struct AutoNoteApp: App {
             MenuBarLabel(shell: appDelegate.shell)
         }
 
-        // Task 14: the main window replaces this placeholder.
+        // Plan 06 Task 14. Opened through `AppShell.open`, which activates the app first (ruling X37).
         Window("AutoNote", id: AppShell.mainWindowID) {
-            Text("AutoNote")
-                .frame(minWidth: 480, minHeight: 320)
+            MainWindow(shell: appDelegate.shell)
         }
         .defaultLaunchBehavior(.suppressed)
 
