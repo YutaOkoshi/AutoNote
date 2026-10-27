@@ -224,6 +224,37 @@ import AutoNoteTestSupport
         #expect(model.prompts.isEmpty)
     }
 
+    @Test func overwritePromptDerivedFromQueueState() async {
+        // 上書き確認待ちのジョブがある QueueStatus → post なしでも prompts に出る（I1）。確認待ちでなくなれば消える
+        let awaiting = QueueItemDTO(meetingID: m1.rawValue, stage: "write_vault", state: "waiting", awaitingConfirmation: true)
+        let fakes = FakePorts(queue: FakeQueuePort(QueueStatus(items: [awaiting])))
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        #expect(model.prompts == [.overwriteConfirmation(m1)])
+        model.noticePosted(.overwriteConfirmation(m1))
+        #expect(model.prompts == [.overwriteConfirmation(m1)])
+        await fakes.queue.send(QueueStatus(items: [QueueItemDTO(meetingID: m1.rawValue, stage: "write_vault", state: "done")]))
+        await model.settle()
+        #expect(model.prompts.isEmpty)
+        await fakes.queue.send(QueueStatus(items: [awaiting]))
+        await model.settle()
+        await model.refresh()
+        #expect(model.prompts == [.overwriteConfirmation(m1)])
+    }
+
+    @Test func resolvingPromptFromWindowWithdrawsSystemNotice() async {
+        // ウィンドウの帯から答えたら、通知センターに残った通知も取り下げる（M8）
+        let fakes = FakePorts()
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        let withdrawn = WithdrawLog()
+        model.withdrawNotice = { id in await withdrawn.append(id) }
+        model.noticePosted(.recordingTooShort(m1))
+        await model.perform(.notice(.transcribeTooShort(m1)))
+        await model.perform(.notice(.resolveOverwrite(m1, overwrite: true)))
+        #expect(await withdrawn.items == [UserNotice.recordingTooShort(m1).id, UserNotice.overwriteConfirmation(m1).id])
+    }
+
     @Test func quitDecisionFollowsRecorder() async {
         let fakes = FakePorts(recorder: FakeRecorderPort(recording()))
         let (model, task) = await start(fakes)
@@ -237,4 +268,9 @@ import AutoNoteTestSupport
         task.cancel()
         await task.value
     }
+}
+
+private actor WithdrawLog {
+    var items: [String] = []
+    func append(_ s: String) { items.append(s) }
 }

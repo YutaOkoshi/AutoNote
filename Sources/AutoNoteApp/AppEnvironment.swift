@@ -79,7 +79,8 @@ final class AppEnvironment {
         self.routing = routing
     }
 
-    static func make(environment: [String: String]) async throws -> AppEnvironment {
+    /// `notifier` is created by AppDelegate before any `await` (M9); its callbacks are bound here.
+    static func make(environment: [String: String], notifier: SystemUserNotifier) async throws -> AppEnvironment {
         // 1. Paths, settings, manifests.
         let paths = AppPaths.resolve(environment: environment)
         try paths.createBaseDirectories()
@@ -119,11 +120,11 @@ final class AppEnvironment {
 
         // 6. Notifier and automations. The notifier's callbacks reach the model through `routing` (built below).
         let routing = NoticeRouting()
-        let notifier = SystemUserNotifier(
+        notifier.bind(SystemUserNotifier.Handlers(
             onAction: { [routing] action, _ in routing.handle(action) },
             onPost: { [routing] notice in routing.model?.noticePosted(notice) },
             onWithdraw: { [routing] id in routing.model?.noticeWithdrawn(id: id) },
-            onOpenWindow: { [routing] in routing.openWindow() })
+            onOpenWindow: { [routing] in routing.openWindow() }))
         let automationsFile = AutomationsFile(url: paths.automationsFile)
         let runner = AutomationRunner(logsDirectory: paths.logsDirectory.appending(path: "automations"),
                                       ledgerFile: paths.logsDirectory.appending(path: "automations-ledger.json"))
@@ -178,6 +179,7 @@ final class AppEnvironment {
             outputFolder: PortableOutputFolderPort(output: output),
             opener: WorkspaceOpener())
         let model = AppModel(ports: ports)
+        model.withdrawNotice = { [notifier] id in await notifier.withdraw(id: id) }
         routing.model = model
         let server = SocketServer(socketURL: paths.socketFile, handler: CommandRouter(ports: ports))
 

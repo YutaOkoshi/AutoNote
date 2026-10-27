@@ -26,10 +26,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installTerminationSignals()
-        Task { await launch() }
+        // Before any `await`: the notification center's delegate must exist when a cold-launching tap arrives (M9).
+        let notifier = SystemUserNotifier()
+        Task { await launch(notifier: notifier) }
     }
 
-    private func launch() async {
+    private func launch(notifier: SystemUserNotifier) async {
         let environment = ProcessInfo.processInfo.environment
 
         // A second instance quits before building anything (the services would sync the output folder too).
@@ -44,7 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 1. Build the services and start the socket (`.alreadyRunning` is the second line of defence).
         let env: AppEnvironment
         do {
-            env = try await AppEnvironment.make(environment: environment)
+            env = try await AppEnvironment.make(environment: environment, notifier: notifier)
         } catch {
             logger.error("launch failed: \(String(describing: error), privacy: .public)")
             NSLog("AutoNote: launch failed: %@", String(describing: error))
@@ -77,7 +79,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tasks.append(Task { await env.relayOutputFolderNotices() })
         await env.retentionScheduler.start()
         // Nothing on the launch path waits for the permission prompt.
-        let notifier = env.notifier
         tasks.append(Task { await notifier.requestAuthorization() })
         // Off the launch path: fill `claudePath` from the login shell when unset (ruling X8).
         let settings = env.settings

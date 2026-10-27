@@ -22,6 +22,9 @@ public enum UserAction: Equatable, Sendable {
     public private(set) var diskWarning: String?
     public private(set) var lastError: String?
     public var selectedMeetingID: MeetingID?
+    /// Withdraws the system notification of a prompt answered or resolved elsewhere (the app points it at
+    /// `UserNotifier.withdraw(id:)`), so Notification Center keeps no stale buttons.
+    @ObservationIgnored public var withdrawNotice: (@MainActor (String) async -> Void)?
 
     @ObservationIgnored private let ports: AppPorts
     @ObservationIgnored private let now: @Sendable () -> Date
@@ -48,6 +51,7 @@ public enum UserAction: Equatable, Sendable {
         await updateElapsed()
         queue = await ports.queue.status()
         queueKey = Self.key(queue)
+        syncOverwritePrompts()
         await refresh()
 
         let ports = ports
@@ -64,6 +68,7 @@ public enum UserAction: Equatable, Sendable {
 
     /// Re-reads the output folder and the meeting list.
     public func refresh() async {
+        syncOverwritePrompts()
         outputFolderAvailable = await ports.outputFolder.isAvailable()
         do {
             meetings = try await ports.meetings.rows()
@@ -163,21 +168,47 @@ public enum UserAction: Equatable, Sendable {
             try await ports.queue.retry(id)
         case .resolveOverwrite(let id, let overwrite):
             try await ports.queue.resolveOverwrite(id, overwrite: overwrite)
-            noticeWithdrawn(id: UserNotice.overwriteConfirmation(id).id)
+            await resolved(UserNotice.overwriteConfirmation(id).id)
         case .transcribeTooShort(let id):
             try await ports.queue.acceptShortRecording(id)
-            noticeWithdrawn(id: UserNotice.recordingTooShort(id).id)
+            await resolved(UserNotice.recordingTooShort(id).id)
         case .discardTooShort(let id):
             try await ports.queue.delete(id)
-            noticeWithdrawn(id: UserNotice.recordingTooShort(id).id)
+            await resolved(UserNotice.recordingTooShort(id).id)
         case .recoverInterrupted(let id):
             try await ports.meetings.recover(id)
-            noticeWithdrawn(id: UserNotice.interruptedRecordingFound(id).id)
+            await resolved(UserNotice.interruptedRecordingFound(id).id)
         case .discardInterrupted(let id):
             try await ports.meetings.discard(id)
-            noticeWithdrawn(id: UserNotice.interruptedRecordingFound(id).id)
+            await resolved(UserNotice.interruptedRecordingFound(id).id)
         case .openPrivacySettings:
             break   // The app opens System Settings itself.
+        }
+    }
+
+    /// The prompt is answered: drop it from the band and withdraw its system notification (M8).
+    private func resolved(_ id: String) async {
+        noticeWithdrawn(id: id)
+        await withdrawNotice?(id)
+    }
+
+    /// Overwrite prompts follow the queue state, not only posted notices, so a relaunch or a denied notification
+    /// still shows the band (I1): every job awaiting confirmation has a prompt, and a prompt whose job no longer
+    /// waits is dropped (and its notification withdrawn).
+    private func syncOverwritePrompts() {
+        let awaiting = queue.items.filter(\.awaitingConfirmation).map { MeetingID(rawValue: $0.meetingID) }
+        let awaitingIDs = Set(awaiting.map { UserNotice.overwriteConfirmation($0).id })
+        var stale: [String] = []
+        prompts.removeAll { p in
+            guard case .overwriteConfirmation = p, !awaitingIDs.contains(p.id) else { return false }
+            stale.append(p.id)
+            return true
+        }
+        for id in awaiting where !prompts.contains(where: { $0.id == UserNotice.overwriteConfirmation(id).id }) {
+            prompts.append(.overwriteConfirmation(id))
+        }
+        if let withdraw = withdrawNotice {
+            for id in stale { Task { await withdraw(id) } }
         }
     }
 
@@ -234,6 +265,7 @@ public enum UserAction: Equatable, Sendable {
 
     private func apply(_ status: QueueStatus) async {
         queue = status
+        syncOverwritePrompts()
         let key = Self.key(status)
         guard key != queueKey else { return }
         queueKey = key

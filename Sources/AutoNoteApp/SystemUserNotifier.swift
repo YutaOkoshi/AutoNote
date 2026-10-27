@@ -4,25 +4,39 @@ import Foundation
 import UserNotifications
 
 /// Posts `UserNotice`s as silent system notifications with action buttons and routes taps back as `UserNoticeAction`s.
+///
+/// Created synchronously at the start of `applicationDidFinishLaunching` so the center's delegate exists before a
+/// tap that cold-launched the app is delivered (M9). The callbacks are bound later (`bind`), once the services
+/// exist; taps that arrive before that are kept and replayed on `bind`.
 @MainActor
 final class SystemUserNotifier: NSObject, UserNotifier, UNUserNotificationCenterDelegate {
-    private let center = UNUserNotificationCenter.current()
-    private let onAction: @MainActor (UserNoticeAction, _ category: String) -> Void
-    private let onPost: @MainActor (UserNotice) -> Void
-    private let onWithdraw: @MainActor (String) -> Void
-    private let onOpenWindow: @MainActor () -> Void
+    struct Handlers {
+        var onAction: @MainActor (UserNoticeAction, _ category: String) -> Void
+        var onPost: @MainActor (UserNotice) -> Void
+        var onWithdraw: @MainActor (String) -> Void
+        var onOpenWindow: @MainActor () -> Void
+    }
 
-    init(onAction: @escaping @MainActor (UserNoticeAction, _ category: String) -> Void,
-         onPost: @escaping @MainActor (UserNotice) -> Void,
-         onWithdraw: @escaping @MainActor (String) -> Void,
-         onOpenWindow: @escaping @MainActor () -> Void) {
-        self.onOpenWindow = onOpenWindow
-        self.onAction = onAction
-        self.onPost = onPost
-        self.onWithdraw = onWithdraw
+    private let center = UNUserNotificationCenter.current()
+    private var handlers: Handlers?
+    private var pending: [@MainActor (Handlers) -> Void] = []
+
+    override init() {
         super.init()
         center.delegate = self
         registerCategories()
+    }
+
+    /// Binds the callbacks and replays the taps that arrived before.
+    func bind(_ handlers: Handlers) {
+        self.handlers = handlers
+        let replay = pending
+        pending = []
+        for tap in replay { tap(handlers) }
+    }
+
+    private func withHandlers(_ body: @escaping @MainActor (Handlers) -> Void) {
+        if let handlers { body(handlers) } else { pending.append(body) }
     }
 
     /// One category per notice case, with the buttons that case has. Buttons for the device cases depend only on the case.
@@ -67,16 +81,16 @@ final class SystemUserNotifier: NSObject, UserNotifier, UNUserNotificationCenter
         u.interruptionLevel = NoticeContent.needsAttention(category: content.category) ? .timeSensitive : .active
         let request = UNNotificationRequest(identifier: content.id, content: u, trigger: nil)
         do { try await center.add(request) } catch {
+            // Denied or failed: the window band is the fallback surface, so the model hears about it anyway (I1).
             NSLog("AutoNote: could not post notice %@: %@", content.id, String(describing: error))
-            return
         }
-        onPost(notice)
+        handlers?.onPost(notice)
     }
 
     func withdraw(id: String) async {
         center.removeDeliveredNotifications(withIdentifiers: [id])
         center.removePendingNotificationRequests(withIdentifiers: [id])
-        onWithdraw(id)
+        handlers?.onWithdraw(id)
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
@@ -100,10 +114,10 @@ final class SystemUserNotifier: NSObject, UserNotifier, UNUserNotificationCenter
                 if action == .openPrivacySettings {
                     NSWorkspace.shared.open(info["track"] == "system" ? PrivacyPane.systemAudio : PrivacyPane.microphone)
                 }
-                self.onAction(action, category)
+                self.withHandlers { $0.onAction(action, category) }
             } else if buttonID == nil {
                 // A plain tap with no meeting opens the window (the app is LSUIElement, so activating alone shows nothing).
-                self.onOpenWindow()
+                self.withHandlers { $0.onOpenWindow() }
             }
         }
     }
