@@ -46,16 +46,20 @@ private func mapped<A: Sendable, B: Sendable>(_ source: AsyncStream<A>, _ transf
 public struct CoordinatorRecorderPort: RecorderPort {
     private let coordinator: AutoRecordCoordinator
     private let elapsedTime: @Sendable () async -> TimelineTime?
+    private let currentLevels: @Sendable () async -> [TrackLevel]
 
-    /// `elapsed` is wired to `RecordingSession.elapsed()` by Task 13 (ruling X25).
-    public init(coordinator: AutoRecordCoordinator, elapsed: @escaping @Sendable () async -> TimelineTime? = { nil }) {
+    /// `elapsed` is wired to `RecordingSession.elapsed()` by Task 13 (ruling X25); `levels` to `RecordingSession.levels()`.
+    public init(coordinator: AutoRecordCoordinator, elapsed: @escaping @Sendable () async -> TimelineTime? = { nil },
+                levels: @escaping @Sendable () async -> [TrackLevel] = { [] }) {
         self.coordinator = coordinator
         self.elapsedTime = elapsed
+        self.currentLevels = levels
     }
 
     public func current() async -> RecorderSnapshot { await coordinator.current() }
     public func snapshots() async -> AsyncStream<RecorderSnapshot> { await coordinator.snapshots() }
     public func elapsed() async -> TimelineTime? { await elapsedTime() }
+    public func levels() async -> [TrackLevel] { await currentLevels() }
 
     public func start(language: Language?) async throws {
         try await check(.start)

@@ -38,6 +38,8 @@ public protocol RecorderPort: Sendable {
     func snapshots() async -> AsyncStream<RecorderSnapshot>
     /// The meeting timeline position (`RecordingSession.elapsed()`); nil when not recording (ruling X25).
     func elapsed() async -> TimelineTime?
+    /// The last second's peak per track (`RecordingSession.levels()`), read on the existing 1-second tick; `[]` when idle.
+    func levels() async -> [TrackLevel]
     func start(language: Language?) async throws
     func stop() async throws
     func pause() async throws

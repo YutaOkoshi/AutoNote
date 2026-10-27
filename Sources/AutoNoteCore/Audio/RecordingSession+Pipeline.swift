@@ -35,6 +35,7 @@ extension RecordingSession {
             return
         }
         stats[track, default: TrackStatistics()].add(chunk)
+        recentPeaks[track, default: RecentPeakWindow()].observe(peakDBFS: AudioLevel.peakDBFS(chunk.samples), at: chunk.start)
         audioSubscribers[track]?.continuation.yield(chunk)
         guard !changes.isEmpty else { return }
         do { try await persist { $0.apply(changes) } } catch { Self.log("segment save", error) }

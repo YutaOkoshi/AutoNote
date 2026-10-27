@@ -51,6 +51,7 @@ public actor RecordingSession {
     private var diskLowReported = false
     private var diskStopRequested = false
     var stats: [Track: TrackStatistics] = [:]
+    var recentPeaks: [Track: RecentPeakWindow] = [:]
     private var micSource: (any AudioSource)?
     private var systemSource: (any AudioSource)?
     private var ticker: Task<Void, Never>?
@@ -109,6 +110,14 @@ public actor RecordingSession {
     }
 
     public func statistics() -> [Track: TrackStatistics] { stats }
+
+    /// The peak of each track over the last second at `clock.now()`, `[mic, system]` in that order; `[]` when idle.
+    /// Paused audio is dropped before it is observed, so the values fall to `-infinity` while paused.
+    public func levels() -> [TrackLevel] {
+        guard state != .idle, let clock else { return [] }
+        let now = clock.now()
+        return [Track.mic, .system].map { TrackLevel(track: $0, peakDBFS: recentPeaks[$0, default: RecentPeakWindow()].peak(at: now)) }
+    }
 
     // MARK: - Operations
 
@@ -281,6 +290,7 @@ public actor RecordingSession {
         monitor = SilenceMonitor(start: .zero); silenceWarning = false
         lastDiskCheck = nil; diskLowReported = false; diskStopRequested = false
         stats = [.mic: TrackStatistics(), .system: TrackStatistics()]
+        recentPeaks = [.mic: RecentPeakWindow(), .system: RecentPeakWindow()]
         writers = TrackWriters(meetingDirectory: paths.meetingDirectory(id))
         do {
             let (changes, failures) = writers.transition { try $0.open(at: .zero) }

@@ -28,6 +28,7 @@ public actor FakeRecorderPort: RecorderPort {
     public private(set) var snapshot: RecorderSnapshot
     public var nextError: AppCommandError?
     public var elapsedValue: TimelineTime?
+    public private(set) var levelsValue: [TrackLevel] = []
     private var subscribers = Subscribers<RecorderSnapshot>()
 
     public init(_ snapshot: RecorderSnapshot = .idle(language: .ja)) { self.snapshot = snapshot }
@@ -39,6 +40,7 @@ public actor FakeRecorderPort: RecorderPort {
 
     public func setNextError(_ e: AppCommandError?) { nextError = e }
     public func setElapsed(_ t: TimelineTime?) { elapsedValue = t }
+    public func setLevels(_ l: [TrackLevel]) { levelsValue = l }
 
     public func current() -> RecorderSnapshot { snapshot }
 
@@ -47,6 +49,7 @@ public actor FakeRecorderPort: RecorderPort {
     }
 
     public func elapsed() -> TimelineTime? { elapsedValue }
+    public func levels() -> [TrackLevel] { levelsValue }
 
     public func start(language: Language?) throws {
         try perform("start(\(language?.rawValue ?? "nil"))", .start)

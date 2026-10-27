@@ -19,6 +19,22 @@ private func t(_ s: Double) -> TimelineTime { TimelineTime(seconds: s) }
         _ = try await h.session.stop()
     }
 
+    @Test func levelsReportRecentPeakPerTrack() async throws {
+        let h = try await SessionHarness.make()
+        #expect(await h.session.levels() == [])
+        _ = try await h.session.start(.init(language: .ja))
+        let now = TimelineTime(seconds: h.clock.seconds(fromHostTicks: h.clock.hostTime()))
+        await h.mic.emit(AudioChunk(track: .mic, samples: Array(repeating: 16384, count: 1600), start: now, hostTime: h.clock.hostTime()))
+        await h.system.emit(AudioChunk(track: .system, samples: Array(repeating: 0, count: 1600), start: now, hostTime: h.clock.hostTime()))
+        await h.session.waitUntilIdle()
+        let levels = await h.session.levels()
+        #expect(levels.map(\.track) == [.mic, .system])
+        #expect(abs(levels[0].peakDBFS - (-6.02)) < 0.1)
+        #expect(levels[1].peakDBFS == -.infinity)
+        _ = try await h.session.stop()
+        #expect(await h.session.levels() == [])
+    }
+
     @Test func deviceDefaultsToFactoryInputDevice() async throws {
         let h = try await SessionHarness.make()
         h.factory.devices["USB:input"] = DeviceRef(name: "USB Mic", uid: "USB:input", transport: "usb")
