@@ -36,7 +36,7 @@ AutoNote を初めて入れた人が、**説明を読まずに、録音を止め
 
 ## 画面（決めた形）
 
-### 0. 同意ウィンドウ
+### 0. 起動直後（同意ウィンドウは出さない）
 同意ウィンドウは出さない（利用者の決定 2026-10-27。初回起動はメインウィンドウを直接開く）。起動項目 4 は「`firstRunCompleted == false`（JSON `first_run_completed`。旧キー `consent_notice_shown` も後方互換で読み、どちらかが true なら true）なら `AppShell.open(mainWindowID)` で開き、`firstRunCompleted = true` を保存する」。2 回目以降はウィンドウを自動では開かない。そのあとのマイク許可要求（起動項目 5）は未決定なら毎回。
 
 ### 1. メインウィンドウ: ツールバー
