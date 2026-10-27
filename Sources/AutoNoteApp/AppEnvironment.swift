@@ -86,9 +86,14 @@ final class AppEnvironment {
         let s = try await settings.load()
         let manifests = ManifestStore(paths: paths)
 
-        // 2. Output-folder services; `rebuild` syncs the portable files (§8b (4)).
+        // 2. Output-folder services; `rebuild` syncs the portable files (§8b (4)). A failed sync is logged and the
+        //    launch goes on: `rebuild` switches the services before it syncs, so they are usable either way.
         let output = OutputFolderServices(paths: paths)
-        try await output.rebuild(outputFolder: s.outputFolder)
+        do {
+            try await output.rebuild(outputFolder: s.outputFolder)
+        } catch {
+            logger.error("output folder sync failed at launch (\(String(describing: error), privacy: .public))")
+        }
 
         // 3. Recording session (default clock).
         let session = RecordingSession.live(paths: paths, settings: s)
@@ -346,11 +351,11 @@ private actor LazyBatchTranscriber: BatchTranscriber {
 // MARK: - Device storage
 
 /// `devices.json` of whichever output folder is current, so the registry survives an output-folder change. One
-/// `PortableDevicesStorage` per output folder value (ruling X26).
+/// `PortableDevicesStorage` per config store, i.e. per output folder (ruling X26).
 private actor CurrentDevicesStorage: DeviceRegistryStorage {
     private let output: OutputFolderServices
     private let paths: AppPaths
-    private var cached: (folder: URL?, storage: PortableDevicesStorage)?
+    private var cached: (store: ObjectIdentifier, storage: PortableDevicesStorage)?
 
     init(output: OutputFolderServices, paths: AppPaths) {
         self.output = output
@@ -361,11 +366,14 @@ private actor CurrentDevicesStorage: DeviceRegistryStorage {
     func save(_ data: Data) async throws { try await current().save(data) }
     func backupCorrupt(_ data: Data) async throws { try await current().backupCorrupt(data) }
 
+    /// Keyed on the store instance from one `portable()` read, so a `rebuild` cannot pair a new store with an old
+    /// key. `SharedVaultServices` hands out one store per output folder, so this is one storage per folder.
     private func current() async -> PortableDevicesStorage {
-        let folder = await output.vault()?.folder
-        if let cached, cached.folder == folder { return cached.storage }
-        let storage = PortableDevicesStorage(store: await output.portable(), paths: paths)
-        cached = (folder, storage)
+        let store = await output.portable()
+        let key = ObjectIdentifier(store)
+        if let cached, cached.store == key { return cached.storage }
+        let storage = PortableDevicesStorage(store: store, paths: paths)
+        cached = (key, storage)
         return storage
     }
 }
