@@ -72,10 +72,14 @@ public struct AutomationsLoadResult: Equatable, Sendable {
     public var items: [LoadedAutomation]
     public var warnings: [String]
     public var disabledByPermission: Bool
+    /// The file exists but is not a JSON array: nothing may be saved over it (`AutomationsFile.save` refuses).
+    public var unparseable: Bool
 
-    public init(items: [LoadedAutomation] = [], warnings: [String] = [], disabledByPermission: Bool = false) {
+    public init(items: [LoadedAutomation] = [], warnings: [String] = [], disabledByPermission: Bool = false,
+                unparseable: Bool = false) {
         self.items = items
         self.warnings = warnings
         self.disabledByPermission = disabledByPermission
+        self.unparseable = unparseable
     }
 }

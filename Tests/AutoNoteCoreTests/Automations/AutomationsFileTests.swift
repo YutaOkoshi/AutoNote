@@ -39,6 +39,20 @@ private func mode(of url: URL) throws -> Int {
 }
 
 @Suite struct AutomationsFileTests {
+    @Test func saveRefusesToOverwriteAnUnparseableFile() throws {
+        // 壊れた automations.json（JSON として読めない / 最上位が配列でない）に save → throw し、ファイルは 1 バイトも変えない（I4）
+        let d = AutomationDefinition(name: "新規", on: .minutesGenerated, command: "echo hi")
+        for text in ["[{\"name\": \"a\", \"on\": \"minutes_generated\", \"command\": \"x\"\n", "{\"name\": \"a\"}\n"] {
+            let url = try write(text, mode: 0o600)
+            let file = AutomationsFile(url: url)
+            #expect(file.load().unparseable)
+            #expect(throws: AutomationsFileError.self) { try file.save([d]) }
+            #expect(try Data(contentsOf: url) == Data(text.utf8))
+        }
+        let ok = AutomationsFile(url: try write(specExample, mode: 0o600))
+        #expect(!ok.load().unparseable)
+    }
+
     @Test func loadsSpecExample() throws {
         let r = AutomationsFile(url: try write(specExample, mode: 0o600)).load()
         #expect(r.items.map(\.definition.name) == ["Slack に要約を投稿", "Claude で Next Action を整理"])

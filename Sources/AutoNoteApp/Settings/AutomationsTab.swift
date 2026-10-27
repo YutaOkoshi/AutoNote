@@ -27,13 +27,16 @@ struct AutomationsTab: View {
     private var definitions: [AutomationDefinition] { loadResult.items.map(\.definition) }
 
     /// While the file is writable by others nothing is edited here: saving would make it 0600 again and so trust
-    /// commands someone else may have written. The band says how to fix it.
-    private var locked: Bool { loadResult.disabledByPermission }
+    /// commands someone else may have written. A file that does not parse is locked too: saving would replace the
+    /// user's hand-edited file (`AutomationsFile.save` refuses). The band says how to fix it.
+    private var locked: Bool { Self.isLocked(loadResult) }
+
+    private static func isLocked(_ r: AutomationsLoadResult) -> Bool { r.disabledByPermission || r.unparseable }
 
     var body: some View {
         VStack(spacing: 0) {
             if !loadResult.warnings.isEmpty {
-                WarningBand(lines: loadResult.warnings, severe: loadResult.disabledByPermission)
+                WarningBand(lines: loadResult.warnings, severe: locked)
             }
             Form {
                 Section {
@@ -150,7 +153,10 @@ struct AutomationsTab: View {
     /// Returns the message to show in the sheet when the save is refused (the sheet then stays open).
     private func save(_ edited: AutomationDefinition, replacing original: AutomationDefinition?) -> String? {
         let fresh = env.automationsFile.load()
-        guard !fresh.disabledByPermission else { loadResult = fresh; return AutomationsFile.permissionWarning }
+        guard !Self.isLocked(fresh) else {
+            loadResult = fresh
+            return fresh.unparseable ? (fresh.warnings.first ?? "automations.json を読めません") : AutomationsFile.permissionWarning
+        }
         do {
             let list = try AutomationDraft.applying(edited, replacing: original, in: fresh.items.map(\.definition))
             if let failure = write(list) { return failure }
@@ -167,9 +173,9 @@ struct AutomationsTab: View {
     private func mutate(_ row: AutomationDefinition, _ change: (inout [AutomationDefinition], Int) -> Void) {
         let fresh = env.automationsFile.load()
         var list = fresh.items.map(\.definition)
-        guard !fresh.disabledByPermission, let index = list.firstIndex(of: row) else {
+        guard !Self.isLocked(fresh), let index = list.firstIndex(of: row) else {
             loadResult = fresh
-            message = "この Automation はほかで変更されました。一覧を読み直しました"
+            message = Self.isLocked(fresh) ? nil : "この Automation はほかで変更されました。一覧を読み直しました"
             return
         }
         change(&list, index)

@@ -1,5 +1,10 @@
 import Foundation
 
+public enum AutomationsFileError: Error, Equatable, Sendable {
+    /// The existing file does not parse as a JSON array; saving would replace the user's hand-edited file.
+    case unparseable(String)
+}
+
 /// Reads and writes `automations.json`. The caller passes `AppPaths.automationsFile`.
 public struct AutomationsFile: Sendable {
     public let url: URL
@@ -14,7 +19,8 @@ public struct AutomationsFile: Sendable {
         guard FileManager.default.fileExists(atPath: url.path) else { return AutomationsLoadResult() }
         let parsed: Parsed
         do { parsed = try Self.parse(try Data(contentsOf: url)) } catch let f as ParseFailure {
-            return AutomationsLoadResult(warnings: ["automations.json を読めません（\(f.message)）"])
+            return AutomationsLoadResult(warnings: ["automations.json を読めません（\(f.message)）。直すまで、ここでは編集できません"],
+                                         unparseable: true)
         } catch {
             return AutomationsLoadResult(warnings: ["automations.json を読めません（\(error.localizedDescription)）"])
         }
@@ -33,11 +39,15 @@ public struct AutomationsFile: Sendable {
     }
 
     /// Writes `defs` followed by the entries of the current file that cannot be decoded, verbatim, so a
-    /// load-edit-save cycle never rewrites or drops a broken entry.
+    /// load-edit-save cycle never rewrites or drops a broken entry. A file that does not parse as a JSON array
+    /// is never replaced: this throws `AutomationsFileError.unparseable` and leaves it untouched.
     public func save(_ defs: [AutomationDefinition]) throws {
         var array = try JSONSerialization.jsonObject(with: try AutoNoteJSON.encoder().encode(defs)) as? [Any] ?? []
-        if FileManager.default.fileExists(atPath: url.path),
-           let current = try? Self.parse(try Data(contentsOf: url)) {
+        if FileManager.default.fileExists(atPath: url.path) {
+            let current: Parsed
+            do { current = try Self.parse(try Data(contentsOf: url)) } catch let f as ParseFailure {
+                throw AutomationsFileError.unparseable(f.message)
+            }
             array.append(contentsOf: current.broken.map(\.raw))
         }
         let data = try JSONSerialization.data(withJSONObject: array, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
