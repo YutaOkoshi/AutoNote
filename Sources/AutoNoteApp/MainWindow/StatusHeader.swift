@@ -27,7 +27,7 @@ struct StatusHeader: View {
                 Band(systemImage: "externaldrive.badge.exclamationmark", tint: .orange) { Text(warning) }
             }
             if !model.meetings.isEmpty {
-                ForEach(ReadinessPresentation.bands(model.readiness, home: NSHomeDirectory()), id: \.item) { row in
+                ForEach(model.readinessBands(home: NSHomeDirectory()), id: \.item) { row in
                     let isModel = row.item == .model
                     Band(systemImage: isModel ? "arrow.down.circle" : "exclamationmark.triangle",
                          tint: isModel ? .secondary : .orange) {

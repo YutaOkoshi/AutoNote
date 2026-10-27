@@ -346,6 +346,24 @@ import AutoNoteTestSupport
         #expect(model.menuBar(now: now).items.contains(.readinessIssue(.outputFolder, title: "⚠ 保存先を作れませんでした — 設定を開く…")))
     }
 
+    @Test func claudeFailureBandHidesTheClaudeReadinessBand() async {
+        // 選択中の会議の失敗帯が「claude が見つからない」（入れ方を見る）なら、準備帯の claude 行は出さない（重複を避ける）
+        let fakes = FakePorts(readiness: FakeReadinessPort(readiness(claude: false)))
+        await fakes.meetings.send([MeetingRow(id: m1.rawValue, startedAt: now, state: .transcriptOnly),
+                                   MeetingRow(id: m2.rawValue, startedAt: now, state: .minutesGenerated)])
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        await fakes.queue.send(QueueStatus(items: [QueueItemDTO(meetingID: m1.rawValue, stage: "summarize", state: "done",
+                                                                summaryFailure: "claude_not_found: ")]))
+        await model.settle()
+        func items() -> [ReadinessRow.Item] { model.readinessBands(home: "/Users/u").map(\.item) }
+        #expect(items() == [.claude])
+        model.selectedMeetingID = m2
+        #expect(items() == [.claude])
+        model.selectedMeetingID = m1
+        #expect(items().isEmpty)
+    }
+
     @Test func inputLevelTicksWhileRecording() async {
         let fakes = FakePorts()
         let (model, task) = await start(fakes)

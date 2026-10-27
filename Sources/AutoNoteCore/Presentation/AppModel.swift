@@ -135,6 +135,19 @@ public enum UserAction: Equatable, Sendable {
         return true
     }
 
+    /// The window's readiness bands, without what the selected meeting's failure band already says (plan 07 GUI #4).
+    public func readinessBands(home: String) -> [ReadinessRow] {
+        ReadinessPresentation.bands(readiness, home: home, failure: selectedFailure)
+    }
+
+    /// The failure band the selected meeting shows (`FailureBand`), or nil.
+    private var selectedFailure: FailureExplanation? {
+        guard let id = selectedMeetingID?.rawValue, let row = meetings.first(where: { $0.id == id }),
+              let source = FailureExplanation.source(row: row, item: FailureExplanation.queueItem(for: id, in: queue.items))
+        else { return nil }
+        return FailureExplanation.make(source, outputFolderPath: readiness.outputFolder.path)
+    }
+
     public func menuBar(now: Date) -> MenuBarPresentation {
         MenuBarPresentation.make(recorder: recorder, elapsedSeconds: elapsedSeconds, queue: queue,
                                  readiness: readiness,

@@ -253,12 +253,8 @@ struct MinutesMissingView: View {
         }
     }
 
-    /// The meeting's job: a pending or failed one first, otherwise the done one, which carries the summary
-    /// failure of a `transcript_only` row.
-    private var queueItem: QueueItemDTO? {
-        let jobs = model.queue.items.filter { $0.meetingID == row.id }
-        return jobs.first { $0.state != JobState.done.rawValue } ?? jobs.first { $0.summaryFailure != nil } ?? jobs.first
-    }
+    /// The meeting's job (`FailureExplanation.queueItem`).
+    private var queueItem: QueueItemDTO? { FailureExplanation.queueItem(for: row.id, in: model.queue.items) }
 }
 
 /// The transcript inside an outer scroll view: plain rows, no own scrolling.

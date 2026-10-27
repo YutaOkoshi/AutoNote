@@ -90,6 +90,13 @@ public struct FailureExplanation: Sendable, Equatable {
         return nil
     }
 
+    /// The meeting's job for its failure band: a pending or failed one first, otherwise the done one, which carries
+    /// the summary failure of a `transcript_only` row.
+    public static func queueItem(for meetingID: String, in items: [QueueItemDTO]) -> QueueItemDTO? {
+        let jobs = items.filter { $0.meetingID == meetingID }
+        return jobs.first { $0.state != JobState.done.rawValue } ?? jobs.first { $0.summaryFailure != nil } ?? jobs.first
+    }
+
     public static func actionTitle(_ a: Action) -> String {
         switch a {
         case .installGuide: "入れ方を見る"

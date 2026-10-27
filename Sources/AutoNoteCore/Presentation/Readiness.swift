@@ -77,9 +77,11 @@ public enum ReadinessPresentation {
         [folderRow(r.outputFolder, home: home), modelRow(r.model), claudeRow(r.claude)]
     }
 
-    /// The rows that are not ready, in the same order.
-    public static func bands(_ r: Readiness, home: String) -> [ReadinessRow] {
-        rows(r, home: home).filter { !$0.ready }
+    /// The rows that are not ready, in the same order. With the selected meeting's `failure` band on screen, the
+    /// Claude row is left out when that band already offers 「入れ方を見る」 (the same advice twice).
+    public static func bands(_ r: Readiness, home: String, failure: FailureExplanation? = nil) -> [ReadinessRow] {
+        let hidesClaude = failure?.actions.contains(.installGuide) == true
+        return rows(r, home: home).filter { !$0.ready && !(hidesClaude && $0.item == .claude) }
     }
 
     /// Replaces the home prefix with `~` only on a path-component boundary.
