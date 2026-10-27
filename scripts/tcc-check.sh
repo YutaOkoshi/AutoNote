@@ -87,8 +87,16 @@ screen_state() { rec "screen locked: $(screen_locked)（ロック中は許可ダ
 
 app_running() { pgrep -x AutoNoteApp >/dev/null; }
 
+# 「開発」メニューは AUTONOTE_DATA_DIR の起動（か DEBUG ビルド）にだけ出るので、使い捨てのデータ領域で起動する。
+# TCC の許可はバンドル単位なのでデータ領域を変えても判定は同じ。dev-checks.log は常に既定の場所（DEVLOG）に書かれる。
+TCC_DATA=""
 app_open() {
-    open "${APP}" || { rec "open failed"; return 1; }
+    if [[ -z "${TCC_DATA}" ]]; then
+        TCC_DATA="$(mktemp -d /tmp/an-tcc.XXXXXX)"   # unix ソケットのパス上限に収まる短さ
+        printf '{"launch_at_login": false, "first_run_completed": true}\n' >"${TCC_DATA}/settings.json"
+        rec "data dir: ${TCC_DATA}"
+    fi
+    open --env "AUTONOTE_DATA_DIR=${TCC_DATA}" "${APP}" || { rec "open failed"; return 1; }
     local i
     for i in $(seq 1 50); do app_running && break; sleep 0.2; done
     sleep 2   # メニューバー項目ができるまで待つ

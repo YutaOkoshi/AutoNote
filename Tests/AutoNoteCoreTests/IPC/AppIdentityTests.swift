@@ -7,3 +7,11 @@ import Testing
     #expect(!AppIdentity.isDataDirectoryOverridden([:]) && !AppIdentity.isDataDirectoryOverridden(["AUTONOTE_DATA_DIR": ""]))
     #expect(AppIdentity.bundleID == "com.yutaokoshi.autonote")
 }
+
+@Test func devMenuOnlyForDevelopmentLaunches() {
+    // 「開発」メニュー（plan 02 の TCC 確認）は一般の利用者には出さない: AUTONOTE_DATA_DIR の起動か DEBUG ビルドだけ
+    #expect(!AppIdentity.showsDevMenu([:], debugBuild: false))
+    #expect(!AppIdentity.showsDevMenu(["AUTONOTE_DATA_DIR": ""], debugBuild: false))
+    #expect(AppIdentity.showsDevMenu(["AUTONOTE_DATA_DIR": "/tmp/an-test"], debugBuild: false))
+    #expect(AppIdentity.showsDevMenu([:], debugBuild: true))
+}

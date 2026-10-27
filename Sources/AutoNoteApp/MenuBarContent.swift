@@ -33,10 +33,19 @@ struct MenuBarLabel: View {
 }
 
 /// The menu: `model.menuBar(now:)`'s items in order (plan 06 Task 13 Step 6), with the plan 02 開発 menu after 設定…
-/// (ruling X11, `scripts/tcc-check.sh` clicks it).
+/// (ruling X11, `scripts/tcc-check.sh` clicks it) only in development launches (`AppIdentity.showsDevMenu`).
 struct MenuBarContent: View {
     let shell: AppShell
     @Environment(\.openSettings) private var openSettings
+
+    private static let showsDevMenu: Bool = {
+        #if DEBUG
+        let debugBuild = true
+        #else
+        let debugBuild = false
+        #endif
+        return AppIdentity.showsDevMenu(ProcessInfo.processInfo.environment, debugBuild: debugBuild)
+    }()
 
     var body: some View {
         if let model = shell.env?.model {
@@ -51,7 +60,7 @@ struct MenuBarContent: View {
         } else {
             Text("起動中…")
             Divider()
-            DevMenu()
+            if Self.showsDevMenu { DevMenu() }
             Button("終了") { NSApp.terminate(nil) }
                 .keyboardShortcut("q")
         }
@@ -100,8 +109,10 @@ struct MenuBarContent: View {
         case .settings:
             Button("設定…") { shell.showSettings(.general, using: openSettings) }
             .keyboardShortcut(",")
-            Divider()
-            DevMenu()
+            if Self.showsDevMenu {
+                Divider()
+                DevMenu()
+            }
         case .quit:
             Divider()
             Button("終了") { NSApp.terminate(nil) }
