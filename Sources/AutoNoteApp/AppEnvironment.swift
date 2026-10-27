@@ -206,6 +206,10 @@ final class AppEnvironment {
     @discardableResult
     func settingsSaved(old: AutoNoteCore.Settings, new: AutoNoteCore.Settings) async -> SaveResult {
         await wiring.settingsChanged(from: old, to: new)
+        // The window's 「出力フォルダが未設定です」 banner and the menu's status line read `model.outputFolderAvailable`,
+        // which otherwise waits for the 30-second periodic refresh: both testers of the 2026-10-27 UI audit saved a
+        // folder and saw the warning stay. Re-read it now so the save is visibly effective.
+        await model.refresh()
         let hotKeys = shortcutsChanged(new.shortcuts)
         let loginItem = reconcileLoginItem(launchAtLogin: new.launchAtLogin)
         return SaveResult(hotKeys: hotKeys, loginItem: loginItem)
