@@ -1,8 +1,9 @@
 import AutoNoteCore
 import SwiftUI
 
-/// One readiness action as a button (plan 07 Task 10). The readiness card, the readiness bands, the failure views
-/// and the menu all use this, so an action does the same thing wherever it is pressed.
+/// One readiness action as a button (plan 07 Task 10). The empty-state readiness card (`EmptyStateView`) and the
+/// StatusHeader readiness bands use this, so an action does the same thing in both. The failure bands and the menu
+/// have their own buttons.
 struct ReadinessActionButton: View {
     let action: ReadinessRow.Action
     let model: AppModel
