@@ -397,6 +397,86 @@
 - Ruling X57 (fix wave scope, ONE wave): I1 (answer bands derived from queue state + onPost regardless of center.add + withdraw on resolve = M8), I2 (launch sweep enqueues .recorded manifests without a job + bounded wait in the quit path + test), I3 (CLI timeouts: automations run = timeoutRange.upperBound + kill grace + margin; import = 24 h after connect; CLITests), I4 (refuse save over an unparseable automations.json; tab disables edits with the warning; test), I5 (unsaved-edit confirmation on selection change and 再生成), plus M1, M2 (SettingsStore.update), M4 (automations run exits 1 on failure, child code kept in output — spec §16 wins over Task 10's choice), M5 (minutes.json written only after the Vault write / rolled back on cancel), M9 (notification delegate set synchronously at launch), M11 (timing bounds as recommended), M12 (row context menu 再実行), M13 (shared minutesUsable helper). Accepted/parked: M3, M6, M7, M10.
 - Ruling X58 (declined-to-judge items): resolveOverwrite(false) completing `automations` without firing is correct (no Vault write happened); `autonote` linking AutoNoteTestSupport for `dev` commands is pre-existing (plan 01) — accept; batch engine from Settings.defaultLanguage is the plan 04/05 contract — accept; timeSensitive downgrade, Vault rescan cost, one thread per socket connection (0600 socket in 0700 dir) — accept.
 
+### 計画 07（台帳から転記、2026-10-27）
+- 台帳 `progress.md`・各タスクのブリーフ/報告/レビュー・`final-review.md`・`fix-wave-report.md`・`fix-wave-re-review.md` の全文は `.superpowers/sdd/2026-10-27-autonote-07-first-run-to-minutes/` に残してある（gitignore 下。セッション限り）。以下は台帳の写し。
+- 仕様: `docs/superpowers/specs/2026-10-27-first-run-to-minutes-design.md`（拘束力あり）。ブランチ plan-07、基点 3fd06c9、最終 HEAD 9801107。
+
+#### タスクと担当モデル・コミット
+| Task | 内容 | 実装 | レビュー | コミット |
+|---|---|---|---|---|
+| 1 | `Readiness` モデルと準備カードの文言 | sonnet | sonnet | 972d5b8 |
+| 2 | 初回起動の既定値（保存先・whisper モデル）`FirstRunDefaults` | sonnet | sonnet | c4990e0 |
+| 3 | ジョブ・要約の失敗を内部名なしで説明する `FailureExplanation` | sonnet | sonnet | c45c47d |
+| 4 | 流れの文言、メニューの準備項目、ショートカット表示、保存先の言い方 | opus | opus | cec0a55 |
+| 5 | ジョブごとのバッチエンジン解決、エンジンなしのときライブ文字起こしを使う | opus | opus | 6f4c677 |
+| 6 | トラックごとの直近入力レベルと静かな入力の規則 | opus | sonnet | 44bd4cc |
+| 7 | `ReadinessPort`（初回モデルダウンロード、claude 再検出） | opus | opus | 70a8d9f |
+| 8 | `AppModel` が準備状況・入力レベル・今回の録音・自動選択を持つ | opus | opus | 9534828 |
+| 9 | 起動時の既定値、ジョブごとのバッチエンジン、同意後にウィンドウを開く（E2E 07.1, 07.2, 07.4） | opus | opus | 1273f73 |
+| 10 | メインウィンドウのツールバー録音ボタン、準備カード付きの空状態、入力メーター | opus | opus | 8343c9d |
+| 11 | 段階の見出し、短い録音の帯、失敗の帯、保存完了の帯 | opus | opus（要修正）→ sonnet 再レビュー | a2f73f3、修正 01942bd |
+| 12 | メニューの準備項目とショートカット表示、設定は一般タブで開く、既定の保存先（E2E 07.3） | opus | opus | cf898b9 |
+| 修正波 | 最終レビューの指摘 9 件 | opus | opus | fc06a83, 82987af, 7a91eed, 70aff09, 7bc8835, 4b3eb28, fcc5cfd, d9a21df, 9801107 |
+
+#### 事前スキャン（2026-10-27）
+- 計画内のタスク対 23 組と各タスク単独を突き合わせた。型・ポートの Produces/Consumes は全組で一致。同じファイルを順に触る組（4→8 の `AppModel.menuBar`、4↔6 の `LiveAdapters.swift`、6↔7 の `Ports.swift`/`FakePorts.swift`、9→10 の `MainWindow.swift`、9↔12 の `scripts/e2e-check.sh`、10↔11 の `StatusHeader.swift`）は、順序どおりなら衝突なし。レビュー規範と衝突する指示（何も検証しないテスト、論理ブロックの丸写し）は見つからなかった。
+
+#### 裁定
+- Ruling: 前提の相違 1〜14 はそのまま採用（計画に記載済み）。— 設計書の意図を優先した Lead の判断 — 間違っていれば該当タスクの手戻り。
+- Ruling: Task 3 のテストにある `QueueItemDTO(meetingID:stage:state:message:notBefore:summaryFailure:)` のラベルが現行 init と違えば、現行 init に合わせて書き直してよい（期待値は変えない）。— DTO は Task 3 の変更対象でない — 影響なし。
+- Ruling: Task 4 `readinessIssuesInMenu` の末尾 4 項目は現行の順序を正とする。⚠ 項目は「現行末尾の `.openWindow` の直前」に置く。末尾の構成が違えばテストの期待値側を合わせる。— Produces 本文が順序を決めている — 影響は表示順だけ。
+- Ruling: Task 8 `withdrawNotice` の識別子は `NoticeContent`／既存の tooShort 通知が使っている id 形式を使う（テストの `"meeting.tooShort.<m1>"` は現行形式の写し。違えば現行に合わせる）。— 通知の id を変えると既存の取り下げが壊れる — 影響なし。
+- Ruling: Task 9 E2E 07.4 で `status.queue` が複数件なら、`meeting_id == 20261025-0930-c3d4` の要素を plutil で順に探して判定する。— 項目の意図は message の形式の回帰検知 — 影響なし。
+- Ruling: 実装者モデル: Task 1・2・3 は sonnet（1〜2 ファイル・完全仕様）、Task 4〜12 は opus（複数ファイルの統合、GUI 確認）。レビューは sonnet（小さい diff）／opus（5・7・8・9・10・11・12）。
+- Ruling: Task 1 の `assumedReady.isComplete == false` は意図どおり（モデルが `.none`）。UI は `isComplete` ではなく rows/bands を見る。変更なし。
+- Ruling: Task 2 の `apply` は load() と update() の間に他の書き手が入ると、その値を残したまま `.created(default)` を返す。許容 — `apply` は起動時に 1 回だけ、他の書き手が居ない時点で走り、戻り値の使い道はログ 1 行だけ。
+- Ruling: Task 3 で、ラテン文字の段階名は助詞の前に空白が入る（「Automations を待っています」）、`noInternalNamesLeak` は正規表現の前に保存先のパスを除く（パスは利用者のデータ）。どちらも許容。
+- Ruling: Task 7 の `retryModelDownload` は `AUTONOTE_DATA_DIR` の上書きを見ない。許容 — 再試行ボタンは `.failed` の行にしか出ず、失敗は上書きが開始しないダウンロードの後にしか起きない。
+- Ruling: Task 8 の帯のテストは 500 ms + ポーリング（アプリの既定は 5 秒）、`refresh()` は 30 秒ごとに `readiness.current()` も呼ぶ（stat と isExecutable だけで軽い）。どちらも許容。
+- Ruling: Task 9 の MainWindow の開閉フックは body に付ける（のち Task 10 で安定したコンテナへ移した）。ジョブごとの `LazyBatchTranscriber` は whisper モデルをジョブごとに読み直す（保留: EngineChoice ごとにランナーをキャッシュする案）。
+- Ruling: 最終レビューの修正波は 1 回だけ — I-1（`outputFolder(forInput:)` で `~` を展開し末尾の `/` を落とす。既定との比較も）、I-2（`NSDocumentsFolderUsageDescription` を追加し、初回起動の保存先作成を同意後に遅らせて、書類フォルダの許可ダイアログが同意画面の後に出るようにする）、I-3（帯のテストを分け、期限つきポーリングにする）、保留から昇格した 2・4・5・6・7、M-1。それ以外は保留のまま。
+- Ruling: 初回起動の保存先作成を同意後に遅らせ、NSDocumentsFolderUsageDescription を追加。— `~/Documents/AutoNote` の作成が起動直後に走ると、同意画面より先に macOS の書類フォルダの許可ダイアログが出る。E2E は `AUTONOTE_DATA_DIR` と `consent_notice_shown: true` で走るため、この経路は E2E に映らない。— 同意が済んでいる起動（2 回目以降）は従来どおり起動時に適用。同意直後は `wiring.settingsChanged(old,new)` を呼んで待ち行列の段階を新しい保存先で組み直す（ブリーフの文面を超える追加。無いと次の設定保存まで保存先なしの段階が残る）。
+- Ruling: no_speech の失敗帯に 再実行 を先頭に出す（仕様からの意図的な逸脱、仕様の表に注記済み）。— whisper が入った後にその録音を文字起こしし直せないと行き止まりになる（最終レビュー M-1）。— ボタンが 1 つ増えるだけ。`FailureBand` は `.rerun` を既に扱える。
+- Ruling: ProcessRunnerTests の wall-clock テストが負荷下で落ちる（計画 07 外・保留。E2E はアイドル時に回す）。— `timeoutEscalatesToSigkillWhenSigtermIsIgnored` が 9.485 秒（上限 10 秒未満）。ほかに `MicrophoneSourceTests.stopReturnsWithinTimeoutWhenEngineStopBlocks` などが負荷平均 8 超で落ちた。計画 07 のファイル外の既存テストで、アイドル時は通る。
+- Ruling: 再レビュー（修正波）の Minor 3 件は保留 — 項目 8 のフォールバックに単体テストがない、「帯が消える」テストは帯が一度も出なくても通る（出る側は別テストが見ている）、`~user/…` は展開しない。修正波をもう 1 回回すほどの価値がない。
+
+#### 最終レビュー（opus、cf898b9）と修正波
+- 全ブランチ最終レビュー: With fixes — Critical 0 / Important 3 / Minor 11。
+  - I-1: 保存先の入力で `~` を展開していない（画面のプレースホルダーとカードは `~/Documents/AutoNote` を見せている）。
+  - I-2: 実機の初回起動で書類フォルダの許可ダイアログが同意画面より先に出る。`NSDocumentsFolderUsageDescription` も無い。
+  - I-3: 時間頼みの帯のテストが負荷で落ちる。
+  - M-1: no_speech の失敗に再実行がない（仕様の表どおりだが行き止まり）。
+- 修正波（opus、cf898b9 → 9801107、9 コミット）: 上の裁定のとおり。`swift test` 897/897、`AppModelTests` 5 回連続、`scripts/e2e-check.sh` 38/0。再レビュー（opus）: 9 件すべて Addressed、新規の Critical/Important なし。
+- 修正波の内訳: ① `~` 展開と末尾 `/`（fc06a83）② 同意後に保存先を作る＋書類フォルダの用途文言（82987af）③ 期限つきポーリング（7a91eed）④ 同意の OK ボタンにアクセシビリティ名（70aff09）⑤ E2E 07.3 の後始末 Esc に timeout（7bc8835）⑥ 読めない live.json をログに残してから no_speech（4b3eb28）⑦ `ReadinessActionButton` を使う画面の注記（fcc5cfd）⑧ モデル名なしの whisper 選択は既定名に（d9a21df）⑨ no_speech に再実行（9801107）。
+- Lead 検証（HEAD 9801107）: `swift test` 897/897（単独実行）。`scripts/e2e-check.sh` は 1・2 回目が項目 1（E2E 内の swift test）で落ちた（再レビューのエージェントが走っていて負荷平均 7+、`ProcessRunnerTests.timeoutEscalatesToSigkillWhenSigtermIsIgnored` が 9.485 秒）。`ProcessRunnerTests` 3/3 と、アイドル時の E2E 3 回目は 38 passed / 0 failed / 0 skipped（07.1〜07.4 すべて PASS）。
+
+#### 繰り越した Minor（未対応。次の計画の該当箇所を触るときに拾う）
+- `Readiness.swift:136`: NaN の fraction は `pct` で trap する（`PercentGate` が非有限値を落とすので実害なし。`PercentGate` の非有限・クランプのテストはまだ無い）。
+- `outputFolder(forInput:)` の `~user/…` は展開しない。
+- `SettingsStore` を挟んだ書き手が load と update の間に入る競合（起動時 1 回のみで無害）。
+- Task 3: 要約の各 case をテーブル駆動にできる（見た目だけ）。
+- Task 4: `list(seconds: 252, minutes: nil)` のテストがない。
+- Task 5: `run` の末尾 2 行が重複（見た目）。
+- Task 6: 1 チャンクで `peakDBFS` を 2 回計算する場合がある。一時停止中の減衰のセッションテストがない。
+- Task 7: `installGuideURL` は Claude Code のセットアップページを指す（Task 9 で直した）。
+- Task 8: `syncTooShortPrompts` が `syncOverwritePrompts` と重複（`syncPrompts(wanted:isKind:)` に括れる）。`InputLevelTracker.observe` が録音器のスナップショットでも走る（1 Hz のティックだけにしたい）。
+- Task 9: `AppDelegate.launch` が約 140 行。`PortableOutputFolderPort` / `WorkspaceOpener` の組み立てが 2 か所にある。ジョブごとに whisper モデルを読み直す（EngineChoice ごとのランナーキャッシュ案）。
+- Task 10: `recordButton` の `default: EmptyView()` が将来のアクションを黙って飲む。`StatusHeader` の AppKit import が不要かもしれない。
+- Task 11: `TooShortView` の文字列を Core の `ShortRecordingCopy` に寄せられる。
+- Task 12: `GeneralTab` の `claude_path` は表示時に読んだ値を持つので、窓で「もう一度探す」を押した後に一般タブを保存すると古い空の値を書き戻し得る（最終レビュー M-7）。`.keyboardShortcut(",")` のインデント。
+- 最終レビューの Minor: `transcript_engine` の表示名「Apple 音声入力（リアルタイム版）」は、ライブが SpeechTranscriber（Apple Silicon の既定）でも同じ文字列を書く（M-2）。`relayQueueNotices` が進捗の度に `model.refresh()` を呼び、`refresh()` は準備状況の読み取りも含む。`redetectClaude` と並行する `refresh()` が一瞬だけ古い `readiness.claude` を戻す（見た目のみ）。カードの保存先パスは `settings.json` から直接読む。
+- 再レビューの Minor: 項目 8（モデル名なしの whisper 選択）のフォールバックに単体テストがない。「帯が消える」テストは帯が出なくても通る。
+- 計画 07 外の既存テスト: `ProcessRunnerTests.timeoutEscalatesToSigkillWhenSigtermIsIgnored`、`MicrophoneSourceTests.stopReturnsWithinTimeoutWhenEngineStopBlocks`、`ProcessTapSourceTests`、`WhisperBatchTranscriberTests.cancellationWhilePausedThrowsPromptly` は負荷下で wall-clock の上限を越えることがある。E2E（項目 1 が `swift test` を回す）はアイドル時に回す。
+
+#### 実機確認（GUI 受け入れ・ゼロコンテキスト被験者）
+- GUI 受け入れ（opus、HEAD 9801107、画面ロック解除後）: Task 10/11/12 の「起動して確かめる」はすべて PASS。2 分の録音で停止から約 3 分 55 秒後に「議事録を保存しました — …」の帯、その会議が選ばれ、ウィンドウは前面に出ない。claude 無しの設定では「議事録を作れませんでした — Claude Code（claude）が見つかりません」と「入れ方を見る」「もう一度探して再実行」。I-2 の初回起動（同意 → 書類フォルダ許可）は、実データディレクトリに `logs/` があったため未実施 → その後、利用者の決定で同意画面自体を削除（下記）。
+- 利用者の決定（2026-10-27、実機確認の後）: 「録音は相手の同意を得て行ってください」の同意画面を出さない。初回起動はメインウィンドウを直接開き、初回既定（保存先・モデル）は起動時に適用。設定キーは `firstRunCompleted`（JSON `first_run_completed`、旧 `consent_notice_shown` も読む）。仕様 §0 を書き換え済み。修正波 2（fdb3ff6〜c20d68e、7 件）で、空状態の文言（1 分未満は「作る」）、保存先の保存時にフォルダを作る、完了後は本文を先頭から表示、「入れ方を見る」の重複をなくす、停止した会議を選ぶ（未保存の編集があるときを除く。計画 07 の `stoppedKeepsExistingSelection` を置き換え）、〰️ を SF Symbol に。再レビュー（opus）: 7/7 Addressed。Lead 検証: `swift test` 900 件（単独実行では既存の wall-clock フレーク 1 件）、E2E 38/0。
+- ゼロコンテキスト被験者（`zero-context-brief.md`、新しい `AUTONOTE_DATA_DIR`、`defaults delete`、Desktop フォルダ削除）:
+  - 1 回目（9801107、無音）: sonnet は課題 3 到達（環境音を「はあー」と文字起こし）、opus は無音のため no_speech で課題 3 失敗。教訓: 被験者は声を出せないので `say -v Kyoko` の読み上げを裏で流す。
+  - 2 回目（c20d68e、声あり）: sonnet・opus とも 6 課題すべて成功、課題 3 で議事録を引用（仕様の成功基準を満たす）。共通の誤操作: 停止直後の「録音を保存しました」の帯が 5 秒で消えて「作る」が上にずれる（修正波 3 で対応）。opus: 保存先を変えると完成済みの会議が「（無題）」になり「Finder で表示」が無効に（修正波 3 で調査・対応）、議事録表示後に AX ツリーが空（修正波 3 で切り分け）、「開発」メニューが一般利用者に見える（修正波 3 で上書き起動/DEBUG のみに）。報告: `docs/superpowers/research/2026-10-27-ux-audit/plan07-tester-{1-sonnet,2-opus,3-sonnet,4-opus}.md`。
+- 追加の成果物: 利用者向け手順書 `docs/guide/getting-started.md`（画像 13 枚）、長時間録音のメモリ調査 `docs/superpowers/research/2026-10-27-memory-audit-long-recordings.md`（停止後の whisper 一括処理が約 14 MB/分で 2〜3 時間だと 1.6〜2.7 GB。窓分割は利用者判断）、GitHub Actions（`.github/workflows/ci.yml` は main/PR/手動、`release.yml` はバージョン変更で universal zip の Release。Free の実機枠 約 200 分/月）。
+- 修正波 3（被験者再テストの所見、e7883b7 → 45efb92、3 件）: (1) 停止直後の緑の帯は、同じ会議に短い録音の帯か失敗の帯が出るときは出さない（「作る」がずれる誤操作の原因）。(2) 完成した会議の議事録パスとタイトルを `Manifest` の `note_path`・`note_title` に記録し、保存先を変えても一覧・「Finder で表示」・「最新の議事録を開く」が消えない（既存ファイルは移動しない。残課題: 変更後の保存・再生成は新しい保存先に書く、削除は古いフォルダのファイルを消さない、修正前の会議は次に書き直すまで旧挙動）。(3) AX ツリーが空になる現象はアプリではなく scratchpad の axtool の不具合（画面外の Lazy 要素の AXPosition が (inf, inf) で `Int(inf)` が trap → exit 132）。スクロールして見える位置にある文字起こしは行ごとに AXStaticText で読めるので VoiceOver は問題なし。ツール側を修正、リポジトリの変更なし。(4) 「開発」メニューは `AUTONOTE_DATA_DIR` 上書き起動か DEBUG ビルドのときだけ（`AppIdentity.showsDevMenu`）。手元の `scripts/build-app.sh`（既定 debug）と被験者テスト（上書き起動）では引き続き出るが、配布物（release）では出ない。再レビュー（opus）: 3/3 Addressed、Critical/Important なし。保留した Minor: `.failed` の判定は停止時点では効かない（後から失敗が届いたときは帯がずれ得る）、修正前の会議の `note_path` のバックフィル、`tcc-check.sh` の一時フォルダを消さない。Lead 検証（アイドル）: `swift test` 904/904、`scripts/build-app.sh` OK、E2E 38/0。
+
 ## 利用者への依頼（後回しにした 👤 手順）
 
 ### 計画 02 Task 1（TCC まとめ確認）— 2026-10-26
