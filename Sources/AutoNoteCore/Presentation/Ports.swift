@@ -125,10 +125,11 @@ public struct AppPorts: Sendable {
     public var live: any LiveTranscriptPort
     public var outputFolder: any OutputFolderPort
     public var opener: any FileOpener
+    public var readiness: any ReadinessPort
 
     public init(recorder: any RecorderPort, events: any RecordingEventsPort, queue: any QueuePort, meetings: any MeetingsPort,
                 automations: any AutomationsPort, live: any LiveTranscriptPort, outputFolder: any OutputFolderPort,
-                opener: any FileOpener) {
+                opener: any FileOpener, readiness: any ReadinessPort) {
         self.recorder = recorder
         self.events = events
         self.queue = queue
@@ -137,5 +138,6 @@ public struct AppPorts: Sendable {
         self.live = live
         self.outputFolder = outputFolder
         self.opener = opener
+        self.readiness = readiness
     }
 }

@@ -329,6 +329,46 @@ public actor FakeFileOpener: FileOpener {
     }
 }
 
+// MARK: - Readiness
+
+public actor FakeReadinessPort: ReadinessPort {
+    public private(set) var calls: [String] = []
+    public private(set) var currentValue: Readiness
+    private var redetectResult: Readiness.Claude?
+    private var subscribers = Subscribers<Readiness.Model>()
+
+    public init(_ r: Readiness = .assumedReady) { currentValue = r }
+
+    public func setCurrent(_ r: Readiness) { currentValue = r }
+
+    /// Updates `current().model` and pushes it to every open `updates()` stream.
+    public func send(_ model: Readiness.Model) {
+        currentValue.model = model
+        subscribers.yield(model)
+    }
+
+    /// What the next `redetectClaude()` returns (and stores into `current().claude`).
+    public func setRedetectResult(_ claude: Readiness.Claude) { redetectResult = claude }
+
+    public func current() -> Readiness { currentValue }
+
+    public func updates() -> AsyncStream<Readiness.Model> {
+        subscribers.stream(initial: currentValue.model) { [weak self] id in Task { await self?.unsubscribe(id) } }
+    }
+
+    public func redetectClaude() -> Readiness.Claude {
+        calls.append("redetectClaude")
+        if let redetectResult { currentValue.claude = redetectResult }
+        return currentValue.claude
+    }
+
+    public func retryModelDownload() { calls.append("retryModelDownload") }
+
+    public func installGuide() { calls.append("installGuide") }
+
+    private func unsubscribe(_ id: UUID) { subscribers.remove(id) }
+}
+
 // MARK: - Enqueuer
 
 /// Records every id `AppWiring.route` enqueues, in order.
@@ -350,12 +390,14 @@ public struct FakePorts: Sendable {
     public let live: FakeLiveTranscriptPort
     public let outputFolder: FakeOutputFolderPort
     public let opener: FakeFileOpener
+    public let readiness: FakeReadinessPort
     public var ports: AppPorts
 
     public init(recorder: FakeRecorderPort = FakeRecorderPort(), events: FakeRecordingEventsPort = FakeRecordingEventsPort(),
                 queue: FakeQueuePort = FakeQueuePort(), meetings: FakeMeetingsPort = FakeMeetingsPort(),
                 automations: FakeAutomationsPort = FakeAutomationsPort(), live: FakeLiveTranscriptPort = FakeLiveTranscriptPort(),
-                outputFolder: FakeOutputFolderPort = FakeOutputFolderPort(), opener: FakeFileOpener = FakeFileOpener()) {
+                outputFolder: FakeOutputFolderPort = FakeOutputFolderPort(), opener: FakeFileOpener = FakeFileOpener(),
+                readiness: FakeReadinessPort = FakeReadinessPort()) {
         self.recorder = recorder
         self.events = events
         self.queue = queue
@@ -364,7 +406,8 @@ public struct FakePorts: Sendable {
         self.live = live
         self.outputFolder = outputFolder
         self.opener = opener
+        self.readiness = readiness
         ports = AppPorts(recorder: recorder, events: events, queue: queue, meetings: meetings, automations: automations,
-                         live: live, outputFolder: outputFolder, opener: opener)
+                         live: live, outputFolder: outputFolder, opener: opener, readiness: readiness)
     }
 }

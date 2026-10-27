@@ -177,7 +177,9 @@ final class AppEnvironment {
                                             manifests: manifests, paths: paths, output: output),
             live: live,
             outputFolder: PortableOutputFolderPort(output: output),
-            opener: WorkspaceOpener())
+            opener: WorkspaceOpener(),
+            readiness: LiveReadinessPort(settings: settings, outputFolder: PortableOutputFolderPort(output: output),
+                                         models: models, catalog: catalog, opener: WorkspaceOpener()))
         let model = AppModel(ports: ports)
         model.withdrawNotice = { [notifier] id in await notifier.withdraw(id: id) }
         routing.model = model
