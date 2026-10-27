@@ -8,7 +8,7 @@ struct CompletedDetailView: View {
     let row: MeetingRow
 
     @State private var original: MinutesOutput?
-    @State private var draft: MinutesOutput?
+    @State private var draft: EditableMinutes?
     @State private var bookmarks: [Bookmark] = []
     @State private var transcript: [LiveLine] = []
     @State private var renameFile = false
@@ -31,7 +31,7 @@ struct CompletedDetailView: View {
                     }
                     if draft != nil {
                         // §9.1: the rename box shows once the title changed, off by default.
-                        MinutesEditor(minutes: Binding(get: { draft ?? Self.empty }, set: { draft = $0 }),
+                        MinutesEditor(minutes: Binding(get: { draft ?? EditableMinutes(Self.empty) }, set: { draft = $0 }),
                                       renameFile: titleChanged ? $renameFile : nil)
                     } else {
                         Text("議事録を読み込めませんでした").foregroundStyle(.secondary)
@@ -58,6 +58,8 @@ struct CompletedDetailView: View {
             }
         }
         .task(id: row.id) { await load() }
+        // 「保存しました」 is about the saved state only.
+        .onChange(of: draft) { message = nil }
         .alert("Vault の会議ファイルがアプリの外で編集されています。上書きしますか？", isPresented: $confirmOverwrite) {
             Button("上書きする", role: .destructive) { Task { await save(overwrite: true) } }
             Button("キャンセル", role: .cancel) {}
@@ -72,7 +74,7 @@ struct CompletedDetailView: View {
     private var actions: some View {
         HStack(spacing: 8) {
             Button("保存", systemImage: "square.and.arrow.down.on.square") { Task { await save(overwrite: false) } }
-                .disabled(draft == nil || draft == original || saving)
+                .disabled(draft == nil || draft?.minutes == original || saving)
                 .keyboardShortcut("s")
             if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
             Spacer()
@@ -82,10 +84,7 @@ struct CompletedDetailView: View {
                 Task { await WorkspaceOpener().open(URL(filePath: path)) }
             }
             .disabled(row.filePath == nil)
-            // No `role: .destructive` here: on macOS 26 it kept the click from reaching the action in Step 3; the
-            // confirmation below carries the destructive button.
-            Button("この会議を削除", systemImage: "trash") { confirmDelete = true }
-                .foregroundStyle(.red)
+            Button("この会議を削除", systemImage: "trash", role: .destructive) { confirmDelete = true }
                 // On its own view: a second `.alert` on the same view as the overwrite one is not shown.
                 .alert("この会議を削除しますか？", isPresented: $confirmDelete) {
                     Button("削除", role: .destructive) { Task { await delete() } }
@@ -102,25 +101,32 @@ struct CompletedDetailView: View {
         do {
             let minutes = try await meetings.minutes(id)
             original = minutes
-            draft = minutes
+            draft = minutes.map(EditableMinutes.init)
             bookmarks = (try? await meetings.manifest(id))?.bookmarks ?? []
             transcript = LiveTranscriptView.lines(try await meetings.transcript(id, kind: .final)?.utterances ?? [])
             renameFile = false
             message = nil
             errorText = nil
         } catch {
+            // Nothing from another meeting may stay editable (or be saved under this id).
+            original = nil
+            draft = nil
+            bookmarks = []
+            transcript = []
+            renameFile = false
+            message = nil
             errorText = CommandRouter.ipcError(error).message
         }
     }
 
     private func save(overwrite: Bool) async {
-        guard let draft else { return }
+        guard let edited = draft?.minutes else { return }
         saving = true
         defer { saving = false }
         do {
-            switch try await env.ports.meetings.saveMinutes(id, draft, renameFile: titleChanged && renameFile, overwrite: overwrite) {
+            switch try await env.ports.meetings.saveMinutes(id, edited, renameFile: titleChanged && renameFile, overwrite: overwrite) {
             case .saved:
-                original = draft
+                original = edited
                 renameFile = false
                 message = "保存しました"
                 errorText = nil

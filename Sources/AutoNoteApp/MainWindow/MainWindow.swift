@@ -87,7 +87,9 @@ private struct MainWindowContent: View {
             case .transcriptOnly, .failed:
                 MinutesMissingView(env: env, model: model, row: row)
             case .minutesGenerated:
+                // One view identity per meeting: no editor state carries over to another meeting.
                 CompletedDetailView(env: env, model: model, row: row)
+                    .id(row.id)
             }
         } else if [.recording, .paused, .grace].contains(model.recorder.state) {
             // Nothing selected while recording (or the row is not listed yet: 開始中…): the live view.

@@ -14,7 +14,7 @@ struct TooShortView: View {
             HStack {
                 Button("文字起こしする") { run(.notice(.transcribeTooShort(id))) }
                     .buttonStyle(.borderedProminent)
-                Button("破棄") { run(.notice(.discardTooShort(id))) }
+                Button("破棄", role: .destructive) { run(.notice(.discardTooShort(id))) }
             }
         }
         .padding(24)
