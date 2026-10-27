@@ -1,0 +1,109 @@
+name: Release
+
+# main に push されたとき、Resources/Info.plist の CFBundleShortVersionString に対応する
+# v<version> のタグが無ければ、ビルド・テストして GitHub Release を作る。タグがあれば何もしない。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    # バージョン判定だけなので安い Linux ランナーで済ませる（macOS の約 1/10 の消費）
+    # workflow_dispatch を main 以外で起動しても、リリースは main からしか作らない
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      tag: ${{ steps.check.outputs.tag }}
+      release: ${{ steps.check.outputs.release }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Read version and check tag
+        id: check
+        run: .github/scripts/release-version.sh Resources/Info.plist
+
+  build:
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: macos-26        # Apple シリコン（arm64）
+            arch: arm64
+          - runner: macos-26-intel  # Intel（x86_64）
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/prepare
+
+      - name: Build
+        run: swift build
+
+      - name: Test (retry once on failure)
+        run: .github/scripts/swift-test-retry.sh
+
+      - name: Build AutoNote.app (ad-hoc signed)
+        env:
+          AUTONOTE_CODESIGN_IDENTITY: "-"
+        run: scripts/build-app.sh release
+
+      - name: Check architecture
+        run: |
+          lipo -archs build/AutoNote.app/Contents/MacOS/AutoNoteApp
+          lipo build/AutoNote.app/Contents/MacOS/AutoNoteApp -verify_arch "${ARCH}"
+
+      - name: Zip
+        run: ditto -c -k --keepParent build/AutoNote.app "AutoNote-${VERSION}-macos-${ARCH}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AutoNote-${{ env.VERSION }}-macos-${{ matrix.arch }}
+          path: AutoNote-${{ env.VERSION }}-macos-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ls -l dist
+          gh release create "${TAG}" \
+            --target "${GITHUB_SHA}" \
+            --title "AutoNote ${VERSION}" \
+            --generate-notes \
+            --notes-file .github/release-notes.md \
+            dist/AutoNote-"${VERSION}"-macos-*.zip
