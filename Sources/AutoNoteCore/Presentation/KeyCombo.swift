@@ -49,7 +49,7 @@ public struct KeyCombo: Equatable, Hashable, Sendable, CustomStringConvertible {
         self.init(keyCode: key, modifiers: modifiers)
     }
 
-    private var keyName: String { Self.keyNames[keyCode] ?? "key\(keyCode)" }
+    public var keyName: String { Self.keyNames[keyCode] ?? "key\(keyCode)" }
 
     /// The settings form, e.g. `"ctrl+option+b"`.
     public var description: String {

@@ -81,11 +81,11 @@ import AutoNoteTestSupport
     @Test func saveWithoutOutputFolderFails() async throws {
         let f = try await Fixture()
         _ = try await f.output.rebuild(outputFolder: nil)
-        await #expect(throws: AppCommandError.failed("出力フォルダが見つかりません")) {
+        await #expect(throws: AppCommandError.failed("保存先が見つかりません")) {
             try await f.adapter.saveMinutes(f.id, f.minutes(title: "x"), renameFile: false, overwrite: false)
         }
         _ = try await f.output.rebuild(outputFolder: f.folder.appending(path: "missing").path)
-        await #expect(throws: AppCommandError.failed("出力フォルダが見つかりません")) {
+        await #expect(throws: AppCommandError.failed("保存先が見つかりません")) {
             try await f.adapter.saveMinutes(f.id, f.minutes(title: "x"), renameFile: false, overwrite: false)
         }
     }

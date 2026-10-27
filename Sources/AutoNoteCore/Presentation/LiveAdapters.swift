@@ -10,7 +10,7 @@ extension AppCommandError {
         return .failed(error.localizedDescription)
     }
 
-    static let outputFolderMissing = AppCommandError.failed("出力フォルダが見つかりません")
+    static let outputFolderMissing = AppCommandError.failed("保存先が見つかりません")
 
     static func meetingNotFound(_ id: MeetingID) -> AppCommandError { .notFound("会議が見つかりません: \(id.rawValue)") }
 }

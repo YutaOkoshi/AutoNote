@@ -79,9 +79,9 @@ public enum UserAction: Equatable, Sendable {
 
     public func menuBar(now: Date) -> MenuBarPresentation {
         MenuBarPresentation.make(recorder: recorder, elapsedSeconds: elapsedSeconds, queue: queue,
-                                 outputFolderAvailable: outputFolderAvailable,
+                                 readiness: .assumedReady,
                                  latestMinutesAvailable: meetings.contains { $0.filePath != nil }, rows: meetings,
-                                 automationFailures: automationFailures, now: now, timeZone: timeZone)
+                                 automationFailures: automationFailures, shortcuts: Shortcuts(), now: now, timeZone: timeZone)
     }
 
     public func perform(_ a: UserAction) async {

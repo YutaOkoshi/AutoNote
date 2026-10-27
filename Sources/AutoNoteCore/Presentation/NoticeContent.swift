@@ -68,7 +68,7 @@ public struct NoticeContent: Equatable, Sendable {
         case .overwriteConfirmation(let m):
             return c("overwriteConfirmation", "Vault の会議ファイルがアプリの外で編集されています。上書きしますか？", [("overwrite", "上書きする"), ("keep", "残す")], meeting(m))
         case .outputFolderMissing:
-            return c("outputFolderMissing", "出力フォルダが見つかりません")
+            return c("outputFolderMissing", "保存先が見つかりません")
         case .automationFailed(let name, let m):
             return c("automationFailed", "Automation 失敗: \(name)", [("open", "開く")], meeting(m).merging(["name": name]) { $1 })
         }

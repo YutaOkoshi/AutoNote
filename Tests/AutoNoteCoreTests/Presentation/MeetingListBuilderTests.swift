@@ -33,6 +33,16 @@ import AutoNoteTestSupport
         #expect(row.summaryFirstLine == "リリースは来週")
     }
 
+    @Test func durationSecondsFromManifest() throws {
+        var m = manifest("20261024-1400-a1b2", status: .recording)
+        m.endedAt = m.startedAt + 32.7   // duration 32.7 s
+        let rows = MeetingListBuilder.build(index: [entry("20261023-0900-c3d4", date: "2026-10-23", start: "09:00")], manifests: [m],
+                                            queue: .empty, outputFolder: folder, timeZone: Samples.tokyo)
+        #expect(rows.first { $0.id == "20261024-1400-a1b2" }?.durationSeconds == 32)
+        let indexOnly = try #require(rows.first { $0.id == "20261023-0900-c3d4" })
+        #expect(indexOnly.durationSeconds == nil)
+    }
+
     @Test func manifestOnlyRecordingAppears() throws {
         let rows = MeetingListBuilder.build(index: [], manifests: [manifest("20261024-1400-a1b2", status: .recording)],
                                             queue: .empty, outputFolder: folder)

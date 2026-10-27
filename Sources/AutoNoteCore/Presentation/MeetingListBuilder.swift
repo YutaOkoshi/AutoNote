@@ -21,6 +21,7 @@ public enum MeetingListBuilder {
             row.title = entry?.title ?? manifest?.title.flatMap { $0.isEmpty ? nil : $0 } ?? untitled
             row.startedAt = manifest?.startedAt ?? entry.flatMap { parseStart($0, timeZone: timeZone) } ?? Date(timeIntervalSince1970: 0)
             row.durationMinutes = entry?.durationMinutes ?? manifest?.duration.map { Int(($0 / 60).rounded()) }
+            row.durationSeconds = manifest?.duration.map { Int($0.rounded(.down)) }
             row.state = manifest.map { state(of: $0.status) } ?? state(ofIndexStatus: entry?.status ?? "")
             if row.state == .processing { row.progressLabel = waitingLabel }
             if let entry, let outputFolder { row.filePath = outputFolder.appending(path: "\(entry.linkPath).md").path }

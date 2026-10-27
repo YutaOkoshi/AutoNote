@@ -1,8 +1,10 @@
 import Foundation
 
 public enum MenuItem: Equatable, Sendable {
-    case status(String), startRecording, stop, pause, resume, bookmark, cancelCountdown, language(current: Language), openWindow
+    case status(String), startRecording(shortcut: KeyCombo?), stop(shortcut: KeyCombo?), pause(shortcut: KeyCombo?), resume, bookmark, cancelCountdown, language(current: Language), openWindow
     case openLatestMinutes(enabled: Bool), minutesMissing(MeetingID, label: String), automationFailed(name: String, meetingID: MeetingID)
+    /// A readiness problem that blocks minutes; choosing it opens the place to fix it.
+    case readinessIssue(ReadinessRow.Item, title: String)
     case settings, quit
 }
 
@@ -21,28 +23,30 @@ public struct MenuBarPresentation: Equatable, Sendable {
 
     /// - Parameter elapsedSeconds: the meeting timeline position from `RecorderPort.elapsed()` (ruling X25); it keeps
     ///   counting while paused (§5.4).
-    public static func make(recorder: RecorderSnapshot, elapsedSeconds: Int?, queue: QueueStatus, outputFolderAvailable: Bool,
+    public static func make(recorder: RecorderSnapshot, elapsedSeconds: Int?, queue: QueueStatus, readiness: Readiness,
                             latestMinutesAvailable: Bool, rows: [MeetingRow], automationFailures: [AutomationRunRecord],
-                            now: Date, timeZone: TimeZone = .current) -> MenuBarPresentation {
+                            shortcuts: Shortcuts = Shortcuts(), now: Date, timeZone: TimeZone = .current) -> MenuBarPresentation {
         var items: [MenuItem] = []
         let starting = recorder.state == .recording && recorder.meetingID == nil
         if let line = statusLine(recorder, now: now) { items.append(.status(line)) }
 
+        let bindings = ShortcutBindings(shortcuts)
+        let toggle = bindings.combo(for: .toggleRecording), pause = bindings.combo(for: .togglePause)
         switch recorder.state {
-        case .idle, .countdown: items.append(.startRecording)
-        case .recording: items += [.stop, .pause, .bookmark]
-        case .paused: items += [.stop, .resume, .bookmark]
-        case .grace: items += [.stop, .bookmark]
+        case .idle, .countdown: items.append(.startRecording(shortcut: toggle))
+        case .recording: items += [.stop(shortcut: toggle), .pause(shortcut: pause), .bookmark]
+        case .paused: items += [.stop(shortcut: toggle), .resume, .bookmark]
+        case .grace: items += [.stop(shortcut: toggle), .bookmark]
         }
         if recorder.canCancelCountdown { items.append(.cancelCountdown) }
         if [.recording, .paused, .grace].contains(recorder.state) { items.append(.language(current: recorder.language)) }
 
         items += queue.items.compactMap(queueLine).map(MenuItem.status)
-        if !outputFolderAvailable { items.append(.status("出力フォルダが見つかりません")) }
         items += rows.filter { $0.state == .transcriptOnly }.map {
             .minutesMissing(MeetingID(rawValue: $0.id), label: "議事録 未生成: \(shortDate($0.startedAt, timeZone: timeZone))")
         }
         items += automationFailures.map { .automationFailed(name: $0.name, meetingID: MeetingID(rawValue: $0.meetingID)) }
+        items += readinessIssues(readiness)
         items += [.openWindow, .openLatestMinutes(enabled: latestMinutesAvailable), .settings, .quit]
 
         let title: String? = switch recorder.state {
@@ -50,6 +54,18 @@ public struct MenuBarPresentation: Equatable, Sendable {
         case .idle, .countdown: nil
         }
         return MenuBarPresentation(symbol: symbol(recorder.state, queue: queue), title: title, items: items)
+    }
+
+    /// ⚠ items for what stops minutes: the output folder first, then Claude Code. The model never makes one, since
+    /// Apple speech recognition stands in while whisper is missing.
+    public static func readinessIssues(_ r: Readiness) -> [MenuItem] {
+        var items: [MenuItem] = []
+        if !r.outputFolder.available {
+            items.append(.readinessIssue(.outputFolder, title: r.outputFolder.path.isEmpty
+                ? "⚠ 保存先を作れませんでした — 設定を開く…" : "⚠ 保存先が見つかりません — 設定を開く…"))
+        }
+        if !r.claude.found { items.append(.readinessIssue(.claude, title: "⚠ 議事録の作成に Claude Code が要ります…")) }
+        return items
     }
 
     /// The queue line for one job, or nil for a finished job (ruling X15).

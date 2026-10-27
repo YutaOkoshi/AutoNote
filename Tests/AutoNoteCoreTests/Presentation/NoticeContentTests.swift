@@ -23,7 +23,7 @@ import AutoNoteCore
         (.claudeNotLoggedIn(mid), "議事録 未生成: Claude Code にログインしていません。ターミナルで claude を起動してログインしてから再実行してください", [("再実行", .retry(mid))]),
         (.overwriteConfirmation(mid), "Vault の会議ファイルがアプリの外で編集されています。上書きしますか？",
          [("上書きする", .resolveOverwrite(mid, overwrite: true)), ("残す", .resolveOverwrite(mid, overwrite: false))]),
-        (.outputFolderMissing, "出力フォルダが見つかりません", []),
+        (.outputFolderMissing, "保存先が見つかりません", []),
         (.automationFailed(name: "weekly", mid), "Automation 失敗: weekly", [("開く", .openMeeting(mid))]),
     ]
 

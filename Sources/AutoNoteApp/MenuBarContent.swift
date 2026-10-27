@@ -62,6 +62,8 @@ struct MenuBarContent: View {
             Button("停止") { run(model, .stop) }
         case .pause:
             Button("一時停止") { run(model, .pause) }
+        case .readinessIssue(_, let title):
+            Text(title)
         case .resume:
             Button("再開") { run(model, .resume) }
         case .bookmark:

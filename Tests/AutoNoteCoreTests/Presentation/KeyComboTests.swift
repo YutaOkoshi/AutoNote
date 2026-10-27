@@ -9,6 +9,7 @@ import AutoNoteCore
         #expect(KeyCombo(parsing: "ctrl+option") == nil && KeyCombo(parsing: "hyper+b") == nil && KeyCombo(parsing: "") == nil)
         #expect(KeyCombo(parsing: "ctrl+a+b") == nil && KeyCombo(parsing: "ctrl++b") == nil)
         #expect(KeyCombo(parsing: "Ctrl+Option+F12") == KeyCombo(keyCode: 111, modifiers: 6144) && KeyCombo(parsing: "cmd+0") == KeyCombo(keyCode: 29, modifiers: 256))
+        #expect(KeyCombo(parsing: "ctrl+option+r")?.keyName == "r")
         #expect(KeyCombo(parsing: "ctrl+option+f12")?.display == "⌃⌥F12" && KeyCombo(parsing: "option+cmd+F1")?.description == "option+cmd+f1")
     }
 

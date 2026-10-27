@@ -99,6 +99,8 @@ public struct MeetingRow: Codable, Equatable, Sendable, Identifiable {
     public var title: String
     public var startedAt: Date
     public var durationMinutes: Int?
+    /// Whole seconds from the manifest; nil for a meeting known only from the Vault index.
+    public var durationSeconds: Int?
     public var state: MeetingRowState
     public var progressLabel: String?
     public var filePath: String?
@@ -106,12 +108,13 @@ public struct MeetingRow: Codable, Equatable, Sendable, Identifiable {
     public var summaryFirstLine: String?
 
     public init(id: String = "", title: String = "", startedAt: Date = Date(timeIntervalSince1970: 0), durationMinutes: Int? = nil,
-                state: MeetingRowState = .recorded, progressLabel: String? = nil, filePath: String? = nil,
+                durationSeconds: Int? = nil, state: MeetingRowState = .recorded, progressLabel: String? = nil, filePath: String? = nil,
                 silenceWarning: Bool = false, summaryFirstLine: String? = nil) {
         self.id = id
         self.title = title
         self.startedAt = startedAt
         self.durationMinutes = durationMinutes
+        self.durationSeconds = durationSeconds
         self.state = state
         self.progressLabel = progressLabel
         self.filePath = filePath

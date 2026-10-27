@@ -10,4 +10,11 @@ public enum ObsidianLink {
         let encoded = path.addingPercentEncoding(withAllowedCharacters: unreserved) ?? path
         return URL(string: "obsidian://open?path=\(encoded)")!
     }
+
+    /// Where to send a URL the user opens: a file goes to Obsidian when it is installed; a web page always goes to
+    /// the browser, and everything stays as it is without Obsidian.
+    public static func target(for url: URL, obsidianInstalled: Bool) -> URL {
+        guard obsidianInstalled, url.isFileURL else { return url }
+        return Self.url(for: url)
+    }
 }
