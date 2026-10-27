@@ -113,12 +113,7 @@ struct CompletedDetailView: View {
             }
             Button("この会議を削除", systemImage: "trash", role: .destructive) { confirmDelete = true }
                 // On its own view: a second `.alert` on the same view as the overwrite one is not shown.
-                .alert("この会議を削除しますか？", isPresented: $confirmDelete) {
-                    Button("削除", role: .destructive) { Task { await delete() } }
-                    Button("キャンセル", role: .cancel) {}
-                } message: {
-                    Text("音声、アプリ内のデータ、Vault の会議ファイル、_index.md の行をまとめて削除します。元に戻せません。")
-                }
+                .confirmDeleteMeeting(id, model: model, isPresented: $confirmDelete)
         }
         .padding(12)
     }
@@ -209,12 +204,6 @@ struct CompletedDetailView: View {
         }
     }
 
-    private func delete() async {
-        await model.perform(.delete(id))
-        if model.lastError == nil, model.selectedMeetingID == id { model.selectedMeetingID = nil }
-        await model.refresh()
-    }
-
     /// Ruling X38: 「Obsidian で開く」 only when something handles `obsidian://`. Checked once per launch.
     @MainActor private static let obsidianInstalled =
         NSWorkspace.shared.urlForApplication(toOpen: URL(string: "obsidian://open")!) != nil
@@ -252,8 +241,11 @@ struct MinutesMissingView: View {
         }
     }
 
+    /// The meeting's job: a pending or failed one first, otherwise the done one, which carries the summary
+    /// failure of a `transcript_only` row.
     private var queueItem: QueueItemDTO? {
-        model.queue.items.first { $0.meetingID == row.id && $0.state != JobState.done.rawValue }
+        let jobs = model.queue.items.filter { $0.meetingID == row.id }
+        return jobs.first { $0.state != JobState.done.rawValue } ?? jobs.first { $0.summaryFailure != nil } ?? jobs.first
     }
 }
 

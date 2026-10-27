@@ -25,27 +25,22 @@ struct FailureBand: View {
                 Spacer()
                 ForEach(e.actions, id: \.self) { action in
                     let title = FailureExplanation.actionTitle(action)
-                    Button(title) { run(action) }
+                    Button(title) { run(action, e) }
                         .accessibilityLabel(title)
                 }
             }
-            .alert("この会議を削除しますか？", isPresented: $confirmDelete) {
-                Button("削除", role: .destructive) { Task { await delete() } }
-                Button("キャンセル", role: .cancel) {}
-            } message: {
-                Text("音声、アプリ内のデータ、Vault の会議ファイル、_index.md の行をまとめて削除します。元に戻せません。")
-            }
+            .confirmDeleteMeeting(id, model: model, isPresented: $confirmDelete)
         }
     }
 
-    private func run(_ action: FailureExplanation.Action) {
+    private func run(_ action: FailureExplanation.Action, _ e: FailureExplanation) {
         switch action {
         case .installGuide: Task { await model.perform(.installGuide) }
         case .redetectClaudeAndRerun: Task { await model.perform(.redetectClaudeAndRerun(id)) }
         case .rerun: Task { await model.perform(.notice(.retry(id))) }
         case .loginGuide:
             let alert = NSAlert()
-            alert.messageText = "Claude Code にログインしていません"
+            alert.messageText = e.why
             alert.informativeText = FailureExplanation.loginSteps
             alert.addButton(withTitle: "OK")
             alert.runModal()
@@ -55,10 +50,32 @@ struct FailureBand: View {
         case .openSystemSettings: NSWorkspace.shared.open(PrivacyPane.microphone)
         }
     }
+}
+
+/// The one confirmation before a meeting is deleted (the completed view and the failure band), then the delete.
+struct DeleteMeetingConfirmation: ViewModifier {
+    let id: MeetingID
+    let model: AppModel
+    @Binding var isPresented: Bool
+
+    func body(content: Content) -> some View {
+        content.alert("この会議を削除しますか？", isPresented: $isPresented) {
+            Button("削除", role: .destructive) { Task { await delete() } }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text("音声、アプリ内のデータ、Vault の会議ファイル、_index.md の行をまとめて削除します。元に戻せません。")
+        }
+    }
 
     private func delete() async {
         await model.perform(.delete(id))
         if model.lastError == nil, model.selectedMeetingID == id { model.selectedMeetingID = nil }
         await model.refresh()
+    }
+}
+
+extension View {
+    func confirmDeleteMeeting(_ id: MeetingID, model: AppModel, isPresented: Binding<Bool>) -> some View {
+        modifier(DeleteMeetingConfirmation(id: id, model: model, isPresented: isPresented))
     }
 }
