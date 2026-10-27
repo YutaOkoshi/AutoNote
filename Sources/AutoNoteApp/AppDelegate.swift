@@ -45,7 +45,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 0. First-run defaults: an unset output folder becomes `~/Documents/AutoNote` (`<data>/vault` under
         //    `AUTONOTE_DATA_DIR`) before the services read it. A quick file-system step; a failure does not stop the launch.
-        await Self.applyFirstRunDefaults(environment: environment)
+        //    On the very first run (consent not yet shown) it waits for the consent OK instead, so the macOS
+        //    Documents-folder prompt never comes before the consent notice.
+        let consentShownAtLaunch = await Self.isConsentNoticeShown(environment: environment)
+        if consentShownAtLaunch {
+            await Self.applyFirstRunDefaults(environment: environment)
+        }
 
         // 1. Build the services and start the socket (`.alreadyRunning` is the second line of defence).
         let env: AppEnvironment
@@ -127,10 +132,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 4. The consent notice once (§11.6); then the main window, so the first run lands somewhere to start from;
         // 5. the microphone prompt after its OK (plan 02 never asks).
-        shell.consentAccepted = { [settings, shell] in
+        shell.consentAccepted = { [settings, shell, wiring] in
             Task {
                 do { _ = try await settings.update { $0.consentNoticeShown = true } } catch {
                     logger.error("could not save consentNoticeShown: \(String(describing: error), privacy: .public)")
+                }
+                if !consentShownAtLaunch {
+                    // The first-run defaults skipped at launch: set the folder now, rebuild the queue's stages for it
+                    // and re-read readiness so the card shows it.
+                    let old = (try? await settings.load()) ?? AutoNoteCore.Settings()
+                    await Self.applyFirstRunDefaults(environment: environment)
+                    let new = (try? await settings.load()) ?? old
+                    await wiring.settingsChanged(from: old, to: new)
+                    await model.refresh()
                 }
                 shell.open(AppShell.mainWindowID)
                 Self.requestMicrophoneIfUndetermined()
@@ -159,6 +173,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         env.shortcutsChanged = { hotKeys.apply($0) }
         self.hotKeys = hotKeys
         logger.info("launch finished (data: \(env.paths.root.path, privacy: .public))")
+    }
+
+    /// Whether `settings.json` already records the consent notice as shown (false when it cannot be read).
+    private static func isConsentNoticeShown(environment: [String: String]) async -> Bool {
+        let paths = AppPaths.resolve(environment: environment)
+        return (try? await SettingsStore(paths: paths).load().consentNoticeShown) ?? false
     }
 
     /// Writes the default output folder when none is set and logs what it did. Never throws: the launch goes on.
