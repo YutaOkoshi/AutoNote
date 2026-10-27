@@ -10,10 +10,13 @@ final class SystemUserNotifier: NSObject, UserNotifier, UNUserNotificationCenter
     private let onAction: @MainActor (UserNoticeAction, _ category: String) -> Void
     private let onPost: @MainActor (UserNotice) -> Void
     private let onWithdraw: @MainActor (String) -> Void
+    private let onOpenWindow: @MainActor () -> Void
 
     init(onAction: @escaping @MainActor (UserNoticeAction, _ category: String) -> Void,
          onPost: @escaping @MainActor (UserNotice) -> Void,
-         onWithdraw: @escaping @MainActor (String) -> Void) {
+         onWithdraw: @escaping @MainActor (String) -> Void,
+         onOpenWindow: @escaping @MainActor () -> Void) {
+        self.onOpenWindow = onOpenWindow
         self.onAction = onAction
         self.onPost = onPost
         self.onWithdraw = onWithdraw
@@ -63,7 +66,10 @@ final class SystemUserNotifier: NSObject, UserNotifier, UNUserNotificationCenter
         // Time-sensitive (never critical) only where the plan marks the notice as needing attention.
         u.interruptionLevel = NoticeContent.needsAttention(category: content.category) ? .timeSensitive : .active
         let request = UNNotificationRequest(identifier: content.id, content: u, trigger: nil)
-        do { try await center.add(request) } catch { NSLog("AutoNote: could not post notice %@: %@", content.id, String(describing: error)) }
+        do { try await center.add(request) } catch {
+            NSLog("AutoNote: could not post notice %@: %@", content.id, String(describing: error))
+            return
+        }
         onPost(notice)
     }
 
@@ -96,8 +102,8 @@ final class SystemUserNotifier: NSObject, UserNotifier, UNUserNotificationCenter
                 }
                 self.onAction(action, category)
             } else if buttonID == nil {
-                // A plain tap with no meeting: the owner opens the window (it receives no action).
-                NSApp.activate()
+                // A plain tap with no meeting opens the window (the app is LSUIElement, so activating alone shows nothing).
+                self.onOpenWindow()
             }
         }
     }

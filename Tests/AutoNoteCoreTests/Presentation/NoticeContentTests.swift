@@ -79,7 +79,9 @@ import AutoNoteCore
     @Test func relayRecordingEvents() {
         #expect(NoticeRelay.notices(for: .silenceWarning(SilenceWarning(track: .mic, message: SilenceMonitor.micMessage))) == [.silence(.mic)])
         #expect(NoticeRelay.notices(for: .diskSpaceLow(availableBytes: 900_000_000)) == [.diskLow(availableBytes: 900_000_000)])
-        #expect(NoticeRelay.notices(for: .paused(TimelineTime(seconds: 1))).isEmpty)
+        let b = Bookmark(at: TimelineTime(seconds: 1))
+        let m = Manifest(id: Self.mid, title: nil, startedAt: Date(timeIntervalSince1970: 0), endedAt: nil, source: .live, device: nil, language: .ja, tracks: [], pauses: [], bookmarks: [], status: .recorded, silenceWarning: false, autonoteVersion: "test")
+        #expect(NoticeRelay.notices(for: .bookmarked(b)).isEmpty && NoticeRelay.notices(for: .stopped(m, .manual)).isEmpty)
     }
 
     static func item(_ id: String, failure: String? = nil, confirm: Bool = false, state: String = "running") -> QueueItemDTO {
