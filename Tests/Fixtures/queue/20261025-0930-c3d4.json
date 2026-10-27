@@ -1,0 +1,20 @@
+{
+  "attempts" : 1,
+  "completed_stages" : [
+
+  ],
+  "created_at" : "2026-10-25T00:33:00.000Z",
+  "generation" : 0,
+  "id" : "20261025-0930-c3d4",
+  "last_error" : "final_transcription_failed: TranscriptionError",
+  "meeting" : "20261025-0930-c3d4",
+  "overwrite_approved" : false,
+  "stages" : [
+    "transcribe",
+    "summarize",
+    "write_vault",
+    "update_index",
+    "automations"
+  ],
+  "state" : "failed"
+}

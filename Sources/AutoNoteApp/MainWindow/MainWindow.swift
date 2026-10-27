@@ -10,12 +10,16 @@ struct MainWindow: View {
     let shell: AppShell
 
     var body: some View {
-        if let env = shell.env {
-            MainWindowContent(env: env, model: env.model)
-        } else {
-            ProgressView("起動中…")
-                .frame(minWidth: 720, minHeight: 480)
+        Group {
+            if let env = shell.env {
+                MainWindowContent(env: env, model: env.model)
+            } else {
+                ProgressView("起動中…")
+                    .frame(minWidth: 720, minHeight: 480)
+            }
         }
+        .onAppear { shell.isMainWindowOpen = true }
+        .onDisappear { shell.isMainWindowOpen = false }
     }
 }
 

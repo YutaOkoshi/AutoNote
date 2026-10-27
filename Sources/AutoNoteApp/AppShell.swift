@@ -20,6 +20,13 @@ final class AppShell {
     /// Called by the consent window's OK (launch item 4 → item 5).
     @ObservationIgnored var consentAccepted: @MainActor () -> Void = {}
 
+    /// True while the main window is on screen (`MainWindow`'s `onAppear` / `onDisappear`). Minutes that finish while
+    /// it is open are selected there; the window is never opened or brought forward for them.
+    @ObservationIgnored var isMainWindowOpen = false
+
+    /// The settings tab to show. `showSettings` sets it; the settings window binds its `TabView` to it.
+    var settingsTab: SettingsTab = .general
+
     @ObservationIgnored private var openWindowAction: OpenWindowAction?
     @ObservationIgnored private var pending: [String] = []
 
@@ -45,5 +52,12 @@ final class AppShell {
         } else if !pending.contains(id) {
             pending.append(id)
         }
+    }
+
+    /// Opens the settings window on `tab`. Nothing is saved.
+    func showSettings(_ tab: SettingsTab, using openSettings: OpenSettingsAction) {
+        settingsTab = tab
+        NSApp.activate(ignoringOtherApps: true)
+        openSettings()
     }
 }

@@ -37,6 +37,7 @@ done
 
 APP="${ROOT}/build/AutoNote.app"
 E2E_MEETING_ID="20261024-1400-a1b2"
+E2E_FAILED_MEETING_ID="20261025-0930-c3d4"   # 07.4 の失敗ジョブ（Tests/Fixtures/queue）
 # shellcheck source=config.sh
 [[ -f "${ROOT}/scripts/config.sh" ]] && source "${ROOT}/scripts/config.sh"   # 無ければ 06.1 が FAIL する
 CERT_NAME="${AUTONOTE_CERT_NAME:-}"
@@ -239,6 +240,11 @@ JSON
     chmod 600 "${DATA}/automations.json"
     cp "${fix}/manifest.json" "${DATA}/recordings/${E2E_MEETING_ID}/manifest.json"
     cp "${fix}/minutes.json" "${DATA}/transcripts/${E2E_MEETING_ID}/minutes.json"
+    # 07.4: 最終文字起こしに失敗したジョブ（従来の形式の message）を 1 件置く
+    mkdir -p "${DATA}/queue/jobs" "${DATA}/recordings/${E2E_FAILED_MEETING_ID}"
+    cp "${ROOT}/Tests/Fixtures/queue/${E2E_FAILED_MEETING_ID}.json" "${DATA}/queue/jobs/${E2E_FAILED_MEETING_ID}.json"
+    cp "${ROOT}/Tests/Fixtures/meetings/${E2E_FAILED_MEETING_ID}/manifest.json" \
+        "${DATA}/recordings/${E2E_FAILED_MEETING_ID}/manifest.json"
     AUTONOTE_DATA_DIR="${DATA}" AUTONOTE_E2E_OUT="${DATA}/auto-out.txt" "${bin}" >"${WORK}/app.log" 2>&1 &
     APP_PID=$!
     local i alive=0
@@ -278,6 +284,29 @@ JSON
     esac
 }
 
+check_first_run_output_folder() {
+    CURRENT="07.1 起動後に <DATA>/vault ができ settings.json に書かれる"
+    app_or_skip || return
+    local i got=""
+    for i in $(seq 1 50); do
+        got="$(plutil -extract output_folder raw -o - "${DATA}/settings.json" 2>/dev/null)"
+        if [[ -d "${DATA}/vault" && "${got}" == "${DATA}/vault" ]]; then pass "${got}"; return; fi
+        sleep 0.1
+    done
+    LAST_LOG="${WORK}/app.log"; fail "5 秒待っても ${DATA}/vault が無いか output_folder が「${got}」"
+}
+
+check_first_run_no_download() {
+    CURRENT="07.2 AUTONOTE_DATA_DIR 下ではモデルをダウンロードしない"
+    app_or_skip || return
+    sleep 3
+    local models; models="$(find "${DATA}/models" -maxdepth 1 -name 'ggml-*' 2>/dev/null | wc -l | tr -d ' ')"
+    [[ "${models}" -eq 0 ]] || { LAST_LOG=""; fail "${DATA}/models に ggml-* が ${models} 個（期待 0）"; return; }
+    grep -q "model download skipped (data directory overridden)" "${WORK}/app.log" \
+        || { LAST_LOG="${WORK}/app.log"; fail "app.log に「model download skipped (data directory overridden)」が無い"; return; }
+    pass "ggml-* 0 個"
+}
+
 # 06.3〜06.6 の前提: 項目 7 で起動したアプリが生きていること。生きていなければ skip して 1 を返す
 app_or_skip() {
     if [[ -n "${APP_PID}" ]] && kill -0 "${APP_PID}" 2>/dev/null; then return 0; fi
@@ -311,6 +340,25 @@ check_status_over_socket() {
     [[ ${code} -eq 0 ]] || { fail "status: exit ${code}（期待 0）"; return; }
     grep -q "録音器: 待機" "${LAST_LOG}" || { fail "人向けの status に「録音器: 待機」が無い"; return; }
     pass "recorder.state ${state}"
+}
+
+check_failure_message_compat() {
+    CURRENT="07.4 status --json の失敗 message は従来の形式"
+    app_or_skip || return
+    cli_or_skip || return
+    local out="${WORK}/status-07.4.json" code i id="" msg="" want="final_transcription_failed: TranscriptionError"
+    AUTONOTE_DATA_DIR="${DATA}" run_timeout 10 sh -c '"$1" status --json >"$2"' _ "${AUTONOTE_CLI}" "${out}"; code=$?
+    [[ ${code} -eq 0 ]] || { fail "status --json: exit ${code}（期待 0）"; return; }
+    for i in $(seq 0 50); do
+        id="$(plutil -extract "status.queue.${i}.meeting_id" raw -o - - <"${out}" 2>/dev/null)" || break
+        if [[ "${id}" == "${E2E_FAILED_MEETING_ID}" ]]; then
+            msg="$(plutil -extract "status.queue.${i}.message" raw -o - - <"${out}" 2>/dev/null)"; break
+        fi
+        id=""
+    done
+    [[ "${id}" == "${E2E_FAILED_MEETING_ID}" ]] || { LAST_LOG="${out}"; fail "status.queue に ${E2E_FAILED_MEETING_ID} が無い"; return; }
+    [[ "${msg}" == "${want}" ]] || { LAST_LOG="${out}"; fail "message「${msg}」（期待「${want}」）"; return; }
+    pass "${msg}"
 }
 
 check_bookmark_not_recording() {
@@ -723,7 +771,10 @@ CHECKS=(
     check_cli
     check_cli_app_not_running
     check_app_launch
+    check_first_run_output_folder
+    check_first_run_no_download
     check_status_over_socket
+    check_failure_message_compat
     check_bookmark_not_recording
     check_automation_run
     check_recording_main_thread

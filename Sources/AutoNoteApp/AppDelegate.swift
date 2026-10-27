@@ -43,6 +43,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // 0. First-run defaults: an unset output folder becomes `~/Documents/AutoNote` (`<data>/vault` under
+        //    `AUTONOTE_DATA_DIR`) before the services read it. A quick file-system step; a failure does not stop the launch.
+        await Self.applyFirstRunDefaults(environment: environment)
+
         // 1. Build the services and start the socket (`.alreadyRunning` is the second line of defence).
         let env: AppEnvironment
         do {
@@ -69,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         shell.env = env
         let shell = shell
         env.openWindow = { shell.open(AppShell.mainWindowID) }
+        env.isMainWindowOpen = { [shell] in shell.isMainWindowOpen }
 
         // 2. Subscriptions start right away: the socket already accepts commands (ruling X48).
         let wiring = env.wiring, queue = env.queue, model = env.model
@@ -86,9 +91,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         await env.retentionScheduler.start()
         // Nothing on the launch path waits for the permission prompt.
         tasks.append(Task { await notifier.requestAuthorization() })
-        // Off the launch path: fill `claudePath` from the login shell when unset (ruling X8).
+        // Off the launch path: fill `claudePath` from the login shell when unset (ruling X8), then re-read readiness.
         let settings = env.settings
-        Task.detached { _ = try? await ClaudeLocator.fillDefaultPath(settings) }
+        Task.detached {
+            _ = try? await ClaudeLocator.fillDefaultPath(settings)
+            await model.refresh()
+        }
+        // Off the launch path: the first-run model download (never under an overridden data directory).
+        let readiness = env.readiness, overridden = env.isDataDirectoryOverridden
+        tasks.append(Task {
+            if let name = await readiness.startFirstRunDownload(isDataDirectoryOverridden: overridden) {
+                logger.info("first run: model download started \(name, privacy: .public)")
+                NSLog("AutoNote: first run: model download started %@", name)
+            } else if overridden {
+                NSLog("AutoNote: first run: model download skipped (data directory overridden)")
+            }
+        })
 
         // 3. Crash recovery before automatic recording starts (§5.8, §8b (2)). A meeting started over the socket in
         //    the meantime is excluded. "はい" comes back through the notifier's onAction →
@@ -105,13 +123,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tasks.append(Task { await coordinator.run() })
 
         let s = (try? await env.settings.load()) ?? AutoNoteCore.Settings()
+        model.shortcuts = s.shortcuts
 
-        // 4. The consent notice once (§11.6); 5. the microphone prompt after its OK (plan 02 never asks).
-        shell.consentAccepted = { [settings] in
+        // 4. The consent notice once (§11.6); then the main window, so the first run lands somewhere to start from;
+        // 5. the microphone prompt after its OK (plan 02 never asks).
+        shell.consentAccepted = { [settings, shell] in
             Task {
                 do { _ = try await settings.update { $0.consentNoticeShown = true } } catch {
                     logger.error("could not save consentNoticeShown: \(String(describing: error), privacy: .public)")
                 }
+                shell.open(AppShell.mainWindowID)
                 Self.requestMicrophoneIfUndetermined()
             }
         }
@@ -138,6 +159,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         env.shortcutsChanged = { hotKeys.apply($0) }
         self.hotKeys = hotKeys
         logger.info("launch finished (data: \(env.paths.root.path, privacy: .public))")
+    }
+
+    /// Writes the default output folder when none is set and logs what it did. Never throws: the launch goes on.
+    private static func applyFirstRunDefaults(environment: [String: String]) async {
+        let paths = AppPaths.resolve(environment: environment)
+        try? paths.createBaseDirectories()
+        let outcome = await FirstRunDefaults.apply(settings: SettingsStore(paths: paths), paths: paths,
+                                                   isDataDirectoryOverridden: AppIdentity.isDataDirectoryOverridden(environment))
+        switch outcome {
+        case .created(let path):
+            logger.info("first run: output folder \(path, privacy: .public)")
+            NSLog("AutoNote: first run: output folder %@", path)
+        case .failed:
+            logger.error("first run: could not set the default output folder")
+            NSLog("AutoNote: first run: could not set the default output folder")
+        case .unchanged:
+            break
+        }
     }
 
     /// True when something answers on the socket. A path too long for a socket cannot be served by anyone.

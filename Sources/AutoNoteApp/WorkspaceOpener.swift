@@ -8,11 +8,8 @@ struct WorkspaceOpener: FileOpener {
         await MainActor.run {
             let workspace = NSWorkspace.shared
             // Ruling X38: Obsidian is detected through the app registered for its URL scheme.
-            if workspace.urlForApplication(toOpen: URL(string: "obsidian://open")!) != nil {
-                workspace.open(ObsidianLink.url(for: file))
-            } else {
-                workspace.open(file)
-            }
+            let obsidianInstalled = workspace.urlForApplication(toOpen: URL(string: "obsidian://open")!) != nil
+            workspace.open(ObsidianLink.target(for: file, obsidianInstalled: obsidianInstalled))
         }
     }
 }

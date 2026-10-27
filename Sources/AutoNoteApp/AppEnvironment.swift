@@ -29,6 +29,7 @@ final class AppEnvironment {
     let retention: Retention
     let retentionScheduler: RetentionScheduler
     let ports: AppPorts
+    let readiness: LiveReadinessPort
     let model: AppModel
     let notifier: SystemUserNotifier
     let server: SocketServer
@@ -48,12 +49,16 @@ final class AppEnvironment {
     /// True when `AUTONOTE_DATA_DIR` is set (E2E / development): the login item is left alone (ruling X22).
     var isDataDirectoryOverridden: Bool { AppIdentity.isDataDirectoryOverridden(environment) }
 
+    /// Whether the main window is on screen. AppDelegate points this at `AppShell.isMainWindowOpen`.
+    var isMainWindowOpen: @MainActor () -> Bool = { false }
+
     private init(environment: [String: String], paths: AppPaths, settings: SettingsStore, manifests: ManifestStore,
                  output: OutputFolderServices, session: RecordingSession, coordinator: AutoRecordCoordinator,
                  registry: DeviceRegistry, monitor: DeviceMonitor, queue: QueueHolder, wiring: AppWiring,
                  live: LiveTranscriptionWiring, crashRecovery: CrashRecovery, catalog: EngineCatalog, models: ModelManager,
                  automationsFile: AutomationsFile, retention: Retention, retentionScheduler: RetentionScheduler,
-                 ports: AppPorts, model: AppModel, notifier: SystemUserNotifier, server: SocketServer, routing: NoticeRouting) {
+                 ports: AppPorts, readiness: LiveReadinessPort, model: AppModel, notifier: SystemUserNotifier,
+                 server: SocketServer, routing: NoticeRouting) {
         self.environment = environment
         self.paths = paths
         self.settings = settings
@@ -73,6 +78,7 @@ final class AppEnvironment {
         self.retention = retention
         self.retentionScheduler = retentionScheduler
         self.ports = ports
+        self.readiness = readiness
         self.model = model
         self.notifier = notifier
         self.server = server
@@ -165,8 +171,11 @@ final class AppEnvironment {
         let crashRecovery = CrashRecovery(paths: paths, manifests: manifests)
         let importer = AudioImporter(paths: paths, manifests: manifests)
         let queuePort = QueueAdapter(holder: queue)
+        let readiness = LiveReadinessPort(settings: settings, outputFolder: PortableOutputFolderPort(output: output),
+                                          models: models, catalog: catalog, opener: WorkspaceOpener())
         let ports = AppPorts(
-            recorder: CoordinatorRecorderPort(coordinator: coordinator, elapsed: { await session.elapsed() }),
+            recorder: CoordinatorRecorderPort(coordinator: coordinator, elapsed: { await session.elapsed() },
+                                              levels: { await session.levels() }),
             events: SessionEventsPort(session: session),
             queue: queuePort,
             meetings: MeetingsAdapter(paths: paths, manifests: manifests, settings: settings, output: output,
@@ -178,8 +187,7 @@ final class AppEnvironment {
             live: live,
             outputFolder: PortableOutputFolderPort(output: output),
             opener: WorkspaceOpener(),
-            readiness: LiveReadinessPort(settings: settings, outputFolder: PortableOutputFolderPort(output: output),
-                                         models: models, catalog: catalog, opener: WorkspaceOpener()))
+            readiness: readiness)
         let model = AppModel(ports: ports)
         model.withdrawNotice = { [notifier] id in await notifier.withdraw(id: id) }
         routing.model = model
@@ -194,7 +202,7 @@ final class AppEnvironment {
             session: session, coordinator: coordinator, registry: registry, monitor: monitor, queue: queue,
             wiring: wiring, live: live, crashRecovery: crashRecovery, catalog: catalog, models: models,
             automationsFile: automationsFile, retention: retention, retentionScheduler: retentionScheduler,
-            ports: ports, model: model, notifier: notifier, server: server, routing: routing)
+            ports: ports, readiness: readiness, model: model, notifier: notifier, server: server, routing: routing)
     }
 
     /// What a save did beyond writing `settings.json`, for the settings screen to show.
@@ -212,6 +220,7 @@ final class AppEnvironment {
         // which otherwise waits for the 30-second periodic refresh: both testers of the 2026-10-27 UI audit saved a
         // folder and saw the warning stay. Re-read it now so the save is visibly effective.
         await model.refresh()
+        model.shortcuts = new.shortcuts
         let hotKeys = shortcutsChanged(new.shortcuts)
         let loginItem = reconcileLoginItem(launchAtLogin: new.launchAtLogin)
         return SaveResult(hotKeys: hotKeys, loginItem: loginItem)
@@ -246,6 +255,11 @@ final class AppEnvironment {
                 let key = Self.dedupeKey(notice, previous: before, current: current)
                 guard posted.insert(key).inserted else { continue }
                 await notifier.post(notice)
+                // Select the new minutes in the open window (this launch's recordings only); never open or raise it.
+                if case .minutesGenerated(let id, _) = notice {
+                    model.minutesReady(id, path: model.meetings.first { $0.id == id.rawValue }?.filePath,
+                                       windowOpen: isMainWindowOpen())
+                }
             }
         }
     }
@@ -331,15 +345,20 @@ private struct StageBuilder: Sendable {
     let factory: TranscriberFactory
     let gate: BatchGate
 
+    /// The batch engine is resolved per job from the meeting's language and the final-engine setting of `s`; no
+    /// usable engine (e.g. no model installed yet) returns nil, so the job keeps the live transcript.
     func standard(for s: AutoNoteCore.Settings) async -> [any QueueStage] {
         let override = EngineChoice.fromSettings(kind: s.finalEngine, model: s.finalModel, role: .batch,
                                                  machine: catalog.machine)
-        let choice = await catalog.resolve(role: .batch, language: s.defaultLanguage, override: override)
-            ?? EngineCatalog.defaults(for: catalog.machine).batch
-        let transcriber = LazyBatchTranscriber(factory: factory, choice: choice, gate: gate)
-        let runner = FinalTranscriptionRunner(transcriber: transcriber, engineName: choice.displayName, paths: paths,
-                                              gate: gate)
-        return PostProcessingPipeline.standardStages(runner: runner)
+        let catalog = catalog, factory = factory, gate = gate, paths = paths
+        return PostProcessingPipeline.standardStages(resolveRunner: { language in
+            guard let choice = await catalog.resolve(role: .batch, language: language, override: override) else {
+                return nil
+            }
+            let transcriber = LazyBatchTranscriber(factory: factory, choice: choice, gate: gate)
+            return FinalTranscriptionRunner(transcriber: transcriber, engineName: choice.displayName, paths: paths,
+                                            gate: gate)
+        })
     }
 }
 

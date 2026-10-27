@@ -33,7 +33,7 @@ private final class PercentGate: Sendable {
 public actor LiveReadinessPort: ReadinessPort {
     public static let firstRunModel = "base"
     /// Claude Code's official getting-started page, which carries the install steps.
-    public static let installGuideURL = URL(string: "https://docs.anthropic.com/en/docs/claude-code/overview")!
+    public static let installGuideURL = URL(string: "https://docs.anthropic.com/en/docs/claude-code/setup")!
 
     private let settings: SettingsStore
     private let outputFolder: any OutputFolderPort
