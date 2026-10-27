@@ -283,19 +283,16 @@ public struct MeetingsAdapter: MeetingsPort {
     /// `minutes.json` → manifest title → Vault file (overview order). When the Vault file was edited outside,
     /// `minutes.json` keeps the new minutes and the Vault is left alone until the next save or regeneration.
     public func saveMinutes(_ id: MeetingID, _ m: MinutesOutput, renameFile: Bool, overwrite: Bool) async throws -> SaveMinutesOutcome {
-        _ = try await manifest(id)
+        var updated = try await manifest(id)
         guard let vault = await output.vault(), isDirectory(vault.folder) else { throw AppCommandError.outputFolderMissing }
         guard let final = try read(Transcript.self, at: paths.transcriptFile(id, .final)) else {
             throw AppCommandError.invalid("文字起こしがありません: \(id.rawValue)")
         }
-        let minutesURL = paths.minutesFile(id)
-        try wrappingSync {
-            try FileManager.default.createDirectory(at: minutesURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try AutoNoteJSON.encoder().encode(m).write(to: minutesURL, options: .atomic)
-        }
         let title = m.title
-        let updated = try await wrapping { try await manifests.update(id) { $0.title = title } }
+        updated.title = title
 
+        // The Vault first: `minutes.json` and the manifest title change only once the note was written (M5), so a
+        // declined overwrite leaves nothing for a later `write_vault` to publish.
         let outcome: VaultWriteOutcome
         do {
             let text = try await output.portable().read(.frontmatter).map { String(decoding: $0, as: UTF8.self) }
@@ -310,6 +307,12 @@ public struct MeetingsAdapter: MeetingsPort {
         }
         switch outcome {
         case .written(let url):
+            let minutesURL = paths.minutesFile(id)
+            try wrappingSync {
+                try FileManager.default.createDirectory(at: minutesURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try AutoNoteJSON.encoder().encode(m).write(to: minutesURL, options: .atomic)
+            }
+            _ = try await wrapping { try await manifests.update(id) { $0.title = title } }
             // The note is saved; a stale index is fixed by the next write, so its failure is only logged.
             do { _ = try await vault.writer.rebuildIndex() } catch {
                 logger.error("\(id.rawValue, privacy: .public): index rebuild failed (\(String(describing: type(of: error)), privacy: .public))")

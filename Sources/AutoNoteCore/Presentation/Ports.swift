@@ -77,7 +77,8 @@ public protocol QueuePort: Sendable {
 
 public enum SaveMinutesOutcome: Equatable, Sendable {
     case saved(URL)
-    /// The Vault file was edited outside AutoNote; `minutes.json` was saved, the Vault file left alone.
+    /// The Vault file was edited outside AutoNote; nothing was saved (`minutes.json`, the manifest title and the
+    /// Vault file are left alone) until the caller saves again with `overwrite: true`.
     case externallyEdited(URL)
 }
 

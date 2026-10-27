@@ -43,7 +43,7 @@ import AutoNoteTestSupport
         }
     }
 
-    @Test func saveMinutesWritesJSONThenVault() async throws {
+    @Test func saveMinutesWritesVaultThenJSON() async throws {
         let f = try await Fixture()
         _ = try await f.output.rebuild(outputFolder: f.folder.path)
         let outcome = try await f.adapter.saveMinutes(f.id, f.minutes(title: "新しいタイトル"), renameFile: false, overwrite: false)
@@ -67,11 +67,15 @@ import AutoNoteTestSupport
         let second = try await f.adapter.saveMinutes(f.id, f.minutes(title: "二回目"), renameFile: false, overwrite: false)
         #expect(second == .externallyEdited(url))
         #expect(try String(contentsOf: url, encoding: .utf8) == edited)
-        #expect(try f.savedMinutes().title == "二回目")
+        // M5: 上書きを断られたら minutes.json と manifest のタイトルは前の保存のまま
+        #expect(try f.savedMinutes().title == "一回目")
+        #expect(try await f.manifests.load(f.id).title == "一回目")
 
         let forced = try await f.adapter.saveMinutes(f.id, f.minutes(title: "二回目"), renameFile: false, overwrite: true)
         guard case .saved(let forcedURL) = forced else { Issue.record("expected .saved, got \(forced)"); return }
         #expect(try String(contentsOf: forcedURL, encoding: .utf8).contains("二回目"))
+        #expect(try f.savedMinutes().title == "二回目")
+        #expect(try await f.manifests.load(f.id).title == "二回目")
     }
 
     @Test func saveWithoutOutputFolderFails() async throws {
