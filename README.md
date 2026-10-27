@@ -33,7 +33,7 @@ macOS（26.0 以降）のメニューバーで会議を録音し、文字起こ�
 
 ## Automations
 
-議事録ができた瞬間などに、利用者のコマンドを自動で走らせる。定義は `~/Library/Application Support/AutoNote/automations.json`（設定 › Automations でも編集できる）。権限が自分以外に書き込み可（600 でない）だと、安全のため全部無効にして警告する（`chmod 600` で直る）。
+議事録ができた瞬間などに、利用者のコマンドを自動で走らせる。定義は `~/Library/Application Support/AutoNote/automations.json`（設定 › Automations でも編集できる）。グループや他人が書き込める権限になっている、または自分の所有でないと、安全のため全部無効にして警告する（`chmod 600` で直る）。
 
 ```json
 [
