@@ -16,8 +16,10 @@ struct EmptyStateView: View {
                     .font(.system(size: 44))
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
-                Text("録音はメニューバーの 〰️ か、上の「録音を開始」から")
+                // The menu-bar icon itself (SF Symbol `waveform`), inline; read aloud as the AutoNote icon.
+                Text("録音はメニューバーの \(Image(systemName: "waveform")) か、上の「録音を開始」から")
                     .font(.title3)
+                    .accessibilityLabel("録音はメニューバーの AutoNote アイコンか、上の「録音を開始」から")
                 VStack(spacing: 4) {
                     Text("音声ファイルをここへドラッグすると取り込めます")
                     Text("止めると文字起こしと議事録が自動でできます（1 分未満の録音は、止めたあとに「作る」で）。")
