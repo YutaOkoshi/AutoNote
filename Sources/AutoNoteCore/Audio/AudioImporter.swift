@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import Synchronization
 
 public enum ImportError: Error, Equatable, Sendable {
     case unsupportedFormat(String)
@@ -60,12 +61,22 @@ public struct AudioImporter: Sendable {
 
         do {
             try FileManager.default.createDirectory(at: wavURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            // Task.detached does not inherit cancellation, so forward it explicitly.
-            let work = Task.detached(priority: .utility) {
-                try Self.transcode(asset: asset, track: track, to: wavURL,
-                                   assetSeconds: assetSeconds, progress: progress)
+            // The decode loop blocks in `copyNextSampleBuffer`, and AVAssetReader needs a Swift-concurrency thread to
+            // make progress, so it must not run on the cooperative pool: as many concurrent imports as CPU cores
+            // would occupy every pool thread and deadlock for good. A GCD queue grows threads when they block.
+            let cancelled = Mutex(false)
+            let samples = try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Int, any Error>) in
+                    Self.transcodeQueue.async {
+                        continuation.resume(with: Result {
+                            try Self.transcode(asset: asset, track: track, to: wavURL, assetSeconds: assetSeconds,
+                                               isCancelled: { cancelled.withLock { $0 } }, progress: progress)
+                        })
+                    }
+                }
+            } onCancel: {
+                cancelled.withLock { $0 = true }
             }
-            let samples = try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
             let seconds = Double(samples) / AudioChunk.sampleRate
             let manifest = Manifest(
                 id: id, title: nil, startedAt: start, endedAt: start.addingTimeInterval(seconds).truncatedToMilliseconds,
@@ -91,9 +102,13 @@ public struct AudioImporter: Sendable {
         return values?.creationDate ?? values?.contentModificationDate ?? Date()
     }
 
+    /// Concurrent, so imports run side by side; never the Swift cooperative pool (see `importFile`).
+    private static let transcodeQueue = DispatchQueue(label: "com.yutaokoshi.autonote.import", qos: .utility,
+                                                      attributes: .concurrent)
+
     /// Streams decoded 16 kHz mono Int16 PCM into `wavURL`; returns the number of samples written.
     private static func transcode(asset: AVURLAsset, track: AVAssetTrack, to wavURL: URL, assetSeconds: Double,
-                                  progress: @Sendable (Double) -> Void) throws -> Int {
+                                  isCancelled: () -> Bool, progress: @Sendable (Double) -> Void) throws -> Int {
         let reader = try AVAssetReader(asset: asset)
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
             AVFormatIDKey: kAudioFormatLinearPCM,
@@ -119,7 +134,7 @@ public struct AudioImporter: Sendable {
         var bytesWritten = 0
         var lastProgress = 0.0
         while let buffer = output.copyNextSampleBuffer() {
-            try Task.checkCancellation()
+            if isCancelled() { throw CancellationError() }
             if let block = CMSampleBufferGetDataBuffer(buffer) {
                 let length = CMBlockBufferGetDataLength(block)
                 var data = Data(count: length)

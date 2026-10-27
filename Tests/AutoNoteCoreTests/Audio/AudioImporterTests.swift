@@ -151,4 +151,20 @@ import AutoNoteTestSupport
         #expect(zip(values, values.dropFirst()).allSatisfy { $0 <= $1 })
         #expect(values.allSatisfy { (0...1).contains($0) })
     }
+
+    // More concurrent imports than CPU cores: the blocking decode loop must not occupy the cooperative pool, or
+    // AVAssetReader never gets a thread back and every import (and the rest of the process) hangs.
+    @Test func manyConcurrentImportsFinish() async throws {
+        let env = try makeEnv()
+        let input = try synthesize("wav", in: env.inputs, seconds: 1)
+        let count = ProcessInfo.processInfo.activeProcessorCount * 2
+        let importer = env.importer
+        let ids = try await withTimeout(.seconds(30)) {
+            try await withThrowingTaskGroup(of: MeetingID.self) { group in
+                for _ in 0..<count { group.addTask { try await importer.importFile(input, language: .ja).id } }
+                return try await group.reduce(into: Set<MeetingID>()) { $0.insert($1) }
+            }
+        }
+        #expect(ids.count == count)
+    }
 }
