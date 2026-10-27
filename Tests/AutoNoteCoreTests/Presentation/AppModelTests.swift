@@ -17,6 +17,15 @@ import AutoNoteTestSupport
         return (model, task)
     }
 
+    /// Polls `condition` every few milliseconds until it holds or `timeout` passes (the caller's `#expect` then fails).
+    private func waitUntil(timeout: Duration = .seconds(2), _ condition: () async -> Bool) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while await !condition(), clock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
     private func recording(_ id: MeetingID? = MeetingID(rawValue: "20261024-1400-a1b2")) -> RecorderSnapshot {
         RecorderSnapshot(state: .recording, meetingID: id, startedAt: now - 754, deviceName: "Jabra", language: .ja)
     }
@@ -363,16 +372,25 @@ import AutoNoteTestSupport
 
     @Test func stoppedSelectsMeetingAndShowsBand() async {
         let fakes = FakePorts()
-        // The band lasts 500 ms here (5 s in the app); polling instead of `settle()` keeps a loaded full-suite run from
-        // missing it.
-        let (model, task) = await start(fakes, bandDuration: .milliseconds(500))
+        // A long band, so a loaded full-suite run cannot see it appear and expire between polls.
+        let (model, task) = await start(fakes, bandDuration: .seconds(60))
         defer { task.cancel() }
         #expect(model.selectedMeetingID == nil)
         await fakes.events.send(.stopped(manifest(m1, seconds: 252), .manual))
-        for _ in 0..<400 where model.stoppedBand == nil { try? await Task.sleep(for: .milliseconds(1)) }
+        await waitUntil { model.stoppedBand != nil }
         #expect(model.selectedMeetingID == m1)
         #expect(model.stoppedBand == AppModel.StoppedBand(id: m1, seconds: 252))
-        for _ in 0..<300 where model.stoppedBand != nil { try? await Task.sleep(for: .milliseconds(10)) }
+    }
+
+    @Test func stoppedBandClearsAfterDuration() async {
+        let fakes = FakePorts()
+        let (model, task) = await start(fakes, bandDuration: .milliseconds(100))
+        defer { task.cancel() }
+        await fakes.events.send(.stopped(manifest(m1, seconds: 252), .manual))
+        // Wait for the event to land (the band may already have come and gone under load), then for the band to clear.
+        await waitUntil { model.selectedMeetingID == m1 }
+        await waitUntil { model.stoppedBand == nil }
+        #expect(model.selectedMeetingID == m1)
         #expect(model.stoppedBand == nil)
     }
 
@@ -483,7 +501,7 @@ import AutoNoteTestSupport
         #expect(model.prompts == [.recordingTooShort(m1)])
         await setRows(fakes, model, [MeetingRow(id: m1.rawValue, startedAt: now, state: .processing)])
         #expect(model.prompts.isEmpty)
-        for _ in 0..<100 where await withdrawn.items.isEmpty { try? await Task.sleep(for: .milliseconds(5)) }
+        await waitUntil { await !withdrawn.items.isEmpty }
         #expect(await withdrawn.items == ["meeting.tooShort.\(m1.rawValue)"])
     }
 
