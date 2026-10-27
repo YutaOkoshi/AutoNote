@@ -126,11 +126,11 @@ private struct MainWindowContent: View {
             case .recording:
                 RecordingDetailView(model: model)
             case .processing, .recorded:
-                ProcessingDetailView(env: env, model: model, row: row)
+                ProcessingDetailView(env: env, model: model, shell: shell, row: row)
             case .tooShort:
-                TooShortView(model: model, row: row)
+                TooShortView(row: row)
             case .transcriptOnly, .failed:
-                MinutesMissingView(env: env, model: model, row: row)
+                MinutesMissingView(env: env, model: model, shell: shell, row: row)
             case .minutesGenerated:
                 // One view identity per meeting: no editor state carries over to another meeting.
                 CompletedDetailView(env: env, model: model, row: row, unsaved: unsaved)

@@ -6,14 +6,26 @@ import SwiftUI
 struct ProcessingDetailView: View {
     let env: AppEnvironment
     let model: AppModel
+    let shell: AppShell
     let row: MeetingRow
     @State private var lines: [LiveLine] = []
     @State private var loadError: String?
 
     var body: some View {
+        let stage = queueItem?.stage ?? ""
         VStack(spacing: 0) {
+            if queueItem?.notBefore != nil {
+                FailureBand(env: env, model: model, shell: shell, row: row, item: queueItem)
+            }
             VStack(alignment: .leading, spacing: 6) {
                 Text(row.title).font(.title3.bold())
+                HStack {
+                    Text(ProcessingPresentation.heading(stage: stage)).font(.headline)
+                    Spacer()
+                    if let note = ProcessingPresentation.engineNote(stage: stage, model: model.readiness.model) {
+                        Text(note).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 if let progress = queueItem?.progress {
                     ProgressView(value: progress)
                 } else {
@@ -25,6 +37,11 @@ struct ProcessingDetailView: View {
             }
             .padding(12)
             Divider()
+            Text(ProcessingPresentation.explainer)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
             if let loadError {
                 ContentUnavailableView("文字起こしを読めませんでした", systemImage: "doc.questionmark", description: Text(loadError))
                     .frame(maxHeight: .infinity)

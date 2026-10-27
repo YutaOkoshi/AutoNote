@@ -25,6 +25,12 @@ struct CompletedDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let saved = model.justSaved, saved.id == id {
+                Band(systemImage: "checkmark.circle.fill", tint: .green) {
+                    Text(ProcessingPresentation.savedBand(path: saved.path, home: NSHomeDirectory()))
+                    Spacer()
+                }
+            }
             actions
             Divider()
             ScrollView {
@@ -92,11 +98,19 @@ struct CompletedDetailView: View {
                     await model.perform(.regenerate(id))
                 }
             }
-            Button("Obsidian で開く", systemImage: "arrow.up.forward.app") {
+            Button("Finder で表示", systemImage: "folder") {
                 guard let path = row.filePath else { return }
-                Task { await WorkspaceOpener().open(URL(filePath: path)) }
+                NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: path)])
             }
+            .accessibilityLabel("Finder で表示")
             .disabled(row.filePath == nil)
+            if Self.obsidianInstalled {
+                Button("Obsidian で開く", systemImage: "arrow.up.forward.app") {
+                    guard let path = row.filePath else { return }
+                    Task { await WorkspaceOpener().open(URL(filePath: path)) }
+                }
+                .disabled(row.filePath == nil)
+            }
             Button("この会議を削除", systemImage: "trash", role: .destructive) { confirmDelete = true }
                 // On its own view: a second `.alert` on the same view as the overwrite one is not shown.
                 .alert("この会議を削除しますか？", isPresented: $confirmDelete) {
@@ -201,34 +215,34 @@ struct CompletedDetailView: View {
         await model.refresh()
     }
 
+    /// Ruling X38: 「Obsidian で開く」 only when something handles `obsidian://`. Checked once per launch.
+    @MainActor private static let obsidianInstalled =
+        NSWorkspace.shared.urlForApplication(toOpen: URL(string: "obsidian://open")!) != nil
+
     private static let empty = MinutesOutput(title: "", summary: [], decisions: [], agenda: [], nextActions: [], suggestedTerms: [])
 }
 
-/// `transcript_only` and `failed` (§8.4): no minutes yet, 再実行, and the final transcript below.
+/// `transcript_only` and `failed` (§8.4): no minutes yet, the failure band with what helps, and the final
+/// transcript below.
 struct MinutesMissingView: View {
     let env: AppEnvironment
     let model: AppModel
+    let shell: AppShell
     let row: MeetingRow
     @State private var transcript: [LiveLine] = []
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Label("議事録 未生成", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
-                if row.state == .failed {
-                    Text(row.state.displayText(progressLabel: row.progressLabel)).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("再実行", systemImage: "arrow.clockwise") {
-                    Task { await model.perform(.notice(.retry(MeetingID(rawValue: row.id)))) }
-                }
-            }
-            .padding(12)
-            Divider()
+            FailureBand(env: env, model: model, shell: shell, row: row, item: queueItem)
             if transcript.isEmpty {
                 ContentUnavailableView("確定版の文字起こしはありません", systemImage: "text.alignleft")
                     .frame(maxHeight: .infinity)
             } else {
+                Text(FailureExplanation.transcriptAvailableNote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                Divider()
                 LiveTranscriptView(lines: transcript, follows: false)
             }
         }
@@ -236,6 +250,10 @@ struct MinutesMissingView: View {
             let t = try? await env.ports.meetings.transcript(MeetingID(rawValue: row.id), kind: .final)
             transcript = LiveTranscriptView.lines(t?.utterances ?? [])
         }
+    }
+
+    private var queueItem: QueueItemDTO? {
+        model.queue.items.first { $0.meetingID == row.id && $0.state != JobState.done.rawValue }
     }
 }
 

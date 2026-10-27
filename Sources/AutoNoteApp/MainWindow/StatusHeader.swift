@@ -43,7 +43,11 @@ struct StatusHeader: View {
                 Band(systemImage: "exclamationmark.circle", tint: .red) { Text(error) }
             }
             ForEach(model.prompts, id: \.id) { notice in
-                promptBand(NoticeContent.make(notice))
+                if case .recordingTooShort(let id) = notice {
+                    shortRecordingBand(id)
+                } else {
+                    promptBand(NoticeContent.make(notice))
+                }
             }
         }
         .onChange(of: model.recorder.state, initial: true) { _, new in
@@ -98,6 +102,21 @@ struct StatusHeader: View {
                     Task { await model.perform(.notice(action)) }
                 }
             }
+        }
+    }
+
+    /// A recording under a minute: its length and 作る / 削除 (plan 07 Task 11).
+    private func shortRecordingBand(_ id: MeetingID) -> some View {
+        let seconds = model.meetings.first { $0.id == id.rawValue }?.durationSeconds
+        return Band(systemImage: "timer", tint: .accentColor) {
+            Text(ShortRecordingCopy.band(seconds: seconds))
+            Spacer()
+            Button(ShortRecordingCopy.transcribeTitle) { Task { await model.perform(.notice(.transcribeTooShort(id))) } }
+                .accessibilityLabel(ShortRecordingCopy.transcribeTitle)
+            Button(ShortRecordingCopy.discardTitle, role: .destructive) {
+                Task { await model.perform(.notice(.discardTooShort(id))) }
+            }
+            .accessibilityLabel(ShortRecordingCopy.discardTitle)
         }
     }
 

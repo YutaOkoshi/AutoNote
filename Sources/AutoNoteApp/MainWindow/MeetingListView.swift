@@ -40,8 +40,8 @@ private struct MeetingListRow: View {
                 Text(row.startedAt, format: Self.dateFormat)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
-                if let minutes = row.durationMinutes {
-                    Text("\(minutes) 分").foregroundStyle(.secondary)
+                if let duration = DurationText.list(seconds: row.durationSeconds, minutes: row.durationMinutes) {
+                    Text(duration).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
                 if row.silenceWarning {
