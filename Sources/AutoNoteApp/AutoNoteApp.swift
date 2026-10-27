@@ -4,6 +4,8 @@ import SwiftUI
 
 @main
 struct AutoNoteApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     var body: some Scene {
         MenuBarExtra("AutoNote", systemImage: "waveform") {
             Text("バージョン: \(AutoNoteVersion.current)")
