@@ -31,7 +31,7 @@ public actor LiveTranscriptionWiring: LiveTranscriptPort {
     private var running: Running?
     private var subscribers: [UUID: AsyncStream<[Utterance]>.Continuation] = [:]
     /// The newest display list, handed to each new subscriber; nil until a feed has published one.
-    public private(set) var latest: [Utterance]?
+    private(set) var latest: [Utterance]?
 
     public init(audio: @Sendable @escaping (Track) async -> AsyncStream<AudioChunk>,
                 makeFeed: @Sendable @escaping (MeetingID) async throws -> LiveFeedStart) {
@@ -39,6 +39,7 @@ public actor LiveTranscriptionWiring: LiveTranscriptPort {
         self.makeFeed = makeFeed
     }
 
+    /// Must be called serially, one event at a time (AppWiring's per-listener FIFO inbox does this).
     public func handle(_ e: RecordingEvent) async {
         switch e {
         case .started(let id):
@@ -70,6 +71,8 @@ public actor LiveTranscriptionWiring: LiveTranscriptPort {
     }
 
     private func begin(_ id: MeetingID) async {
+        // Clear the previous meeting first: a meeting whose feed cannot be built shows no live transcript.
+        publish([])
         let start: LiveFeedStart
         let list: AsyncStream<[Utterance]>
         do {
@@ -79,7 +82,6 @@ public actor LiveTranscriptionWiring: LiveTranscriptPort {
             logger.error("\(id.rawValue, privacy: .public): live transcript unavailable (\(String(describing: error), privacy: .public))")
             return
         }
-        publish([])
         let feed = start.feed
         let forwardTask = Task {
             for await utterances in list { self.publish(utterances) }

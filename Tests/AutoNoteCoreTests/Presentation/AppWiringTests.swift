@@ -142,15 +142,19 @@ private func first<T: Sendable>(_ stream: AsyncStream<T>, where condition: @Send
     @Test func slowListenerDoesNotDelayRoute() async throws {
         let (stream, input) = AsyncStream<RecordingEvent>.makeStream()
         let enqueuer = FakeEnqueuer()
-        let slow = EventLog()
+        let slow = EventLog(), fast = EventLog()
         let wiring = AppWiring(events: { stream }, enqueuer: enqueuer, notifier: FakeUserNotifier(),
-                               listeners: [{ e in try? await Task.sleep(for: .seconds(30)); await slow.append(e) }])
+                               listeners: [{ e in try? await Task.sleep(for: .seconds(30)); await slow.append(e) },
+                                           { await fast.append($0) }])
         let running = Task { await wiring.run() }
-        input.yield(.started(id))
-        input.yield(.stopped(m(.recorded), .manual))
+        let events: [RecordingEvent] = [.started(id), .stopped(m(.recorded), .manual)]
+        for e in events { input.yield(e) }
         try await waitUntil { await enqueuer.ids == [id] }
+        try await waitUntil { await fast.events == events }
         #expect(await slow.events == [])
+        // Cancelling run() ends it (the slow listener's sleep is cancelled too).
         running.cancel()
+        try await withTimeout(.seconds(2)) { await running.value }
     }
 
     // MeetingsAdapter(route: wiring.route).importAudio(3 秒の WAV) → ids == [新しい id]
@@ -261,6 +265,28 @@ private func first<T: Sendable>(_ stream: AsyncStream<T>, where condition: @Send
         await f.live.handle(.stopped(m(.recorded), .manual))
     }
 
+    // A successful meeting, then one whose makeFeed fails → the display is cleared ([] published, latest empty).
+    @Test func failedFeedClearsPreviousMeeting() async throws {
+        let paths = AppPaths(root: try TemporaryDirectory.make())
+        let mic = FakeLiveTranscriber(script: [u(1, .unknown, "前の会議")])
+        let calls = EventLog()
+        let live = LiveTranscriptionWiring(audio: { _ in AsyncStream { $0.finish() } }, makeFeed: { id in
+            await calls.append(.started(id))
+            guard await calls.events.count == 1 else { throw FakeError(message: "no live engine") }
+            let feed = LiveFeed(transcribers: [.mic: mic], replacer: Replacer([]),
+                                liveJSON: paths.transcriptFile(id, .live), engineName: "Fake Live")
+            return LiveFeedStart(feed: feed, language: .ja, hints: [])
+        })
+        await live.handle(.started(id))
+        let viewer = await live.updates()
+        #expect(await first(viewer) { $0.map(\.text) == ["前の会議"] } != nil)
+        await live.handle(.stopped(m(.recorded), .manual))
+        await live.handle(.started(id))
+        #expect(await first(viewer) { $0.isEmpty } != nil)
+        #expect(await live.latest == [])
+        #expect(await first(await live.updates()) { _ in true } == [])
+    }
+
     // makeFeed が throw → updates() は空のまま、enqueue は通常どおり
     @Test func liveFeedFailureDoesNotBreakRecording() async {
         let live = LiveTranscriptionWiring(audio: { _ in AsyncStream { $0.finish() } },
@@ -269,7 +295,7 @@ private func first<T: Sendable>(_ stream: AsyncStream<T>, where condition: @Send
                        listeners: [{ await live.handle($0) }])
         await w.wiring.run()
         #expect(await w.enqueuer.ids == [id])
-        #expect(await live.latest == nil)
+        #expect(await live.latest == [])
     }
 
     // X9/C21: a real RecordingSession (fake sources) → RecordingSessionActivity → QueueAssembly.make with one BatchGate

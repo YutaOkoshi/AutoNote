@@ -51,6 +51,7 @@ public actor AppWiring {
     /// has its own FIFO consumer, so a slow listener delays neither `route` nor the other listeners (ruling X7).
     public func run() async {
         let stream = await events()
+        // Unbounded on purpose: recording events are few, and none may be dropped.
         let inboxes = listeners.map { _ in AsyncStream<RecordingEvent>.makeStream() }
         await withDiscardingTaskGroup { group in
             for (listener, inbox) in zip(listeners, inboxes) {
