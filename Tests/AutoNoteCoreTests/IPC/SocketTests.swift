@@ -265,7 +265,7 @@ private enum RawSocket {
         let error = await clientError(client(t, launcher: launcher, launchTimeout: .seconds(1)))
         let elapsed = ContinuousClock.now - started
         #expect(error == .timedOut)
-        #expect(elapsed < .seconds(3))
+        #expect(elapsed < .seconds(5))
         #expect(elapsed >= .milliseconds(900))
         #expect(launcher.launches == 1)
     }

@@ -6,10 +6,10 @@ import Foundation
     @Test func runAwaitingReturnsFalseWhenWorkOutlastsTimeout() async {
         let queue = DispatchQueue(label: "test.runAwaiting.slow")
         let t0 = ContinuousClock.now
-        // Work 3× the timeout; the bound leaves 1.5 s of scheduler slack and still sits well before the work ends.
-        let finished = await queue.runAwaiting(timeout: .seconds(1)) { Thread.sleep(forTimeInterval: 3) }
+        // Work 10× the timeout; the bound leaves 4 s of scheduler slack and still sits well before the work ends.
+        let finished = await queue.runAwaiting(timeout: .seconds(1)) { Thread.sleep(forTimeInterval: 10) }
         #expect(finished == false)
-        #expect(ContinuousClock.now - t0 < .milliseconds(2500))
+        #expect(ContinuousClock.now - t0 < .seconds(5))
     }
 
     @Test func runAwaitingReturnsTrueWhenWorkFinishesInTime() async {

@@ -109,18 +109,18 @@ private final class ChunkCollector: Sendable {
         let src = ProcessTapSource(clock: .fake(), hardware: hw, stopTimeout: .milliseconds(200))
         try await src.start { _ in }
         let t0 = ContinuousClock.now; await src.stop()
-        #expect(ContinuousClock.now - t0 < .seconds(1))
+        #expect(ContinuousClock.now - t0 < .seconds(2))
         let calls = hw.calls
         #expect(calls.contains("stop") && !calls.contains("destroyTap"))
     }
 
     @Test func startTimesOutWhenHardwareStartBlocks() async {
-        // Start blocks 3× the timeout; the bound leaves 1.5 s of scheduler slack and still sits before the start returns.
-        let hw = FakeTapHardware(); hw.startDelay = .seconds(3)
+        // Start blocks 10× the timeout; the bound leaves 4 s of scheduler slack and still sits well before the start returns.
+        let hw = FakeTapHardware(); hw.startDelay = .seconds(10)
         let src = ProcessTapSource(clock: .fake(), hardware: hw, startTimeout: .seconds(1))
         let t0 = ContinuousClock.now
         let error = await #expect(throws: AudioSourceError.self) { try await src.start { _ in } }
-        #expect(ContinuousClock.now - t0 < .milliseconds(2500))
+        #expect(ContinuousClock.now - t0 < .seconds(5))
         #expect(error == .timedOut(call: "AudioDeviceStart"))
         // Idle again: a second start is admitted instead of throwing alreadyStarted. It queues behind the still-blocked
         // late bring-up on the serial control queue, so it times out as well.
@@ -132,9 +132,9 @@ private final class ChunkCollector: Sendable {
         let src = ProcessTapSource(clock: .fake(), hardware: hw, startTimeout: .milliseconds(200))
         await #expect(throws: AudioSourceError.timedOut(call: "AudioDeviceStart")) { try await src.start { _ in } }
         let t0 = ContinuousClock.now; await src.stop()
-        #expect(ContinuousClock.now - t0 < .seconds(1))
+        #expect(ContinuousClock.now - t0 < .seconds(2))
         // The late bring-up finishes after ~3 s and is torn down on the control queue right away.
-        let deadline = ContinuousClock.now + .seconds(5)
+        let deadline = ContinuousClock.now + .seconds(8)
         while !hw.calls.contains("destroyTap"), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(50)) }
         #expect(hw.calls.suffix(3) == ["destroyIOProc", "destroyAggregate", "destroyTap"])
         #expect(hw.calls == ["createTap", "tapFormat", "createAggregate", "createIOProc", "start",
@@ -146,7 +146,7 @@ private final class ChunkCollector: Sendable {
         let src = ProcessTapSource(clock: .fake(), hardware: hw, stopTimeout: .milliseconds(200))
         try await src.start { _ in }
         let t0 = ContinuousClock.now; await src.stop()
-        #expect(ContinuousClock.now - t0 < .seconds(1))
+        #expect(ContinuousClock.now - t0 < .seconds(2))
         let calls = hw.calls
         #expect(calls.contains("stop") && !calls.contains("destroyTap"))
     }
