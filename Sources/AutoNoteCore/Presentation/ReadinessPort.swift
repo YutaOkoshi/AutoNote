@@ -187,7 +187,11 @@ public actor LiveReadinessPort: ReadinessPort {
                                                      machine: catalog.machine)
             let choice = await catalog.resolve(role: .batch, language: s.defaultLanguage, override: override)
             guard seen == generation else { continue }
-            if let choice, choice.kind == .whisper { return .installed(choice.model ?? "") }
+            if let choice, choice.kind == .whisper {
+                // A whisper choice without a model name would render 「whisper 」: show the default model instead.
+                let name = choice.model ?? ""
+                return .installed(name.isEmpty ? Self.firstRunModel : name)
+            }
             return .none
         }
     }
