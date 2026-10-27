@@ -9,8 +9,17 @@ struct MeetingListView: View {
     var body: some View {
         List(selection: $selection) {
             ForEach(model.meetings) { row in
-                MeetingListRow(row: row, failures: model.automationFailures.filter { $0.meetingID == row.id }.map(\.name))
+                let failures = model.automationFailures.filter { $0.meetingID == row.id }.map(\.name)
+                MeetingListRow(row: row, failures: failures)
                     .tag(row.id)
+                    // §14.5: a failed automation can be run again from the window too.
+                    .contextMenu {
+                        ForEach(failures, id: \.self) { name in
+                            Button("再実行: \(name)", systemImage: "arrow.clockwise") {
+                                Task { await model.perform(.rerunAutomation(name: name, meetingID: MeetingID(rawValue: row.id))) }
+                            }
+                        }
+                    }
             }
         }
         .overlay {
