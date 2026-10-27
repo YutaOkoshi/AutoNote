@@ -321,8 +321,10 @@ check_menu_no_folder_warning() {
         -e "return n"
     code=$?
     if [[ ${code} -ne 0 ]]; then
-        # 開いたままにしない
-        osascript -e 'tell application "System Events" to key code 53' >/dev/null 2>&1
+        # 開いたままにしない（run_timeout は LAST_LOG を差し替えるので、判定用に元のログを取っておく）
+        local log="${LAST_LOG}"
+        run_timeout 5 osascript -e 'tell application "System Events" to key code 53'
+        LAST_LOG="${log}"
         if grep -Eqi 'assistive|補助アクセス|-25211|-1743|Not authorized to send Apple events' "${LAST_LOG}"; then
             skip "アクセシビリティ（または Apple Events）の権限が無い: $(tail -n 1 "${LAST_LOG}")"
         else
