@@ -146,17 +146,19 @@ private func inv(_ c: IPCCommand, json: Bool = false, args: IPCArgs = IPCArgs())
             return CLIRenderer.render(.success(1, IPCResult(run: rec)), for: inv(.automationsRun))
         }
         #expect(run(code: 0, timedOut: false) == CLIOutput(stdout: "終了コード 0（1.5 秒）ログ: /logs/x\n", stderr: "", exitCode: 0))
-        #expect(run(code: 2, timedOut: false).exitCode == 2)
+        // M4 (spec §16): 失敗は終了コード 1。子の終了コードは本文と JSON に残す
+        #expect(run(code: 2, timedOut: false) == CLIOutput(stdout: "終了コード 2（1.5 秒）ログ: /logs/x\n", stderr: "", exitCode: 1))
         let t = run(code: nil, timedOut: true)
-        // --json carries the same exit code.
-        func runJSON(code: Int32?, timedOut: Bool) -> Int32 {
+        // --json: 成功 0 / 失敗 1、子の終了コードは run.exit_code に残る
+        func runJSON(code: Int32?, timedOut: Bool) -> CLIOutput {
             let rec = AutomationRunRecord(name: "S", event: .minutesGenerated, meetingID: "m", startedAt: Date(timeIntervalSince1970: 0),
                                           durationSeconds: 1, exitCode: code, timedOut: timedOut, skippedReason: nil, logDirectory: "/l")
-            return CLIRenderer.render(.success(1, IPCResult(run: rec)), for: inv(.automationsRun, json: true)).exitCode
+            return CLIRenderer.render(.success(1, IPCResult(run: rec)), for: inv(.automationsRun, json: true))
         }
-        #expect(runJSON(code: 0, timedOut: false) == 0)
-        #expect(runJSON(code: 3, timedOut: false) == 3)
-        #expect(runJSON(code: nil, timedOut: true) == 1)
+        #expect(runJSON(code: 0, timedOut: false).exitCode == 0)
+        #expect(runJSON(code: 3, timedOut: false).exitCode == 1)
+        #expect(runJSON(code: 3, timedOut: false).stdout.contains(#""exit_code":3"#))
+        #expect(runJSON(code: nil, timedOut: true).exitCode == 1)
         #expect(t.stdout == "タイムアウトしました（1.5 秒）ログ: /logs/x\n" && t.exitCode == 1)
     }
 }

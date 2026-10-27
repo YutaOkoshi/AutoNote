@@ -144,7 +144,8 @@ public enum CLIRenderer {
         if let m = run.failureMessage { return CLIOutput(stderr: "エラー: \(m)\n", exitCode: 1) }
         let seconds = String(format: "%.1f", run.durationSeconds)
         if run.timedOut { return CLIOutput(stdout: "タイムアウトしました（\(seconds) 秒）ログ: \(run.logDirectory)\n", exitCode: 1) }
+        // Spec §16: success 0, any failure 1; the child's own exit code stays in the text (and in the JSON).
         let code = run.exitCode ?? 1
-        return CLIOutput(stdout: "終了コード \(code)（\(seconds) 秒）ログ: \(run.logDirectory)\n", exitCode: code)
+        return CLIOutput(stdout: "終了コード \(code)（\(seconds) 秒）ログ: \(run.logDirectory)\n", exitCode: code == 0 ? 0 : 1)
     }
 }
