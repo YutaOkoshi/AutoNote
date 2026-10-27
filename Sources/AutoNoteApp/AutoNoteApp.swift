@@ -26,10 +26,9 @@ struct AutoNoteApp: App {
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
 
-        // Task 15: the settings tabs replace this placeholder.
+        // Plan 06 Task 15. Opened by 設定… (activate first, then `openSettings`) and by the main window's band.
         SwiftUI.Settings {
-            Text("設定")
-                .frame(minWidth: 480, minHeight: 320)
+            SettingsView(shell: appDelegate.shell)
         }
     }
 }

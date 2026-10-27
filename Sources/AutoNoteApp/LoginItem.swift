@@ -6,6 +6,18 @@ import ServiceManagement
 enum LoginItem {
     static var status: SMAppService.Status { SMAppService.mainApp.status }
 
+    /// What a reconciliation did, for the settings screen to show next to the toggle (13b review Minor 6).
+    enum Outcome: Equatable {
+        /// The system already matched the setting.
+        case unchanged
+        case updated
+        /// `AUTONOTE_DATA_DIR` is set; `SMAppService` was not touched (ruling X22).
+        case leftAlone
+        /// macOS waits for the user's approval. `openedSettings` is true when this call already opened the pane.
+        case requiresApproval(openedSettings: Bool)
+        case failed(String)
+    }
+
     /// Registers (`true`) or unregisters (`false`) the app as a login item. When macOS needs the user's approval
     /// the Login Items pane is opened.
     static func set(_ on: Bool) throws {
@@ -28,14 +40,29 @@ enum LoginItem {
         }
     }
 
-    /// Brings the system in line with `launchAtLogin`; failures are logged, never thrown.
-    static func reconcile(launchAtLogin: Bool) {
-        guard needsReconciling(launchAtLogin: launchAtLogin) else { return }
+    /// Brings the system in line with `launchAtLogin`; failures are logged and returned, never thrown.
+    @discardableResult
+    static func reconcile(launchAtLogin: Bool) -> Outcome {
+        guard needsReconciling(launchAtLogin: launchAtLogin) else {
+            return launchAtLogin && status == .requiresApproval ? .requiresApproval(openedSettings: false) : .unchanged
+        }
         do {
             try set(launchAtLogin)
             NSLog("AutoNote: login item %@", launchAtLogin ? "registered" : "unregistered")
+            return launchAtLogin && status == .requiresApproval ? .requiresApproval(openedSettings: true) : .updated
         } catch {
             NSLog("AutoNote: login item update failed: %@", String(describing: error))
+            return .failed(describe(error))
         }
+    }
+
+    /// `SMAppService` errors are `NSError`s in the `SMAppServiceErrorDomain`; `.notFound` is what a build outside
+    /// /Applications usually gets.
+    private static func describe(_ error: any Error) -> String {
+        let ns = error as NSError
+        if (ns.domain == SMAppServiceErrorDomain && ns.code == Int(kSMErrorJobNotFound)) || status == .notFound {
+            return "ログイン項目に登録できません（アプリを「アプリケーション」フォルダに置いてからやり直してください）"
+        }
+        return "ログイン項目を変更できません（\(ns.localizedDescription)）"
     }
 }

@@ -149,7 +149,7 @@ private func mode(of url: URL) throws -> Int {
         let r = AutomationsFile(url: try write(json, mode: 0o600)).load()
         #expect(r.items[0].isRunnable && r.items[0].problem == nil)
         #expect(!r.items[1].isRunnable)
-        #expect(r.items[1].problem == "同じ名前の Automation が先にあります")
+        #expect(r.items[1].problem == "同じ名前の Automation があります")
     }
 
     @Test func disabledEntryIsNotRunnableWithoutProblem() throws {

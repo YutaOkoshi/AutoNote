@@ -41,8 +41,9 @@ final class AppEnvironment {
         set { routing.openWindow = newValue }
     }
 
-    /// Called by `settingsSaved` with the saved shortcuts. AppDelegate points this at `HotKeyCenter.apply`.
-    var shortcutsChanged: @MainActor (Shortcuts) -> Void = { _ in }
+    /// Called by `settingsSaved` with the saved shortcuts. AppDelegate points this at `HotKeyCenter.apply`, whose
+    /// per-action `RegisterEventHotKey` status comes back to the settings screen.
+    var shortcutsChanged: @MainActor (Shortcuts) -> [ShortcutAction: OSStatus] = { _ in [:] }
 
     /// True when `AUTONOTE_DATA_DIR` is set (E2E / development): the login item is left alone (ruling X22).
     var isDataDirectoryOverridden: Bool { AppIdentity.isDataDirectoryOverridden(environment) }
@@ -192,21 +193,31 @@ final class AppEnvironment {
             ports: ports, model: model, notifier: notifier, server: server, routing: routing)
     }
 
+    /// What a save did beyond writing `settings.json`, for the settings screen to show.
+    struct SaveResult {
+        /// `RegisterEventHotKey` status per readable shortcut (`eventHotKeyExistsErr` when another app holds it).
+        var hotKeys: [ShortcutAction: OSStatus]
+        var loginItem: LoginItem.Outcome
+    }
+
     /// 11. Called by the settings screen after a save.
-    func settingsSaved(old: AutoNoteCore.Settings, new: AutoNoteCore.Settings) async {
+    @discardableResult
+    func settingsSaved(old: AutoNoteCore.Settings, new: AutoNoteCore.Settings) async -> SaveResult {
         await wiring.settingsChanged(from: old, to: new)
-        shortcutsChanged(new.shortcuts)
-        reconcileLoginItem(launchAtLogin: new.launchAtLogin)
+        let hotKeys = shortcutsChanged(new.shortcuts)
+        let loginItem = reconcileLoginItem(launchAtLogin: new.launchAtLogin)
+        return SaveResult(hotKeys: hotKeys, loginItem: loginItem)
     }
 
     /// Launch item 6 and the settings save: bring the login item in line with the setting, except under an
     /// overridden data directory, where `SMAppService` is never touched (ruling X22).
-    func reconcileLoginItem(launchAtLogin: Bool) {
+    @discardableResult
+    func reconcileLoginItem(launchAtLogin: Bool) -> LoginItem.Outcome {
         guard !isDataDirectoryOverridden else {
             logger.info("login item: data directory overridden, left alone")
-            return
+            return .leftAlone
         }
-        LoginItem.reconcile(launchAtLogin: launchAtLogin)
+        return LoginItem.reconcile(launchAtLogin: launchAtLogin)
     }
 
     // MARK: - Notice loops (launch item 2)

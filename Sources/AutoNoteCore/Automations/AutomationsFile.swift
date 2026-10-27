@@ -118,14 +118,8 @@ public struct AutomationsFile: Sendable {
                 timeout = n.intValue
             }
             let def = AutomationDefinition(name: name, enabled: enabled, on: trigger, command: command, timeoutSec: timeout)
-            var problem: String?
-            if !seen.insert(name).inserted {
-                problem = "同じ名前の Automation が先にあります"
-            } else if command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                problem = "command が空です"
-            } else if timeout < 1 {
-                problem = "timeout_sec は 1 以上にしてください"
-            }
+            let problem = def.problem(duplicateNames: seen)
+            seen.insert(name)
             out.items.append(LoadedAutomation(definition: def, isRunnable: problem == nil && enabled, problem: problem))
         }
         return out

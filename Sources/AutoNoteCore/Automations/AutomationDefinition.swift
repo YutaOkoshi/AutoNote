@@ -42,6 +42,20 @@ public struct AutomationDefinition: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+extension AutomationDefinition {
+    public static let timeoutRange = 1...86_400
+
+    /// The one validator for a definition (ruling X23): `AutomationsFile.load` and the settings sheet both use it.
+    /// `duplicateNames` are the names of the other definitions (for the file, the ones before this entry).
+    public func problem(duplicateNames: Set<String>) -> String? {
+        if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "名前を入れてください" }
+        if duplicateNames.contains(name) { return "同じ名前の Automation があります" }
+        if command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "コマンドを入れてください" }
+        if !Self.timeoutRange.contains(timeoutSec) { return "タイムアウトは 1〜86400 秒にしてください" }
+        return nil
+    }
+}
+
 public struct LoadedAutomation: Equatable, Sendable {
     public var definition: AutomationDefinition
     public var isRunnable: Bool
