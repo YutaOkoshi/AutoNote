@@ -42,7 +42,7 @@ public struct WriteVaultStage: QueueStage {
         }
 
         let minutes = decodeMinutes(at: minutesURL, id: id)
-        let status: MeetingStatus = (minutes != nil && job.summaryFailure == nil) ? .minutesGenerated : .transcriptOnly
+        let status = Self.resultingStatus(minutesExist: minutes != nil, job: job)
         var manifest = try await context.manifests.load(id)
         manifest.status = status
         let outputFolder = URL(filePath: folderPath, directoryHint: .isDirectory)
@@ -78,6 +78,11 @@ public struct WriteVaultStage: QueueStage {
             Self.logger.notice("\(id.rawValue, privacy: .public): note edited, awaiting confirmation")
             throw StageError.awaitingConfirmation(path: Self.relativePath(of: url, in: outputFolder))
         }
+    }
+
+    /// The status a written note carries: minutes only count when they exist and the last summarize did not fail.
+    static func resultingStatus(minutesExist: Bool, job: Job) -> MeetingStatus {
+        (minutesExist && job.summaryFailure == nil) ? .minutesGenerated : .transcriptOnly
     }
 
     /// `nil` when absent; an existing file that cannot be decoded is logged and treated as absent (transcript-only).

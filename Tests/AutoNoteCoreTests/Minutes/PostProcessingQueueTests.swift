@@ -56,6 +56,12 @@ private struct Fixture {
     }
 
     func job(_ id: MeetingID = Fixture.firstID) async throws -> Job? { try await jobs.load(id) }
+
+    func saveMinutes(_ id: MeetingID) throws {
+        let url = paths.minutesFile(id)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try AutoNoteJSON.encoder().encode(Samples.minutes).write(to: url)
+    }
 }
 
 /// First snapshot matching `condition`; records an issue and returns nil after `timeout` of real time.
@@ -229,6 +235,7 @@ private func waitFor(_ queue: PostProcessingQueue, timeout: Duration = .seconds(
         let f = try Fixture()
         try await f.saveManifest()
         try await f.saveManifest(Fixture.secondID)
+        try f.saveMinutes(Fixture.secondID)
         let approved = Approvals()
         let write = ScriptedStage(name: StageName.writeVault, log: f.log,
                                   results: [.failure(.awaitingConfirmation(path: "2026/x.md")),
@@ -267,6 +274,36 @@ private func waitFor(_ queue: PostProcessingQueue, timeout: Duration = .seconds(
         // a missing job is a logged no-op
         try await queue.resolveOverwrite(MeetingID(rawValue: "nope"), overwrite: true)
         #expect(try await f.job(MeetingID(rawValue: "nope")) == nil)
+    }
+
+    @Test func keepingTheNoteWithoutUsableMinutesStaysTranscriptOnly() async throws {
+        let f = try Fixture()
+        try await f.saveManifest()
+        try await f.saveManifest(Fixture.secondID)
+        try f.saveMinutes(Fixture.secondID)
+        // first: no minutes file; second: minutes exist but the regeneration failed
+        let write = ScriptedStage(name: StageName.writeVault, log: f.log,
+                                  results: [.failure(.awaitingConfirmation(path: "2026/x.md")),
+                                            .failure(.awaitingConfirmation(path: "2026/x.md"))])
+        // a failed throw drops stage mutations, so the failure is recorded by the (successful) summarize stage
+        let summarize = ScriptedStage(name: StageName.summarize, log: f.log, onRun: { job in
+            if job.meeting == Fixture.secondID { job.summaryFailure = "failed: x" }
+        })
+        let queue = f.queue(f.stages([StageName.writeVault: write, StageName.summarize: summarize]))
+        await queue.enqueue(Fixture.firstID)
+        f.clock.advance(by: 1)
+        await queue.enqueue(Fixture.secondID)
+        await queue.runUntilIdle()
+
+        for id in [Fixture.firstID, Fixture.secondID] {
+            try await queue.resolveOverwrite(id, overwrite: false)
+            let job = try #require(try await f.job(id))
+            #expect(job.state == .done)
+            #expect(job.completedStages.contains(StageName.writeVault))
+            #expect(job.completedStages.contains(StageName.updateIndex))
+            #expect(job.completedStages.contains(StageName.automations))
+            #expect(try await f.manifests.load(id).status == .transcriptOnly)
+        }
     }
 
     @Test func resolveOverwriteIgnoresJobsNotAwaitingConfirmation() async throws {
