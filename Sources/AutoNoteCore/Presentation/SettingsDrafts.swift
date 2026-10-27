@@ -46,6 +46,28 @@ public struct AutomationDraft: Equatable, Sendable {
     public static func validate(_ d: AutomationDefinition, existing: [AutomationDefinition]) -> [String] {
         [d.problem(duplicateNames: Set(existing.map(\.name)))].compactMap { $0 }
     }
+
+    public static let originalMissingMessage = "元の定義が見つかりません（ほかで変更されました）。閉じて開き直してください"
+
+    /// Puts `edited` into `list`, a fresh read of `automations.json`. `original` is the definition as it was when the
+    /// sheet opened (nil for a new one); it is found again by value in `list`, never by an index from an earlier
+    /// read. Validation runs against the other entries of `list`. Throws `.notFound(originalMissingMessage)` when
+    /// the original is gone (the sheet stays open), `.invalid` with the problems otherwise.
+    public static func applying(_ edited: AutomationDefinition, replacing original: AutomationDefinition?,
+                                in list: [AutomationDefinition]) throws(AppCommandError) -> [AutomationDefinition] {
+        var out = list
+        var others = list
+        var index: Int?
+        if let original {
+            guard let i = list.firstIndex(of: original) else { throw .notFound(originalMissingMessage) }
+            index = i
+            others.remove(at: i)
+        }
+        let problems = validate(edited, existing: others)
+        guard problems.isEmpty else { throw .invalid(problems.joined(separator: "\n")) }
+        if let index { out[index] = edited } else { out.append(edited) }
+        return out
+    }
 }
 
 /// Applied to every settings save. The countdown and grace seconds are the values `AutoRecordCoordinator` will use

@@ -49,13 +49,16 @@ struct MinutesTab: View {
         .onWindowBecameKey { Task { await reload(force: false) } }
     }
 
+    /// Unsaved edits are never overwritten except by 「読み直す」, also when typing started during the read.
     private func reload(force: Bool) async {
         guard force || !isDirty else { return }
+        let before = (prompt, frontmatter)
         do {
             let store = await env.output.portable()
             let p = try await store.read(.prompt).map { String(decoding: $0, as: UTF8.self) } ?? ""
             let f = try await store.read(.frontmatter).map { String(decoding: $0, as: UTF8.self) }
                 ?? FrontmatterTemplate.defaultText
+            guard force || (prompt, frontmatter) == before else { return }
             prompt = p.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? DefaultPrompt.instructions : p
             frontmatter = f
             baseline = (prompt, frontmatter)
@@ -65,16 +68,23 @@ struct MinutesTab: View {
         }
     }
 
+    /// Writes only what was edited. A prompt cleared to empty is written empty, so the summarizer keeps using the
+    /// built-in default (`SummarizeStage` treats an empty `prompt.md` as `DefaultPrompt.instructions`); the default
+    /// shown for an empty file is never copied into it.
     private func save() {
-        let p = prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? DefaultPrompt.instructions : prompt
+        guard let baseline else { return }
+        let promptEdited = prompt != baseline.prompt, frontmatterEdited = frontmatter != baseline.frontmatter
+        let cleared = prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let p = cleared ? "" : prompt
         let f = frontmatter
         Task {
             do {
                 let store = await env.output.portable()
-                try await store.write(.prompt, Data(p.utf8))
-                try await store.write(.frontmatter, Data(f.utf8))
-                prompt = p
-                baseline = (p, f)
+                if promptEdited { try await store.write(.prompt, Data(p.utf8)) }
+                if frontmatterEdited { try await store.write(.frontmatter, Data(f.utf8)) }
+                let shown = cleared ? DefaultPrompt.instructions : p
+                prompt = shown
+                self.baseline = (shown, f)
                 saveState = .saved
             } catch {
                 saveState = .failed("_autonote/ に書き込めません（\((error as NSError).localizedDescription)）")

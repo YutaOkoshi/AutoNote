@@ -96,11 +96,14 @@ struct DictionaryTab: View {
             .buttonStyle(.borderless)
     }
 
-    /// Unsaved edits are never overwritten except by 「読み直す」.
+    /// Unsaved edits are never overwritten except by 「読み直す」. The check runs again after the read, so typing
+    /// that started while the file was being read is kept too.
     private func reload(force: Bool) async {
         guard force || !isDirty else { return }
+        let before = draft
         do {
             let data = try await env.output.portable().read(.dictionary)
+            guard force || draft == before else { return }
             let text = data.map { String(decoding: $0, as: UTF8.self) } ?? DictionaryFile.defaultMarkdown
             let parsed = DictionaryFile.parse(text)
             show(DictionaryDraft(parsed.dictionary))

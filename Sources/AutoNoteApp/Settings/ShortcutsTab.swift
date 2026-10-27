@@ -46,7 +46,7 @@ struct ShortcutsTab: View {
                                 }
                                 if let status = failures[action] {
                                     Text(status == OSStatus(eventHotKeyExistsErr) ? Self.takenMessage
-                                         : "\(Self.takenMessage)（\(status)）")
+                                         : "ショートカットを登録できません（\(status)）")
                                         .font(.caption).foregroundStyle(.red)
                                 }
                             }
@@ -85,7 +85,7 @@ struct ShortcutsTab: View {
                 return
             }
             do { try combo.validate() } catch {
-                if case .invalid(let m) = error { saveState = .failed("\(Self.title(action)): \(m)") }
+                saveState = .failed("\(Self.title(action)): \(SettingsSaving.message(error))")
                 return
             }
         }

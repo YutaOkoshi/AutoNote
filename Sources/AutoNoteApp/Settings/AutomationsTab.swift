@@ -16,11 +16,12 @@ struct AutomationsTab: View {
     @State private var message: String?
     @State private var running: String?
 
+    /// The sheet keeps the definition as it was when it opened, not a list index: the file may change while the
+    /// sheet is open (CLI import, an editor), so the save finds it again by value in a fresh read.
     private struct EditTarget: Identifiable {
-        /// Index in the current list, nil for a new definition.
-        let index: Int?
-        let definition: AutomationDefinition
-        var id: String { index.map(String.init) ?? "new" }
+        /// Nil for a new definition.
+        let original: AutomationDefinition?
+        let id = UUID()
     }
 
     private var definitions: [AutomationDefinition] { loadResult.items.map(\.definition) }
@@ -42,8 +43,7 @@ struct AutomationsTab: View {
                     }
                     HStack {
                         Button("追加", systemImage: "plus") {
-                            editing = EditTarget(index: nil, definition: AutomationDefinition(name: "", on: .minutesGenerated,
-                                                                                              command: ""))
+                            editing = EditTarget(original: nil)
                         }
                         .disabled(locked)
                         Spacer()
@@ -72,7 +72,7 @@ struct AutomationsTab: View {
                 Section {
                     if runs.isEmpty { Text("まだ実行していません").foregroundStyle(.secondary) }
                     ForEach(Array(runs.enumerated()), id: \.offset) { _, run in
-                        RunRow(run: run)
+                        RunRow(run: run).id(run.logDirectory.isEmpty ? "\(run.name)-\(run.startedAt)" : run.logDirectory)
                     }
                 } header: {
                     HStack {
@@ -88,12 +88,9 @@ struct AutomationsTab: View {
         .task { await followRuns() }
         .onWindowBecameKey { Task { await reload() } }
         .sheet(item: $editing) { target in
-            AutomationEditSheet(definition: target.definition,
-                                others: definitions.enumerated().filter { $0.offset != target.index }.map(\.element)) { saved in
-                editing = nil
-                var list = definitions
-                if let index = target.index { list[index] = saved } else { list.append(saved) }
-                write(list)
+            AutomationEditSheet(definition: target.original ?? AutomationDefinition(name: "", on: .minutesGenerated, command: ""),
+                                others: Self.removingFirst(target.original, from: definitions)) { edited in
+                save(edited, replacing: target.original)
             } onCancel: {
                 editing = nil
             }
@@ -104,9 +101,7 @@ struct AutomationsTab: View {
         let d = item.definition
         HStack(alignment: .top) {
             Toggle("有効", isOn: Binding(get: { d.enabled }, set: { on in
-                var list = definitions
-                list[index].enabled = on
-                write(list)
+                mutate(d) { $0[$1].enabled = on }
             }))
             .labelsHidden()
             .disabled(locked)
@@ -121,13 +116,9 @@ struct AutomationsTab: View {
             Spacer()
             Button(running == d.name ? "実行中…" : "実行") { run(d.name) }
                 .disabled(runMeetingID == nil || !item.isRunnable || running != nil)
-            Button("編集") { editing = EditTarget(index: index, definition: d) }
+            Button("編集") { editing = EditTarget(original: d) }
                 .disabled(locked)
-            Button("削除") {
-                var list = definitions
-                list.remove(at: index)
-                write(list)
-            }
+            Button("削除") { mutate(d) { $0.remove(at: $1) } }
             .disabled(locked)
         }
     }
@@ -149,14 +140,52 @@ struct AutomationsTab: View {
         }
     }
 
-    private func write(_ list: [AutomationDefinition]) {
+    private static func removingFirst(_ d: AutomationDefinition?, from list: [AutomationDefinition]) -> [AutomationDefinition] {
+        var out = list
+        if let d, let i = out.firstIndex(of: d) { out.remove(at: i) }
+        return out
+    }
+
+    /// The sheet's 保存: re-read the file, find the original again by value and validate against the fresh list.
+    /// Returns the message to show in the sheet when the save is refused (the sheet then stays open).
+    private func save(_ edited: AutomationDefinition, replacing original: AutomationDefinition?) -> String? {
+        let fresh = env.automationsFile.load()
+        guard !fresh.disabledByPermission else { loadResult = fresh; return AutomationsFile.permissionWarning }
+        do {
+            let list = try AutomationDraft.applying(edited, replacing: original, in: fresh.items.map(\.definition))
+            if let failure = write(list) { return failure }
+            editing = nil
+            return nil
+        } catch {
+            loadResult = fresh
+            return SettingsSaving.message(error)
+        }
+    }
+
+    /// A row's toggle or 削除: applied to a fresh read, at the row's definition found again by value. When it is gone
+    /// (changed elsewhere) nothing is written and the list is refreshed.
+    private func mutate(_ row: AutomationDefinition, _ change: (inout [AutomationDefinition], Int) -> Void) {
+        let fresh = env.automationsFile.load()
+        var list = fresh.items.map(\.definition)
+        guard !fresh.disabledByPermission, let index = list.firstIndex(of: row) else {
+            loadResult = fresh
+            message = "この Automation はほかで変更されました。一覧を読み直しました"
+            return
+        }
+        change(&list, index)
+        message = write(list)
+    }
+
+    /// Saves `list` and reloads; returns the error text on failure.
+    @discardableResult
+    private func write(_ list: [AutomationDefinition]) -> String? {
+        defer { loadResult = env.automationsFile.load() }
         do {
             try env.automationsFile.save(list)
-            message = nil
+            return nil
         } catch {
-            message = "automations.json に書き込めません（\((error as NSError).localizedDescription)）"
+            return "automations.json に書き込めません（\((error as NSError).localizedDescription)）"
         }
-        loadResult = env.automationsFile.load()
     }
 
     private func run(_ name: String) {
@@ -199,8 +228,19 @@ struct AutomationsTab: View {
             loadResult = try env.automationsFile.importReplacing(from: url)
             message = "読み込みました（今の定義は置き換わりました）"
         } catch {
-            message = "読み込めません（JSON の配列ではありません）"
+            message = "読み込めません（\(Self.importError(error))）"
         }
+    }
+}
+
+extension AutomationsTab {
+    /// `importReplacing` throws `AutomationsFile`'s parse failure (its `message` says what is wrong with the JSON)
+    /// or a read error (`localizedDescription`).
+    fileprivate static func importError(_ error: any Error) -> String {
+        if let parse = Mirror(reflecting: error).children.first(where: { $0.label == "message" })?.value as? String {
+            return parse
+        }
+        return (error as NSError).localizedDescription
     }
 }
 
@@ -246,24 +286,52 @@ private struct RunRow: View {
         return "シグナルで終了"
     }
 
-    private func tail(_ file: String) -> String? {
-        guard !run.logDirectory.isEmpty,
-              let data = try? Data(contentsOf: URL(filePath: run.logDirectory).appending(path: file)), !data.isEmpty
-        else { return nil }
-        let lines = String(decoding: data.suffix(4096), as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
+    /// The last lines of `stdout.txt` / `stderr.txt`, read once off the main actor (the files are unbounded).
+    private struct Tails: Equatable, Sendable {
+        var stdout: String?
+        var stderr: String?
+    }
+
+    @State private var tails: Tails?
+
+    /// At most the last 4096 bytes: seek to the end minus 4096 and read from there.
+    nonisolated private static func tail(_ url: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let end = try? handle.seekToEnd(), end > 0 else { return nil }
+        let start = end > 4096 ? end - 4096 : 0
+        guard (try? handle.seek(toOffset: start)) != nil, let data = try? handle.readToEnd(), !data.isEmpty else { return nil }
+        let lines = String(decoding: data, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
         return lines.suffix(10).joined(separator: "\n")
+    }
+
+    nonisolated private static func loadTails(_ directory: String) async -> Tails {
+        await Task.detached(priority: .utility) {
+            guard !directory.isEmpty else { return Tails() }
+            let dir = URL(filePath: directory, directoryHint: .isDirectory)
+            return Tails(stdout: tail(dir.appending(path: "stdout.txt")), stderr: tail(dir.appending(path: "stderr.txt")))
+        }.value
     }
 
     var body: some View {
         DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 6) {
-                if let out = tail("stdout.txt") { LogTail(title: "stdout", text: out) }
-                if let err = tail("stderr.txt") { LogTail(title: "stderr", text: err) }
+                if let tails {
+                    if let out = tails.stdout { LogTail(title: "stdout", text: out) }
+                    if let err = tails.stderr { LogTail(title: "stderr", text: err) }
+                } else {
+                    ProgressView().controlSize(.small)
+                }
                 if !run.logDirectory.isEmpty {
                     Button("ログのフォルダを開く") {
                         NSWorkspace.shared.open(URL(filePath: run.logDirectory, directoryHint: .isDirectory))
                     }
                 }
+            }
+            // Only while expanded; again when this row shows another run.
+            .task(id: run.logDirectory) {
+                tails = nil
+                tails = await Self.loadTails(run.logDirectory)
             }
         } label: {
             HStack {
@@ -301,11 +369,13 @@ private struct LogTail: View {
 private struct AutomationEditSheet: View {
     @State private var draft: AutomationDraft
     let others: [AutomationDefinition]
-    let onSave: (AutomationDefinition) -> Void
+    /// Returns the refusal to show, nil when saved.
+    let onSave: (AutomationDefinition) -> String?
     let onCancel: () -> Void
+    @State private var refusal: String?
 
     init(definition: AutomationDefinition, others: [AutomationDefinition],
-         onSave: @escaping (AutomationDefinition) -> Void, onCancel: @escaping () -> Void) {
+         onSave: @escaping (AutomationDefinition) -> String?, onCancel: @escaping () -> Void) {
         _draft = State(initialValue: AutomationDraft(definition))
         self.others = others
         self.onSave = onSave
@@ -343,10 +413,13 @@ private struct AutomationEditSheet: View {
             ForEach(problems, id: \.self) { p in
                 Label(p, systemImage: "exclamationmark.circle").foregroundStyle(.red).font(.callout)
             }
+            if let refusal {
+                Label(refusal, systemImage: "exclamationmark.triangle").foregroundStyle(.red).font(.callout)
+            }
             HStack {
                 Spacer()
                 Button("キャンセル", action: onCancel).keyboardShortcut(.cancelAction)
-                Button("保存") { onSave(draft.definition) }
+                Button("保存") { refusal = onSave(draft.definition) }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!problems.isEmpty)
             }

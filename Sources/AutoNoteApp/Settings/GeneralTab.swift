@@ -13,6 +13,8 @@ struct GeneralTab: View {
     @State private var claudeModel = ""
     @State private var summarizerKind: SummarizerKind = .claudeCode
     @State private var loaded = false
+    /// `launchAtLogin` as last loaded or saved, to tell whether a save changed the toggle.
+    @State private var savedLaunchAtLogin = true
     @State private var saveState: SaveState = .idle
     @State private var loginItemMessage: String?
     @State private var loginItemNeedsApproval = false
@@ -92,6 +94,7 @@ struct GeneralTab: View {
         claudePath = s.claudePath ?? ""
         claudeModel = s.claudeModel ?? ""
         summarizerKind = s.summarizerKind
+        savedLaunchAtLogin = s.launchAtLogin
         loaded = true
         showLoginItemStatus()
     }
@@ -121,14 +124,18 @@ struct GeneralTab: View {
                 }
                 outputFolder = saved.outputFolder ?? ""
                 saveState = .saved
-                showLoginItemOutcome(result.loginItem, turnedOn: login)
+                let toggledOn = login && !savedLaunchAtLogin
+                savedLaunchAtLogin = saved.launchAtLogin
+                showLoginItemOutcome(result.loginItem, toggledOn: toggledOn)
             } catch {
                 saveState = .failed(SettingsSaving.message(error))
             }
         }
     }
 
-    private func showLoginItemOutcome(_ outcome: LoginItem.Outcome, turnedOn: Bool) {
+    /// System Settings opens only when this save itself turned the toggle on and `LoginItem.set` did not already
+    /// open it; saving an unrelated field while macOS waits for approval just shows the message and the button.
+    private func showLoginItemOutcome(_ outcome: LoginItem.Outcome, toggledOn: Bool) {
         switch outcome {
         case .unchanged, .updated:
             loginItemMessage = nil
@@ -138,7 +145,7 @@ struct GeneralTab: View {
         case .requiresApproval(let opened):
             loginItemMessage = "macOS がログイン項目の許可を待っています"
             loginItemNeedsApproval = true
-            if !opened && turnedOn { SMAppService.openSystemSettingsLoginItems() }
+            if !opened && toggledOn { SMAppService.openSystemSettingsLoginItems() }
         case .failed(let m):
             loginItemMessage = m
             loginItemNeedsApproval = false

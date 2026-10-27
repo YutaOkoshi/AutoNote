@@ -60,6 +60,45 @@ import AutoNoteCore
         #expect(fromFile == "同じ名前の Automation があります")
     }
 
+    /// Fix round 1, Important 1: the sheet's original is found again by value in a fresh read of the file, so an
+    /// external change while the sheet is open neither crashes nor overwrites another definition.
+    @Test func applyingRelocatesTheOriginalInAFreshRead() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("drafts-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = AutomationsFile(url: dir.appendingPathComponent("automations.json"))
+        let a = AutomationDefinition(name: "a", on: .minutesGenerated, command: "echo a")
+        let b = AutomationDefinition(name: "b", on: .minutesGenerated, command: "echo b")
+        try file.save([a, b])
+        // The sheet opens on `b` (index 1 at that time).
+        var edited = b
+        edited.command = "echo B"
+
+        // Externally: an import puts a new entry in front.
+        let imported = dir.appendingPathComponent("import.json")
+        let x = AutomationDefinition(name: "x", on: .transcriptOnly, command: "echo x")
+        try AutoNoteJSON.encoder().encode([x, a, b]).write(to: imported)
+        _ = try file.importReplacing(from: imported)
+
+        let fresh = file.load().items.map(\.definition)
+        let saved = try AutomationDraft.applying(edited, replacing: b, in: fresh)
+        #expect(saved.map(\.name) == ["x", "a", "b"] && saved[2].command == "echo B" && saved[0] == x && saved[1] == a)
+
+        // Externally removed: the save is refused and nothing is overwritten.
+        try file.save([x, a])
+        #expect(throws: AppCommandError.notFound(AutomationDraft.originalMissingMessage)) {
+            try AutomationDraft.applying(edited, replacing: b, in: file.load().items.map(\.definition))
+        }
+        // A rename to a name that appeared meanwhile is a validation error, not a silent duplicate.
+        var renamed = a
+        renamed.name = "x"
+        #expect(throws: AppCommandError.invalid("同じ名前の Automation があります")) {
+            try AutomationDraft.applying(renamed, replacing: a, in: file.load().items.map(\.definition))
+        }
+        // New entry: appended.
+        #expect(try AutomationDraft.applying(b, replacing: nil, in: [x, a]).map(\.name) == ["x", "a", "b"])
+    }
+
     @Test func normalizerUsesAutoRecordConfig() {
         // countdownSeconds 45 → 30、-1 → 0、disconnectGraceSeconds 0 → 5、999 → 300、audioRetentionDays -3 → 0
         var s = AutoNoteCore.Settings(); s.countdownSeconds = 45; s.disconnectGraceSeconds = 0
