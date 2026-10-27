@@ -120,20 +120,18 @@ struct GeneralTab: View {
     }
 
     private func save() {
-        // Empty means the default folder, never nil; the default is created here so saving it never leaves a
-        // 保存先 that does not exist.
+        // Empty means the default folder, never nil. Whatever folder is saved is created here (with its parents) so
+        // saving never leaves a 保存先 that does not exist; when it cannot be created nothing is saved.
         let folder = FirstRunDefaults.outputFolder(
             forInput: outputFolder, paths: env.paths, isDataDirectoryOverridden: env.isDataDirectoryOverridden)
         let path = Self.nilIfBlank(claudePath), model = Self.nilIfBlank(claudeModel)
         let login = launchAtLogin, kind = summarizerKind
-        if folder == defaultFolder {
-            do {
-                try FileManager.default.createDirectory(
-                    at: URL(filePath: folder, directoryHint: .isDirectory), withIntermediateDirectories: true)
-            } catch {
-                saveState = .failed("保存先を作れませんでした")
-                return
-            }
+        do {
+            try FileManager.default.createDirectory(
+                at: URL(filePath: folder, directoryHint: .isDirectory), withIntermediateDirectories: true)
+        } catch {
+            saveState = .failed("保存先を作れませんでした")
+            return
         }
         Task {
             do {
