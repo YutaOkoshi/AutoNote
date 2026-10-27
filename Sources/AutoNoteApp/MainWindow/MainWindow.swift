@@ -19,6 +19,28 @@ struct MainWindow: View {
     }
 }
 
+/// The open minutes editor registers here while it is shown; a list selection change asks it first (I5).
+@MainActor
+final class UnsavedEditsGuard {
+    private var token: UUID?
+    private var confirm: (@MainActor () async -> Bool)?
+
+    /// `confirm` returns true when leaving is fine (nothing unsaved, saved, or discarded) and false to stay.
+    func register(_ token: UUID, confirm: @escaping @MainActor () async -> Bool) {
+        self.token = token
+        self.confirm = confirm
+    }
+
+    /// Only the editor that registered last unregisters (the next meeting's editor may appear first).
+    func unregister(_ token: UUID) {
+        guard self.token == token else { return }
+        self.token = nil
+        confirm = nil
+    }
+
+    func mayLeave() async -> Bool { await confirm?() ?? true }
+}
+
 /// A file the user dropped or picked, waiting for its start time in `ImportSheet`.
 struct ImportCandidate: Identifiable {
     let url: URL
@@ -29,12 +51,20 @@ private struct MainWindowContent: View {
     let env: AppEnvironment
     let model: AppModel
     @State private var importCandidate: ImportCandidate?
+    @State private var unsaved = UnsavedEditsGuard()
 
     /// The list selection is the model's `selectedMeetingID` itself, so a notice tap that sets it while the window
-    /// is already open moves the selection too.
+    /// is already open moves the selection too. A change from the list first asks the open editor about unsaved
+    /// minutes (保存 / 破棄 / キャンセル); キャンセル keeps the current selection.
     private var selection: Binding<String?> {
         Binding(get: { model.selectedMeetingID?.rawValue },
-                set: { model.selectedMeetingID = $0.map { MeetingID(rawValue: $0) } })
+                set: { [unsaved, model] new in
+                    let target = new.map { MeetingID(rawValue: $0) }
+                    guard target != model.selectedMeetingID else { return }
+                    Task { @MainActor in
+                        if await unsaved.mayLeave() { model.selectedMeetingID = target }
+                    }
+                })
     }
 
     private var selectedRow: MeetingRow? {
@@ -88,7 +118,7 @@ private struct MainWindowContent: View {
                 MinutesMissingView(env: env, model: model, row: row)
             case .minutesGenerated:
                 // One view identity per meeting: no editor state carries over to another meeting.
-                CompletedDetailView(env: env, model: model, row: row)
+                CompletedDetailView(env: env, model: model, row: row, unsaved: unsaved)
                     .id(row.id)
             }
         } else if [.recording, .paused, .grace].contains(model.recorder.state) {

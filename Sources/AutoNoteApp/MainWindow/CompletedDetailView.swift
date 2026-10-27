@@ -1,3 +1,4 @@
+import AppKit
 import AutoNoteCore
 import SwiftUI
 
@@ -6,7 +7,9 @@ struct CompletedDetailView: View {
     let env: AppEnvironment
     let model: AppModel
     let row: MeetingRow
+    let unsaved: UnsavedEditsGuard
 
+    @State private var guardToken = UUID()
     @State private var original: MinutesOutput?
     @State private var draft: EditableMinutes?
     @State private var bookmarks: [Bookmark] = []
@@ -58,13 +61,18 @@ struct CompletedDetailView: View {
             }
         }
         .task(id: row.id) { await load() }
+        .onAppear { unsaved.register(guardToken) { await confirmLeave() } }
+        .onDisappear { unsaved.unregister(guardToken) }
         // 「保存しました」 is about the saved state only.
         .onChange(of: draft) { message = nil }
         .alert("Vault の会議ファイルがアプリの外で編集されています。上書きしますか？", isPresented: $confirmOverwrite) {
-            Button("上書きする", role: .destructive) { Task { await save(overwrite: true) } }
+            Button("上書きする", role: .destructive) { Task { _ = await save(overwrite: true) } }
             Button("キャンセル", role: .cancel) {}
         }
     }
+
+    /// Unsaved edits: the minutes (title included) differ from what was loaded or last saved.
+    private var isDirty: Bool { draft != nil && draft?.minutes != original }
 
     private var titleChanged: Bool {
         guard let original, let draft else { return false }
@@ -73,12 +81,17 @@ struct CompletedDetailView: View {
 
     private var actions: some View {
         HStack(spacing: 8) {
-            Button("保存", systemImage: "square.and.arrow.down.on.square") { Task { await save(overwrite: false) } }
+            Button("保存", systemImage: "square.and.arrow.down.on.square") { Task { _ = await save(overwrite: false) } }
                 .disabled(draft == nil || draft?.minutes == original || saving)
                 .keyboardShortcut("s")
             if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
             Spacer()
-            Button("再生成", systemImage: "arrow.clockwise") { Task { await model.perform(.regenerate(id)) } }
+            Button("再生成", systemImage: "arrow.clockwise") {
+                Task {
+                    guard await confirmLeave() else { return }
+                    await model.perform(.regenerate(id))
+                }
+            }
             Button("Obsidian で開く", systemImage: "arrow.up.forward.app") {
                 guard let path = row.filePath else { return }
                 Task { await WorkspaceOpener().open(URL(filePath: path)) }
@@ -119,8 +132,12 @@ struct CompletedDetailView: View {
         }
     }
 
-    private func save(overwrite: Bool) async {
-        guard let edited = draft?.minutes else { return }
+    private enum SaveOutcome { case saved, externallyEdited, failed }
+
+    /// The normal save path. `askOverwrite` false: an external edit is reported to the caller instead of
+    /// raising the window's overwrite alert.
+    private func save(overwrite: Bool, askOverwrite: Bool = true) async -> SaveOutcome {
+        guard let edited = draft?.minutes else { return .failed }
         saving = true
         defer { saving = false }
         do {
@@ -131,11 +148,50 @@ struct CompletedDetailView: View {
                 message = "保存しました"
                 errorText = nil
                 await model.refresh()
+                return .saved
             case .externallyEdited:
-                confirmOverwrite = true
+                if askOverwrite { confirmOverwrite = true }
+                return .externallyEdited
             }
         } catch {
             errorText = CommandRouter.ipcError(error).message
+            return .failed
+        }
+    }
+
+    /// Before the selection moves away or 再生成 runs: with unsaved edits ask 保存 / 破棄 / キャンセル (I5).
+    /// 保存 runs the normal save, including the overwrite question. True means go ahead.
+    private func confirmLeave() async -> Bool {
+        guard isDirty else { return true }
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "議事録の変更が保存されていません"
+        alert.informativeText = "保存しますか？ 破棄すると変更は失われます。"
+        alert.addButton(withTitle: "保存")
+        alert.addButton(withTitle: "破棄")
+        alert.addButton(withTitle: "キャンセル")
+        alert.buttons[1].hasDestructiveAction = true
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            switch await save(overwrite: false, askOverwrite: false) {
+            case .saved: return true
+            case .failed: return false
+            case .externallyEdited:
+                let ask = NSAlert()
+                ask.alertStyle = .warning
+                ask.messageText = "Vault の会議ファイルがアプリの外で編集されています。上書きしますか？"
+                ask.addButton(withTitle: "上書きする")
+                ask.addButton(withTitle: "キャンセル")
+                ask.buttons[0].hasDestructiveAction = true
+                guard ask.runModal() == .alertFirstButtonReturn else { return false }
+                return await save(overwrite: true, askOverwrite: false) == .saved
+            }
+        case .alertSecondButtonReturn:
+            draft = original.map(EditableMinutes.init)
+            return true
+        default:
+            return false
         }
     }
 
