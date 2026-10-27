@@ -326,6 +326,17 @@ public actor FakeFileOpener: FileOpener {
     }
 }
 
+// MARK: - Enqueuer
+
+/// Records every id `AppWiring.route` enqueues, in order.
+public actor FakeEnqueuer: MeetingEnqueuing {
+    public private(set) var ids: [MeetingID] = []
+
+    public init() {}
+
+    public func enqueue(_ id: MeetingID) async { ids.append(id) }
+}
+
 /// One set of fakes wired into `AppPorts`.
 public struct FakePorts: Sendable {
     public let recorder: FakeRecorderPort
