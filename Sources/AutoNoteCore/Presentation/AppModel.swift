@@ -52,6 +52,9 @@ public enum UserAction: Equatable, Sendable {
     public private(set) var justSaved: JustSaved?
     /// Withdraws the system notification of a prompt answered or resolved elsewhere (the app points it at
     /// `UserNotifier.withdraw(id:)`), so Notification Center keeps no stale buttons.
+    /// True while the window's minutes editor holds unsaved edits (the app wires it to the editor). A stop does not
+    /// move the selection away from them.
+    @ObservationIgnored public var hasUnsavedEdits: @MainActor () -> Bool = { false }
     @ObservationIgnored public var withdrawNotice: (@MainActor (String) async -> Void)?
 
     @ObservationIgnored private let ports: AppPorts
@@ -374,11 +377,12 @@ public enum UserAction: Equatable, Sendable {
         }
     }
 
-    /// Shows the band for `bandDuration`, and selects the meeting when nothing is selected.
+    /// Shows the band for `bandDuration`, and selects the stopped meeting even when another one is selected (GUI #8),
+    /// unless the open editor has unsaved edits.
     private func showStoppedBand(_ m: Manifest) {
         let band = StoppedBand(id: m.id, seconds: Int(m.duration ?? 0))
         stoppedBand = band
-        if selectedMeetingID == nil { selectedMeetingID = m.id }
+        if selectedMeetingID == nil || !hasUnsavedEdits() { selectedMeetingID = m.id }
         let duration = bandDuration
         Task { [weak self] in
             try? await Task.sleep(for: duration)

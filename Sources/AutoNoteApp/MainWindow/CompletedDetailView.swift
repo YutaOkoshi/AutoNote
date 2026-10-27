@@ -78,7 +78,7 @@ struct CompletedDetailView: View {
             }
         }
         .task(id: row.id) { await load() }
-        .onAppear { unsaved.register(guardToken) { await confirmLeave() } }
+        .onAppear { unsaved.register(guardToken, isDirty: { isDirty }) { await confirmLeave() } }
         .onDisappear { unsaved.unregister(guardToken) }
         // 「保存しました」 is about the saved state only.
         .onChange(of: draft) { message = nil }

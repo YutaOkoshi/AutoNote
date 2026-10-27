@@ -33,10 +33,13 @@ struct MainWindow: View {
 final class UnsavedEditsGuard {
     private var token: UUID?
     private var confirm: (@MainActor () async -> Bool)?
+    private var dirty: (@MainActor () -> Bool)?
 
-    /// `confirm` returns true when leaving is fine (nothing unsaved, saved, or discarded) and false to stay.
-    func register(_ token: UUID, confirm: @escaping @MainActor () async -> Bool) {
+    /// `confirm` returns true when leaving is fine (nothing unsaved, saved, or discarded) and false to stay;
+    /// `isDirty` says whether there is anything unsaved right now.
+    func register(_ token: UUID, isDirty: @escaping @MainActor () -> Bool, confirm: @escaping @MainActor () async -> Bool) {
         self.token = token
+        self.dirty = isDirty
         self.confirm = confirm
     }
 
@@ -45,9 +48,13 @@ final class UnsavedEditsGuard {
         guard self.token == token else { return }
         self.token = nil
         confirm = nil
+        dirty = nil
     }
 
     func mayLeave() async -> Bool { await confirm?() ?? true }
+
+    /// What `AppModel.hasUnsavedEdits` asks before a stop moves the selection.
+    var hasUnsavedEdits: Bool { dirty?() ?? false }
 }
 
 /// A file the user dropped or picked, waiting for its start time in `ImportSheet`.
@@ -94,6 +101,8 @@ private struct MainWindowContent: View {
             }
         }
         .frame(minWidth: 820, minHeight: 520)
+        // A stop selects the stopped meeting unless the open editor holds unsaved edits (GUI #8).
+        .onAppear { model.hasUnsavedEdits = { [unsaved] in unsaved.hasUnsavedEdits } }
         .toolbar {
             // The record actions sit left of the import icon. No keyboard shortcut; 停止 asks nothing.
             ToolbarItemGroup(placement: .primaryAction) {

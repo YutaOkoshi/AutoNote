@@ -412,11 +412,25 @@ import AutoNoteTestSupport
         #expect(model.stoppedBand == nil)
     }
 
-    @Test func stoppedKeepsExistingSelection() async {
+    @Test func stoppedSelectsMeetingOverAnotherSelection() async {
+        // 別の会議（失敗行など）を選んだまま録音・停止しても、止めた会議を選ぶ（GUI #8）
         let fakes = FakePorts()
         let (model, task) = await start(fakes)
         defer { task.cancel() }
         model.selectedMeetingID = m2
+        await fakes.events.send(.stopped(manifest(m1, seconds: 30), .manual))
+        await model.settle()
+        #expect(model.selectedMeetingID == m1)
+        #expect(model.stoppedBand == AppModel.StoppedBand(id: m1, seconds: 30))
+    }
+
+    @Test func stoppedKeepsSelectionWithUnsavedEdits() async {
+        // 開いている議事録に未保存の編集があれば選択は変えない（帯は出る。編集を黙って捨てない）
+        let fakes = FakePorts()
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        model.selectedMeetingID = m2
+        model.hasUnsavedEdits = { true }
         await fakes.events.send(.stopped(manifest(m1, seconds: 60), .manual))
         await model.settle()
         #expect(model.selectedMeetingID == m2)
