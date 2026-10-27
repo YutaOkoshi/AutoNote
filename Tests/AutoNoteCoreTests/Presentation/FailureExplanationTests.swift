@@ -21,7 +21,7 @@ import AutoNoteCore
     @Test func noSpeech() {
         #expect(make(.job(stage: "transcribe", reason: "no_speech")) == FailureExplanation(
             what: "音声を聞き取れませんでした", why: "録音に声が入っていないか、マイクが拾えていません",
-            actions: [.revealAudio, .delete], tone: .failure))
+            actions: [.rerun, .revealAudio, .delete], tone: .failure))
     }
 
     @Test(arguments: ["output_folder_unavailable", "output_folder_missing"]) func outputFolderWaits(reason: String) {

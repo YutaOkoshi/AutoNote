@@ -64,7 +64,7 @@ public struct FailureExplanation: Sendable, Equatable {
             }
             if key == "no_speech" {
                 return .init(what: "音声を聞き取れませんでした", why: "録音に声が入っていないか、マイクが拾えていません",
-                             actions: [.revealAudio, .delete], tone: .failure)
+                             actions: [.rerun, .revealAudio, .delete], tone: .failure)
             }
             let why: String
             switch key {
