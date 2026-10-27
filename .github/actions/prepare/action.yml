@@ -1,0 +1,51 @@
+name: Prepare Swift build
+description: >-
+  Selects an Xcode with Swift 6.3+ and the macOS 26 SDK, restores (or builds)
+  tools/whisper.xcframework and restores the SwiftPM .build cache.
+  Shared by ci.yml and release.yml so both run the same steps.
+
+inputs:
+  xcode-app:
+    description: Xcode to select. Falls back to the image default if missing.
+    required: false
+    default: /Applications/Xcode_26.6.app
+
+runs:
+  using: composite
+  steps:
+    - name: Select Xcode
+      shell: bash
+      env:
+        XCODE_APP: ${{ inputs.xcode-app }}
+      run: .github/scripts/select-xcode.sh "${XCODE_APP}"
+
+    - name: Resolve whisper.cpp commit
+      id: whisper
+      shell: bash
+      run: |
+        commit="$(sed -n 's/^WHISPER_COMMIT="\([0-9a-f]*\)".*/\1/p' scripts/build-whisper-xcframework.sh)"
+        if [[ -z "${commit}" ]]; then
+          echo "::error::WHISPER_COMMIT not found in scripts/build-whisper-xcframework.sh"
+          exit 1
+        fi
+        echo "commit=${commit}" >> "${GITHUB_OUTPUT}"
+
+    - name: Cache whisper.xcframework
+      id: whisper-cache
+      uses: actions/cache@v4
+      with:
+        path: tools/whisper.xcframework
+        key: whisper-xcframework-${{ runner.os }}-${{ runner.arch }}-${{ steps.whisper.outputs.commit }}-${{ hashFiles('scripts/build-whisper-xcframework.sh') }}
+
+    - name: Build whisper.xcframework
+      if: steps.whisper-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: scripts/build-whisper-xcframework.sh
+
+    - name: Cache SwiftPM .build
+      uses: actions/cache@v4
+      with:
+        path: .build
+        key: spm-${{ runner.os }}-${{ runner.arch }}-xcode${{ env.AUTONOTE_XCODE_VERSION }}-${{ hashFiles('Package.swift', 'Package.resolved', 'Sources/**', 'Tests/**') }}
+        restore-keys: |
+          spm-${{ runner.os }}-${{ runner.arch }}-xcode${{ env.AUTONOTE_XCODE_VERSION }}-
