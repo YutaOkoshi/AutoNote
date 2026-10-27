@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import AutoNoteCore
 import Foundation
@@ -10,6 +11,10 @@ private let logger = Logger(subsystem: AppIdentity.bundleID, category: "AppDeleg
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Nil until `AppEnvironment.make` finishes (or when it failed).
     private(set) var env: AppEnvironment?
+
+    /// What the scenes read (the environment, window opening).
+    let shell = AppShell()
+    private var hotKeys: HotKeyCenter?
 
     /// Why the app is quitting: `.powerOff` for SIGTERM and `NSWorkspace.willPowerOffNotification`. A power-off
     /// that was cancelled puts it back to `.user` (`resetQuitReason`).
@@ -59,6 +64,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("AutoNote: socket server failed to start: %@", String(describing: error))
         }
         self.env = env
+        shell.env = env
+        let shell = shell
+        env.openWindow = { shell.open(AppShell.mainWindowID) }
 
         // 2. Subscriptions start right away: the socket already accepts commands (ruling X48).
         let wiring = env.wiring, queue = env.queue, model = env.model
@@ -89,13 +97,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let coordinator = env.coordinator
         tasks.append(Task { await coordinator.run() })
 
-        // 13c: items 4 (consent window) and 5 (microphone permission)
+        let s = (try? await env.settings.load()) ?? AutoNoteCore.Settings()
+
+        // 4. The consent notice once (§11.6); 5. the microphone prompt after its OK (plan 02 never asks).
+        shell.consentAccepted = { [settings] in
+            Task {
+                do { _ = try await settings.update { $0.consentNoticeShown = true } } catch {
+                    logger.error("could not save consentNoticeShown: \(String(describing: error), privacy: .public)")
+                }
+                Self.requestMicrophoneIfUndetermined()
+            }
+        }
+        if s.consentNoticeShown {
+            Self.requestMicrophoneIfUndetermined()
+        } else {
+            logger.info("showing the consent notice")
+            shell.open(AppShell.consentWindowID)
+        }
 
         // 6. Launch at login follows the setting (skipped under an overridden data directory, ruling X22).
-        let s = (try? await env.settings.load()) ?? AutoNoteCore.Settings()
         env.reconcileLoginItem(launchAtLogin: s.launchAtLogin)
 
-        // 13c: item 7 (HotKeyCenter.apply(s.shortcuts), and env.shortcutsChanged)
+        // 7. Global shortcuts; the settings screen re-applies them through `shortcutsChanged`.
+        let hotKeys = HotKeyCenter { action in
+            let user: UserAction = switch action {
+            case .bookmark: .bookmark(nil)
+            case .toggleRecording: .toggleRecording
+            case .togglePause: .togglePause
+            }
+            Task { await model.perform(user) }
+        }
+        hotKeys.apply(s.shortcuts)
+        env.shortcutsChanged = { hotKeys.apply($0) }
+        self.hotKeys = hotKeys
         logger.info("launch finished (data: \(env.paths.root.path, privacy: .public))")
     }
 
@@ -124,8 +158,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.runModal()
     }
 
-    // 13c: applicationShouldTerminate (QuitPolicy.decide(model.recorder.state, reason: quitReason), NSAlert, stop);
-    //      call resetQuitReason() when it returns .terminateCancel.
+    /// Launch item 5: ask for the microphone only while undetermined; a denial shows up as a failed start later.
+    private static func requestMicrophoneIfUndetermined() {
+        guard AVMicrophonePermission().status() == .notDetermined else { return }
+        logger.info("requesting microphone access")
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+            logger.info("microphone access granted=\(granted, privacy: .public)")
+        }
+    }
+
+    // MARK: - Quitting
+
+    /// The longest a quit waits for the recording to stop and save.
+    private static let stopTimeout: Duration = .seconds(10)
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Read before anything activates the app: `didBecomeActive` puts the reason back to `.user`.
+        let reason = quitReason
+        guard let model = env?.model else { return .terminateNow }
+        switch QuitPolicy.decide(model.recorder.state, reason: reason) {
+        case .terminateNow:
+            return .terminateNow
+        case .cancelCountdownThenTerminate:
+            replyAfter { await model.perform(.cancelCountdown) }
+            return .terminateLater
+        case .stopThenTerminate:
+            logger.info("quitting while recording (\(String(describing: reason), privacy: .public)): stopping first")
+            replyAfter { await model.perform(.stop) }
+            return .terminateLater
+        case .confirm:
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = QuitPolicy.confirmMessage
+            alert.addButton(withTitle: "停止して終了")
+            alert.addButton(withTitle: "キャンセル")
+            guard alert.runModal() == .alertFirstButtonReturn else {
+                resetQuitReason()
+                return .terminateCancel
+            }
+            replyAfter { await model.perform(.stop) }
+            return .terminateLater
+        }
+    }
+
+    /// Runs `work`, then lets the pending `.terminateLater` go ahead — after at most `stopTimeout` either way.
+    private func replyAfter(_ work: @escaping @MainActor () async -> Void) {
+        let reply = ReplyOnce()
+        Task { @MainActor in
+            await work()
+            reply.terminate()
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: Self.stopTimeout)
+            if !reply.done { logger.error("stop did not finish in time; quitting anyway") }
+            reply.terminate()
+        }
+    }
 
     /// Back to a user quit, e.g. after a power-off was cancelled.
     func resetQuitReason() { quitReason = .user }
@@ -165,5 +254,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.resetQuitReason() }
         })
+    }
+}
+
+/// `NSApp.reply(toApplicationShouldTerminate: true)` exactly once.
+@MainActor
+private final class ReplyOnce {
+    private(set) var done = false
+
+    func terminate() {
+        guard !done else { return }
+        done = true
+        NSApp.reply(toApplicationShouldTerminate: true)
     }
 }

@@ -35,13 +35,13 @@ final class AppEnvironment {
 
     private let routing: NoticeRouting
 
-    /// A plain notification tap with no meeting. 13c points this at the main window.
+    /// A plain notification tap with no meeting, and `.openMeeting` taps. AppDelegate points this at the main window.
     var openWindow: @MainActor () -> Void {
         get { routing.openWindow }
         set { routing.openWindow = newValue }
     }
 
-    /// Called by `settingsSaved` with the saved shortcuts. 13c points this at `HotKeyCenter.apply`.
+    /// Called by `settingsSaved` with the saved shortcuts. AppDelegate points this at `HotKeyCenter.apply`.
     var shortcutsChanged: @MainActor (Shortcuts) -> Void = { _ in }
 
     /// True when `AUTONOTE_DATA_DIR` is set (E2E / development): the login item is left alone (ruling X22).
@@ -298,6 +298,8 @@ private final class NoticeRouting {
         // `SystemUserNotifier` already opened the privacy pane (ruling X43).
         guard action != .openPrivacySettings, let model else { return }
         Task { await model.perform(.notice(action)) }
+        // A tap on a meeting's notice selects it (above) and shows the window.
+        if case .openMeeting = action { openWindow() }
     }
 }
 
