@@ -20,6 +20,10 @@ struct CompletedDetailView: View {
     @State private var saving = false
     @State private var message: String?
     @State private var errorText: String?
+    /// Bumped after each `load()`, so the scroll view goes back to the top for the loaded content.
+    @State private var loadCount = 0
+
+    private static let topID = "completed.top"
 
     private var id: MeetingID { MeetingID(rawValue: row.id) }
 
@@ -33,37 +37,44 @@ struct CompletedDetailView: View {
             }
             actions
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    if let errorText {
-                        Label(errorText, systemImage: "exclamationmark.circle").foregroundStyle(.red)
-                    }
-                    if draft != nil {
-                        // §9.1: the rename box shows once the title changed, off by default.
-                        MinutesEditor(minutes: Binding(get: { draft ?? EditableMinutes(Self.empty) }, set: { draft = $0 }),
-                                      renameFile: titleChanged ? $renameFile : nil)
-                    } else {
-                        Text("議事録を読み込めませんでした").foregroundStyle(.secondary)
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("ブックマーク").font(.headline)
-                        if bookmarks.isEmpty { Text("（なし）").foregroundStyle(.secondary) }
-                        ForEach(bookmarks.indices, id: \.self) { i in
-                            Label {
-                                Text("\(bookmarks[i].at.hhmmss)\(bookmarks[i].note.map { "  \($0)" } ?? "")")
-                                    .monospacedDigit()
-                            } icon: {
-                                Image(systemName: "bookmark.fill").foregroundStyle(.orange)
+            // The minutes open at the top (要約), not where the processing view's transcript was scrolled to:
+            // scroll to the top once the content is loaded, and start each meeting's scroll view at the top.
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        Color.clear.frame(height: 0).id(Self.topID)
+                        if let errorText {
+                            Label(errorText, systemImage: "exclamationmark.circle").foregroundStyle(.red)
+                        }
+                        if draft != nil {
+                            // §9.1: the rename box shows once the title changed, off by default.
+                            MinutesEditor(minutes: Binding(get: { draft ?? EditableMinutes(Self.empty) }, set: { draft = $0 }),
+                                          renameFile: titleChanged ? $renameFile : nil)
+                        } else {
+                            Text("議事録を読み込めませんでした").foregroundStyle(.secondary)
+                        }
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("ブックマーク").font(.headline)
+                            if bookmarks.isEmpty { Text("（なし）").foregroundStyle(.secondary) }
+                            ForEach(bookmarks.indices, id: \.self) { i in
+                                Label {
+                                    Text("\(bookmarks[i].at.hhmmss)\(bookmarks[i].note.map { "  \($0)" } ?? "")")
+                                        .monospacedDigit()
+                                } icon: {
+                                    Image(systemName: "bookmark.fill").foregroundStyle(.orange)
+                                }
                             }
                         }
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("文字起こし（確定版）").font(.headline)
+                            TranscriptList(lines: transcript)
+                        }
                     }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("文字起こし（確定版）").font(.headline)
-                        TranscriptList(lines: transcript)
-                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .defaultScrollAnchor(.top)
+                .onChange(of: loadCount) { proxy.scrollTo(Self.topID, anchor: .top) }
             }
         }
         .task(id: row.id) { await load() }
@@ -139,6 +150,7 @@ struct CompletedDetailView: View {
             message = nil
             errorText = CommandRouter.ipcError(error).message
         }
+        loadCount += 1
     }
 
     private enum SaveOutcome { case saved, externallyEdited, failed }
