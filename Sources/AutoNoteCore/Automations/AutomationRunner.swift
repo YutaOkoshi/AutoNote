@@ -15,10 +15,12 @@ public actor AutomationRunner {
     private let ledgerFile: URL
     private let shell: [String]
     private let killGrace: Duration
+    /// SIGTERM → SIGKILL wait of the app's runner; the CLI's `automations run` response bound includes it.
+    public static let defaultKillGraceSeconds = 5
     private let maxLogRuns: Int
     private var subscribers: [UUID: AsyncStream<AutomationRunRecord>.Continuation] = [:]
 
-    public init(logsDirectory: URL, ledgerFile: URL, shell: [String] = defaultShell, killGrace: Duration = .seconds(5),
+    public init(logsDirectory: URL, ledgerFile: URL, shell: [String] = defaultShell, killGrace: Duration = .seconds(defaultKillGraceSeconds),
                 maxLogRuns: Int = 200) {
         self.logsDirectory = logsDirectory
         self.ledgerFile = ledgerFile

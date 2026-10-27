@@ -11,11 +11,15 @@ public struct CLIInvocation: Equatable, Sendable {
         self.json = json
     }
 
-    /// How long the CLI waits for the response line (X18): recording start/stop and import take longer.
+    /// How long the CLI waits for the response line once connected (X18; launch + connect stay bounded by 10 s).
+    /// Recording start/stop take longer than a query. `import` decodes the whole file (a multi-hour recording on
+    /// an Intel Mac can take long), so it waits up to 24 h. `automations run` answers when the runner returns,
+    /// which the definition's timeout (at most `timeoutRange.upperBound`) plus the kill grace bounds (I3).
     public var responseTimeoutSeconds: Int {
         switch command {
         case .start, .stop: 30
-        case .import: 120
+        case .import: 86_400
+        case .automationsRun: AutomationDefinition.timeoutRange.upperBound + AutomationRunner.defaultKillGraceSeconds + 30
         default: 10
         }
     }

@@ -118,7 +118,11 @@ private func inv(_ c: IPCCommand, json: Bool = false, args: IPCArgs = IPCArgs())
         #expect(text(row(.failed)).contains("  失敗  "))
         #expect(text(row(.tooShort)).contains("  短すぎる録音  "))
         #expect(text(row(.recorded)).contains("  録音済み  "))
-        #expect(CLIInvocation(command: .import).responseTimeoutSeconds == 120)
+        // I3: 応答待ちは仕事の長さに合わせる。import は 24 時間、automations run は定義の上限 + kill の猶予 + 30 秒
+        #expect(CLIInvocation(command: .import).responseTimeoutSeconds == 86_400)
+        #expect(CLIInvocation(command: .automationsRun).responseTimeoutSeconds
+            == AutomationDefinition.timeoutRange.upperBound + AutomationRunner.defaultKillGraceSeconds + 30)
+        #expect(CLIInvocation(command: .automationsRun).responseTimeoutSeconds == 86_435)
         #expect(CLIInvocation(command: .stop).responseTimeoutSeconds == 30)
         #expect(CLIInvocation(command: .list).responseTimeoutSeconds == 10)
         #expect(MeetingRowState.minutesGenerated.displayText(progressLabel: nil) == "完了")
