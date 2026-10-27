@@ -23,7 +23,9 @@ PHASE="${1:-}"
 RESET=0
 [[ "${2:-}" == "--reset" ]] && RESET=1
 
-BUNDLE_ID="com.yutaokoshi.autonote"
+# shellcheck source=config.sh
+source "${ROOT}/scripts/config.sh"
+BUNDLE_ID="${AUTONOTE_BUNDLE_ID}"
 APP="${ROOT}/build/AutoNote.app"
 OUT="${ROOT}/docs/superpowers/research/2026-10-24-spike-raw/plan02-task1-tcc.log"
 DEVLOG="${HOME}/Library/Application Support/AutoNote/logs/dev-checks.log"

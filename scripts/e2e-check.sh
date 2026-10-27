@@ -9,6 +9,9 @@
 #   E2E_MENUBAR_PROCESS  項目 7b で osascript が見るプロセス名（既定: AutoNoteApp）
 #   AUTONOTE_CLI         項目 01.x が使う autonote の場所（既定: .build/debug/autonote）
 #   E2E_MENUBAR_INDEX    項目 7b で見る menu bar の番号（既定: 2 = ステータス項目のメニューバー）
+#   E2E_EXPECT_RECORDER_STATE   項目 06.3 が status --json の recorder.state に期待する値（既定: idle）
+#   E2E_EXPECT_AUTOMATION_OUT   項目 06.5 が auto-out.txt に期待する 1 行（既定: minutes_generated <会議ID>）
+# アプリを起動する項目は、必ず使い捨てのデータ領域（/tmp/an-e2e.XXXXXX。ソケットのパスを短く保つ）で動かし、利用者の実データには触らない。
 #
 # 各項目は PASS / FAIL / SKIP の 1 行を出す。最後に集計し、FAIL が 1 つでもあれば終了コード 1。
 # 機材・許可ダイアログ・ネットワーク・GUI に依存する項目は、条件がそろわなければ SKIP（失敗にしない）。
@@ -27,22 +30,25 @@ for arg in "$@"; do
     case "${arg}" in
         --quick) QUICK=1 ;;
         --verbose) VERBOSE=1 ;;
-        -h|--help) sed -n "2,17p" "$0"; exit 0 ;;
+        -h|--help) sed -n "2,21p" "$0"; exit 0 ;;
         *) echo "不明な引数: ${arg}（使えるのは --quick と --verbose）" >&2; exit 2 ;;
     esac
 done
 
 APP="${ROOT}/build/AutoNote.app"
+E2E_MEETING_ID="20261024-1400-a1b2"
 # shellcheck source=config.sh
 [[ -f "${ROOT}/scripts/config.sh" ]] && source "${ROOT}/scripts/config.sh"   # 無ければ 06.1 が FAIL する
 CERT_NAME="${AUTONOTE_CERT_NAME:-}"
 BUNDLE_ID="${AUTONOTE_BUNDLE_ID:-}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/autonote-e2e.XXXXXX")"
+DATA="$(mktemp -d /tmp/an-e2e.XXXXXX)"   # AUTONOTE_DATA_DIR。unix ソケットのパス上限（約 104 バイト）に収まる短さにする
 APP_PID=""
 cleanup() {
+    # どの経路（PASS / SKIP / FAIL / 中断）でも、起動したアプリを必ず止める
     if [[ -n "${APP_PID}" ]]; then kill "${APP_PID}" 2>/dev/null; wait "${APP_PID}" 2>/dev/null; fi
-    rm -rf "${WORK}"
+    rm -rf "${WORK}" "${DATA}"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -221,7 +227,19 @@ check_app_launch() {
     local bin="${APP}/Contents/MacOS/AutoNoteApp"
     [[ -x "${bin}" ]] || { skip "build/AutoNote.app が無い"; return; }
     have_gui || { skip "GUI が無い環境（CI か WindowServer なし）"; return; }
-    "${bin}" >"${WORK}/app.log" 2>&1 &
+    # 利用者の実データを使わない: 使い捨てのデータ領域に設定・Automation・フィクスチャの会議を置いて起動する。
+    # launch_at_login=false と consent_notice_shown=true で、ログイン項目の登録や初回の案内を出さない
+    local fix="${ROOT}/Tests/Fixtures/meetings/${E2E_MEETING_ID}"
+    mkdir -p "${DATA}/recordings/${E2E_MEETING_ID}" "${DATA}/transcripts/${E2E_MEETING_ID}"
+    printf '{"launch_at_login": false, "consent_notice_shown": true}\n' >"${DATA}/settings.json"
+    ( umask 077; cat >"${DATA}/automations.json" <<'JSON'
+[{"name": "e2e-echo", "enabled": true, "on": "minutes_generated", "command": "echo \"$AUTONOTE_EVENT $AUTONOTE_MEETING_ID\" > \"$AUTONOTE_E2E_OUT\"", "timeout_sec": 30}]
+JSON
+    )
+    chmod 600 "${DATA}/automations.json"
+    cp "${fix}/manifest.json" "${DATA}/recordings/${E2E_MEETING_ID}/manifest.json"
+    cp "${fix}/minutes.json" "${DATA}/transcripts/${E2E_MEETING_ID}/minutes.json"
+    AUTONOTE_DATA_DIR="${DATA}" AUTONOTE_E2E_OUT="${DATA}/auto-out.txt" "${bin}" >"${WORK}/app.log" 2>&1 &
     APP_PID=$!
     local i alive=0
     for i in $(seq 1 50); do
@@ -250,7 +268,6 @@ check_app_launch() {
         fi
         sleep 1   # 起動直後はメニューバー項目がまだ無いことがあるので、権限エラー以外は再試行する
     done
-    kill "${APP_PID}" 2>/dev/null; wait "${APP_PID}" 2>/dev/null; APP_PID=""
     pass "生存確認"
     CURRENT="7b. メニューバー項目 waveform（process ${proc} / menu bar ${idx}）"
     case "${result}" in
@@ -259,6 +276,80 @@ check_app_launch() {
         no-waveform) LAST_LOG=""; fail "メニューバー項目「${names}」に waveform が無い" ;;
         *) fail "osascript が失敗（5 回試行）" ;;
     esac
+}
+
+# 06.3〜06.6 の前提: 項目 7 で起動したアプリが生きていること。生きていなければ skip して 1 を返す
+app_or_skip() {
+    if [[ -n "${APP_PID}" ]] && kill -0 "${APP_PID}" 2>/dev/null; then return 0; fi
+    skip "アプリが起動していない"; return 1
+}
+
+check_cli_app_not_running() {
+    CURRENT="06.2 アプリ未起動の CLI は自動起動しない"
+    cli_or_skip || return
+    # この時点で ${DATA} のアプリは未起動（項目 7 の前）。AUTONOTE_DATA_DIR があれば CLI はアプリを起動しない
+    AUTONOTE_DATA_DIR="${DATA}" run_timeout 3 "${AUTONOTE_CLI}" status; local code=$?
+    [[ ${code} -ne 124 ]] || { fail "3 秒以内に終わらない"; return; }
+    [[ ${code} -eq 1 ]] || { fail "exit ${code}（期待 1）"; return; }
+    grep -q "AutoNote が起動していません" "${LAST_LOG}" || { fail "メッセージ「AutoNote が起動していません」が無い"; return; }
+    pass "exit 1"
+}
+
+check_status_over_socket() {
+    CURRENT="06.3 autonote status がソケット経由で idle"
+    app_or_skip || return
+    cli_or_skip || return
+    local i
+    for i in $(seq 1 100); do [[ -S "${DATA}/autonote.sock" ]] && break; sleep 0.1; done
+    [[ -S "${DATA}/autonote.sock" ]] || { LAST_LOG="${WORK}/app.log"; fail "10 秒待っても ${DATA}/autonote.sock ができない"; return; }
+    local want="${E2E_EXPECT_RECORDER_STATE:-idle}" out="${WORK}/status.json" code state
+    AUTONOTE_DATA_DIR="${DATA}" run_timeout 10 sh -c '"$1" status --json >"$2"' _ "${AUTONOTE_CLI}" "${out}"; code=$?
+    [[ ${code} -eq 0 ]] || { fail "status --json: exit ${code}（期待 0）"; return; }
+    state="$(plutil -extract status.recorder.state raw -o - - <"${out}" 2>/dev/null)"
+    [[ "${state}" == "${want}" ]] || { LAST_LOG="${out}"; fail "recorder.state「${state}」（期待「${want}」）"; return; }
+    AUTONOTE_DATA_DIR="${DATA}" run_timeout 10 "${AUTONOTE_CLI}" status; code=$?
+    [[ ${code} -eq 0 ]] || { fail "status: exit ${code}（期待 0）"; return; }
+    grep -q "録音器: 待機" "${LAST_LOG}" || { fail "人向けの status に「録音器: 待機」が無い"; return; }
+    pass "recorder.state ${state}"
+}
+
+check_bookmark_not_recording() {
+    CURRENT="06.4 録音していないときの bookmark は失敗"
+    app_or_skip || return
+    cli_or_skip || return
+    AUTONOTE_DATA_DIR="${DATA}" run_timeout 10 "${AUTONOTE_CLI}" bookmark; local code=$?
+    [[ ${code} -eq 1 ]] || { fail "exit ${code}（期待 1）"; return; }
+    grep -q "録音中ではありません" "${LAST_LOG}" || { fail "メッセージ「録音中ではありません」が無い"; return; }
+    pass "exit 1"
+}
+
+check_automation_run() {
+    CURRENT="06.5 Automation の手動実行"
+    app_or_skip || return
+    cli_or_skip || return
+    local want="${E2E_EXPECT_AUTOMATION_OUT:-minutes_generated ${E2E_MEETING_ID}}"
+    AUTONOTE_DATA_DIR="${DATA}" run_timeout 30 "${AUTONOTE_CLI}" automations run e2e-echo "${E2E_MEETING_ID}"; local code=$?
+    [[ ${code} -eq 0 ]] || { fail "automations run: exit ${code}（期待 0）"; return; }
+    local got; got="$(cat "${DATA}/auto-out.txt" 2>/dev/null)"
+    [[ "${got}" == "${want}" ]] || { LAST_LOG=""; fail "auto-out.txt「${got}」（期待「${want}」）"; return; }
+    pass "${got}"
+}
+
+check_automation_log_and_socket() {
+    CURRENT="06.6 Automation のログとソケットの後始末"
+    app_or_skip || return
+    local results=( "${DATA}"/logs/automations/*/result.json )
+    [[ ${#results[@]} -eq 1 && -f "${results[0]}" ]] || { LAST_LOG=""; fail "result.json が ${#results[@]} 個（期待 1）"; return; }
+    local exit_code; exit_code="$(plutil -extract exit_code raw -o - "${results[0]}" 2>/dev/null)"
+    [[ "${exit_code}" == "0" ]] || { LAST_LOG="${results[0]}"; fail "result.json の exit_code「${exit_code}」（期待 0）"; return; }
+    [[ -f "$(dirname "${results[0]}")/stdout.txt" ]] || { LAST_LOG=""; fail "stdout.txt が無い"; return; }
+    kill -TERM "${APP_PID}" 2>/dev/null
+    local i
+    for i in $(seq 1 50); do [[ -e "${DATA}/autonote.sock" ]] || break; sleep 0.1; done
+    [[ ! -e "${DATA}/autonote.sock" ]] || { LAST_LOG="${WORK}/app.log"; fail "SIGTERM から 5 秒でソケットが消えない"; return; }
+    for i in $(seq 1 50); do kill -0 "${APP_PID}" 2>/dev/null || break; sleep 0.1; done
+    wait "${APP_PID}" 2>/dev/null; APP_PID=""   # 止まらなければ cleanup が kill する
+    pass "exit_code 0、SIGTERM でソケットが消えた"
 }
 
 check_cer() {
@@ -610,7 +701,12 @@ CHECKS=(
     check_info_plist
     check_bundle_version
     check_cli
+    check_cli_app_not_running
     check_app_launch
+    check_status_over_socket
+    check_bookmark_not_recording
+    check_automation_run
+    check_automation_log_and_socket
     check_cer
     check_whisper
     check_results_doc
