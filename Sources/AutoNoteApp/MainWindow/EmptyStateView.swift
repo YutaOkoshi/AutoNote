@@ -20,7 +20,7 @@ struct EmptyStateView: View {
                     .font(.title3)
                 VStack(spacing: 4) {
                     Text("音声ファイルをここへドラッグすると取り込めます")
-                    Text("止めると文字起こしと議事録が自動でできます。")
+                    Text("止めると文字起こしと議事録が自動でできます（1 分未満の録音は、止めたあとに「作る」で）。")
                 }
                 .font(.callout)
                 .foregroundStyle(.secondary)
