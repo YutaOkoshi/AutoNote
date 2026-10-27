@@ -258,7 +258,7 @@ public actor PostProcessingQueue {
         } else {
             // Manifest first: if it cannot be updated, the job stays awaiting confirmation.
             let status = WriteVaultStage.resultingStatus(
-                minutesExist: FileManager.default.fileExists(atPath: paths.minutesFile(id).path), job: job)
+                minutesExist: WriteVaultStage.usableMinutes(at: paths.minutesFile(id)) != nil, job: job)
             try await manifests.update(id) { $0.status = status }
             for stage in [StageName.writeVault, StageName.updateIndex, StageName.automations]
             where !job.completedStages.contains(stage) {

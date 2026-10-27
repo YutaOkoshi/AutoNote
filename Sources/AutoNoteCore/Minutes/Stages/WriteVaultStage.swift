@@ -41,7 +41,7 @@ public struct WriteVaultStage: QueueStage {
             throw StageError.failed(reason: "final_transcript_missing")
         }
 
-        let minutes = decodeMinutes(at: minutesURL, id: id)
+        let minutes = Self.usableMinutes(at: minutesURL)
         let status = Self.resultingStatus(minutesExist: minutes != nil, job: job)
         var manifest = try await context.manifests.load(id)
         manifest.status = status
@@ -85,11 +85,12 @@ public struct WriteVaultStage: QueueStage {
         (minutesExist && job.summaryFailure == nil) ? .minutesGenerated : .transcriptOnly
     }
 
-    /// `nil` when absent; an existing file that cannot be decoded is logged and treated as absent (transcript-only).
-    private func decodeMinutes(at url: URL, id: MeetingID) -> MinutesOutput? {
+    /// The one check of whether a meeting has usable minutes (this stage and `resolveOverwrite`, M13): `nil` when
+    /// absent; an existing file that cannot be decoded is logged and treated as absent (transcript-only).
+    static func usableMinutes(at url: URL) -> MinutesOutput? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         guard let minutes = try? AutoNoteJSON.decoder().decode(MinutesOutput.self, from: Data(contentsOf: url)) else {
-            Self.logger.error("\(id.rawValue, privacy: .public): minutes_unreadable, falling back to transcript_only")
+            logger.error("\(url.deletingLastPathComponent().lastPathComponent, privacy: .public): minutes_unreadable, falling back to transcript_only")
             return nil
         }
         return minutes

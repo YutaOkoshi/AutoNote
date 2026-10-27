@@ -306,6 +306,24 @@ private func waitFor(_ queue: PostProcessingQueue, timeout: Duration = .seconds(
         }
     }
 
+    @Test func keepingTheNoteWithUnreadableMinutesStaysTranscriptOnly() async throws {
+        // M13: 「残す」も WriteVaultStage と同じく、読めない minutes.json は無いものとして扱う
+        let f = try Fixture()
+        try await f.saveManifest()
+        let url = f.paths.minutesFile(Fixture.firstID)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("{not json".utf8).write(to: url)
+        let write = ScriptedStage(name: StageName.writeVault, log: f.log, results: [.failure(.awaitingConfirmation(path: "2026/x.md"))])
+        let queue = f.queue(f.stages([StageName.writeVault: write]))
+        await queue.enqueue(Fixture.firstID)
+        await queue.runUntilIdle()
+        try await queue.resolveOverwrite(Fixture.firstID, overwrite: false)
+        #expect(try await f.manifests.load(Fixture.firstID).status == .transcriptOnly)
+        #expect(WriteVaultStage.usableMinutes(at: url) == nil)
+        try f.saveMinutes(Fixture.firstID)
+        #expect(WriteVaultStage.usableMinutes(at: url) == Samples.minutes)
+    }
+
     @Test func resolveOverwriteIgnoresJobsNotAwaitingConfirmation() async throws {
         let f = try Fixture()
         try await f.saveManifest()
