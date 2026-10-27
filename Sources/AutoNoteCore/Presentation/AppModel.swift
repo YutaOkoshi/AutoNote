@@ -5,10 +5,25 @@ public enum UserAction: Equatable, Sendable {
     case start, stop, pause, resume, bookmark(String?), cancelCountdown, setLanguage(Language), regenerate(MeetingID)
     case delete(MeetingID), rerunAutomation(name: String, meetingID: MeetingID), importAudio(URL, startedAt: Date?)
     case openLatestMinutes, open(MeetingID), notice(UserNoticeAction), toggleRecording, togglePause
+    case redetectClaude, redetectClaudeAndRerun(MeetingID), retryModelDownload, installGuide
 }
 
 /// Everything the menu bar and the window show, gathered from the app's ports.
 @MainActor @Observable public final class AppModel {
+    /// The green band after a recording stops: which meeting and how long it was.
+    public struct StoppedBand: Equatable, Sendable {
+        public var id: MeetingID
+        public var seconds: Int
+        public init(id: MeetingID, seconds: Int) { self.id = id; self.seconds = seconds }
+    }
+
+    /// Minutes that were just written for the selected meeting, and where.
+    public struct JustSaved: Equatable, Sendable {
+        public var id: MeetingID
+        public var path: String
+        public init(id: MeetingID, path: String) { self.id = id; self.path = path }
+    }
+
     public private(set) var recorder: RecorderSnapshot = .idle(language: .ja)
     /// From `RecorderPort.elapsed()` (ruling X25), falling back to `now - startedAt`; nil when not recording.
     public private(set) var elapsedSeconds: Int?
@@ -21,7 +36,20 @@ public enum UserAction: Equatable, Sendable {
     public private(set) var prompts: [UserNotice] = []
     public private(set) var diskWarning: String?
     public private(set) var lastError: String?
-    public var selectedMeetingID: MeetingID?
+    public var selectedMeetingID: MeetingID? {
+        didSet { if let j = justSaved, j.id != selectedMeetingID { justSaved = nil } }
+    }
+    /// Output folder and Claude Code from `ReadinessPort.current()`; the model from `ReadinessPort.updates()`.
+    public private(set) var readiness: Readiness = .assumedReady
+    /// The app sets these at launch and whenever the settings are saved; `menuBar(now:)` shows them.
+    public var shortcuts = Shortcuts()
+    /// The recording meter; nil unless recording, paused or in the grace period with a meeting.
+    public private(set) var inputLevel: InputLevel?
+    /// Meetings recorded in this launch whose minutes may still auto-select in the window. Regenerating, rerunning
+    /// or importing never adds one, so those never move the selection.
+    public private(set) var recordedThisSession: Set<MeetingID> = []
+    public private(set) var stoppedBand: StoppedBand?
+    public private(set) var justSaved: JustSaved?
     /// Withdraws the system notification of a prompt answered or resolved elsewhere (the app points it at
     /// `UserNotifier.withdraw(id:)`), so Notification Center keeps no stale buttons.
     @ObservationIgnored public var withdrawNotice: (@MainActor (String) async -> Void)?
@@ -33,15 +61,19 @@ public enum UserAction: Equatable, Sendable {
     /// For `settle()`: streams subscribed so far and stream elements applied so far.
     @ObservationIgnored private var subscribed = 0
     @ObservationIgnored private var applied = 0
+    @ObservationIgnored private var levelTracker = InputLevelTracker()
+    @ObservationIgnored private let bandDuration: Duration
 
-    private static let streamCount = 5
+    private static let streamCount = 6
     private static let refreshInterval: Duration = .seconds(30)
     private static let tickInterval: Duration = .seconds(1)
 
-    public init(ports: AppPorts, now: @escaping @Sendable () -> Date = { Date() }, timeZone: TimeZone = .current) {
+    public init(ports: AppPorts, now: @escaping @Sendable () -> Date = { Date() }, timeZone: TimeZone = .current,
+                bandDuration: Duration = .seconds(5)) {
         self.ports = ports
         self.now = now
         self.timeZone = timeZone
+        self.bandDuration = bandDuration
     }
 
     /// Subscribes to every port until the calling task is cancelled.
@@ -52,7 +84,8 @@ public enum UserAction: Equatable, Sendable {
         queue = await ports.queue.status()
         queueKey = Self.key(queue)
         syncOverwritePrompts()
-        await refresh()
+        readiness = await ports.readiness.current()
+        await refreshRows()
 
         let ports = ports
         await withTaskGroup(of: Void.self) { group in
@@ -61,27 +94,52 @@ public enum UserAction: Equatable, Sendable {
             group.addTask { await self.consume(await ports.queue.updates()) { await self.apply($0) } }
             group.addTask { await self.consume(await ports.live.updates()) { await self.applyLive($0) } }
             group.addTask { await self.consume(await ports.automations.records()) { await self.apply($0) } }
+            group.addTask { await self.consume(await ports.readiness.updates()) { await self.applyModel($0) } }
             group.addTask { await self.every(Self.refreshInterval) { await self.refresh() } }
             group.addTask { await self.every(Self.tickInterval) { await self.updateElapsed() } }
         }
     }
 
-    /// Re-reads the output folder and the meeting list.
+    /// Re-reads the output folder, Claude Code and the meeting list. The model keeps following `updates()`.
     public func refresh() async {
+        let fresh = await ports.readiness.current()
+        readiness = Readiness(outputFolder: fresh.outputFolder, model: readiness.model, claude: fresh.claude)
+        await refreshRows()
+    }
+
+    private func refreshRows() async {
         syncOverwritePrompts()
         outputFolderAvailable = await ports.outputFolder.isAvailable()
+        await reloadMeetings()
+    }
+
+    private func reloadMeetings() async {
         do {
             meetings = try await ports.meetings.rows()
+            meetingsChanged()
         } catch {
             lastError = CommandRouter.ipcError(error).message
         }
     }
 
+    /// Minutes for `id` are written. Selects it in the open window only for a meeting recorded in this launch, once,
+    /// and never away from a selected meeting whose minutes the user may be editing. Never opens a window.
+    /// - Returns: whether the selection moved to `id`.
+    @discardableResult public func minutesReady(_ id: MeetingID, path: String?, windowOpen: Bool) -> Bool {
+        let recorded = recordedThisSession.remove(id) != nil
+        guard recorded, windowOpen else { return false }
+        let selectedState = selectedMeetingID.flatMap { sel in meetings.first { $0.id == sel.rawValue }?.state }
+        guard selectedMeetingID == nil || selectedMeetingID == id || selectedState != .minutesGenerated else { return false }
+        selectedMeetingID = id
+        justSaved = path.map { JustSaved(id: id, path: $0) }
+        return true
+    }
+
     public func menuBar(now: Date) -> MenuBarPresentation {
         MenuBarPresentation.make(recorder: recorder, elapsedSeconds: elapsedSeconds, queue: queue,
-                                 readiness: .assumedReady,
+                                 readiness: readiness,
                                  latestMinutesAvailable: meetings.contains { $0.filePath != nil }, rows: meetings,
-                                 automationFailures: automationFailures, shortcuts: Shortcuts(), now: now, timeZone: timeZone)
+                                 automationFailures: automationFailures, shortcuts: shortcuts, now: now, timeZone: timeZone)
     }
 
     public func perform(_ a: UserAction) async {
@@ -155,6 +213,14 @@ public enum UserAction: Equatable, Sendable {
             case .paused: try await r.resume()
             case .idle, .countdown, .grace: break
             }
+        case .redetectClaude:
+            readiness.claude = await ports.readiness.redetectClaude()
+        case .redetectClaudeAndRerun(let id):
+            readiness.claude = await ports.readiness.redetectClaude()
+            guard readiness.claude.found else { throw AppCommandError.notFound("Claude Code（claude）が見つかりません") }
+            try await ports.queue.retry(id)
+        case .retryModelDownload: await ports.readiness.retryModelDownload()
+        case .installGuide: await ports.readiness.installGuide()
         }
     }
 
@@ -212,6 +278,32 @@ public enum UserAction: Equatable, Sendable {
         }
     }
 
+    /// Too-short prompts follow the rows the same way: every `.tooShort` row has a prompt, and a prompt whose row is
+    /// gone or no longer too short is dropped (and its notification withdrawn).
+    private func syncTooShortPrompts() {
+        let tooShort = meetings.filter { $0.state == .tooShort }.map { MeetingID(rawValue: $0.id) }
+        let tooShortIDs = Set(tooShort.map { UserNotice.recordingTooShort($0).id })
+        var stale: [String] = []
+        prompts.removeAll { p in
+            guard case .recordingTooShort = p, !tooShortIDs.contains(p.id) else { return false }
+            stale.append(p.id)
+            return true
+        }
+        for id in tooShort where !prompts.contains(where: { $0.id == UserNotice.recordingTooShort(id).id }) {
+            prompts.append(.recordingTooShort(id))
+        }
+        if let withdraw = withdrawNotice {
+            for id in stale { Task { await withdraw(id) } }
+        }
+    }
+
+    /// After every `meetings` update: too-short prompts, and a failed or transcript-only meeting no longer auto-selects.
+    private func meetingsChanged() {
+        syncTooShortPrompts()
+        let ended = Set(meetings.filter { $0.state == .failed || $0.state == .transcriptOnly }.map(\.id))
+        recordedThisSession = recordedThisSession.filter { !ended.contains($0.rawValue) }
+    }
+
     // MARK: - Streams
 
     private func consume<Element: Sendable>(_ stream: AsyncStream<Element>, _ body: @Sendable (Element) async -> Void) async {
@@ -238,8 +330,11 @@ public enum UserAction: Equatable, Sendable {
         let s = recorder
         guard [.recording, .paused, .grace].contains(s.state), s.meetingID != nil else {
             elapsedSeconds = nil
+            inputLevel = nil
             return
         }
+        let levels = await ports.recorder.levels()
+        inputLevel = levelTracker.observe(levels, recording: recorder.state == .recording)
         if let t = await ports.recorder.elapsed() {
             elapsedSeconds = max(0, Int(t.seconds))
         } else {
@@ -249,19 +344,37 @@ public enum UserAction: Equatable, Sendable {
 
     private func apply(_ e: RecordingEvent) async {
         switch e {
-        case .started:
+        case .started(let id):
             live.reset()
             diskWarning = nil
+            levelTracker = InputLevelTracker()
+            recordedThisSession.insert(id)
             await refresh()
         case .diskSpaceLow:
             diskWarning = "ディスクの空きが 1GB を切りました"
-        case .stopped(_, let reason):
+        case .stopped(let m, let reason):
             if reason == .diskFull { diskWarning = "ディスクの空きが 500MB を切ったため録音を停止しました" }
+            showStoppedBand(m)
             await refresh()
         default:
             break
         }
     }
+
+    /// Shows the band for `bandDuration`, and selects the meeting when nothing is selected.
+    private func showStoppedBand(_ m: Manifest) {
+        let band = StoppedBand(id: m.id, seconds: Int(m.duration ?? 0))
+        stoppedBand = band
+        if selectedMeetingID == nil { selectedMeetingID = m.id }
+        let duration = bandDuration
+        Task { [weak self] in
+            try? await Task.sleep(for: duration)
+            guard let self, self.stoppedBand?.id == band.id else { return }
+            self.stoppedBand = nil
+        }
+    }
+
+    private func applyModel(_ model: Readiness.Model) { readiness.model = model }
 
     private func apply(_ status: QueueStatus) async {
         queue = status
@@ -269,11 +382,7 @@ public enum UserAction: Equatable, Sendable {
         let key = Self.key(status)
         guard key != queueKey else { return }
         queueKey = key
-        do {
-            meetings = try await ports.meetings.rows()
-        } catch {
-            lastError = CommandRouter.ipcError(error).message
-        }
+        await reloadMeetings()
     }
 
     private func applyLive(_ snapshot: [Utterance]) { live.update(snapshot) }

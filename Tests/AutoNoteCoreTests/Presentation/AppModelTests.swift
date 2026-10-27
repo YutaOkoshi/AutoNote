@@ -268,6 +268,249 @@ import AutoNoteTestSupport
         task.cancel()
         await task.value
     }
+    // MARK: - Readiness, input level, this launch's recordings, auto-selection (plan 07 Task 8)
+
+    private let m2 = MeetingID(rawValue: "20261024-1500-c3d4")
+
+    private func readiness(folder: Bool = true, folderPath: String = "/v", model: Readiness.Model = .installed("base"),
+                           claude: Bool = true) -> Readiness {
+        Readiness(outputFolder: .init(path: folderPath, available: folder), model: model,
+                  claude: .init(path: claude ? "/usr/local/bin/claude" : nil, found: claude))
+    }
+
+    private func manifest(_ id: MeetingID, seconds: Double) -> Manifest {
+        var m = Samples.manifest
+        m.id = id
+        m.endedAt = m.startedAt.addingTimeInterval(seconds)
+        return m
+    }
+
+    private func start(_ fakes: FakePorts, bandDuration: Duration) async -> (AppModel, Task<Void, Never>) {
+        let now = now
+        let model = AppModel(ports: fakes.ports, now: { now }, timeZone: Samples.tokyo, bandDuration: bandDuration)
+        let task = Task { await model.run() }
+        await model.settle()
+        return (model, task)
+    }
+
+    private func setRows(_ fakes: FakePorts, _ model: AppModel, _ rows: [MeetingRow]) async {
+        await fakes.meetings.send(rows)
+        await model.refresh()
+    }
+
+    @Test func readinessLoadsAndFollowsModelStream() async {
+        let fakes = FakePorts(readiness: FakeReadinessPort(readiness(model: .none)))
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        #expect(model.readiness.model == .none)
+        await fakes.readiness.send(.downloading("base", fraction: 0.5))
+        await model.settle()
+        #expect(model.readiness.model == .downloading("base", fraction: 0.5))
+    }
+
+    @Test func refreshRereadsFolderAndClaudeButKeepsModel() async {
+        let fakes = FakePorts(readiness: FakeReadinessPort(readiness(model: .none)))
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        await fakes.readiness.send(.downloading("base", fraction: 0.2))
+        await model.settle()
+        await fakes.readiness.setCurrent(readiness(folder: false, model: .none, claude: false))
+        await model.refresh()
+        #expect(model.readiness.claude.found == false)
+        #expect(model.readiness.outputFolder.available == false)
+        #expect(model.readiness.model == .downloading("base", fraction: 0.2))
+    }
+
+    @Test func menuBarUsesReadinessAndShortcuts() async {
+        let fakes = FakePorts(readiness: FakeReadinessPort(readiness(claude: false)))
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        let items = model.menuBar(now: now).items
+        #expect(items.contains { if case .readinessIssue(.claude, _) = $0 { true } else { false } })
+        #expect(!items.contains { if case .readinessIssue(.outputFolder, _) = $0 { true } else { false } })
+        model.shortcuts.toggleRecording = "ctrl+shift+k"
+        #expect(model.menuBar(now: now).items.first == .startRecording(shortcut: KeyCombo(parsing: "ctrl+shift+k")))
+
+        // No output folder: the menu says so through the same path.
+        await fakes.readiness.setCurrent(readiness(folder: false, folderPath: ""))
+        await model.refresh()
+        #expect(model.menuBar(now: now).items.contains(.readinessIssue(.outputFolder, title: "⚠ 保存先を作れませんでした — 設定を開く…")))
+    }
+
+    @Test func inputLevelTicksWhileRecording() async {
+        let fakes = FakePorts()
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        #expect(model.inputLevel == nil)
+        await fakes.recorder.setLevels([TrackLevel(track: .mic, peakDBFS: -20), TrackLevel(track: .system, peakDBFS: -70)])
+        await fakes.recorder.send(recording())
+        await model.settle()
+        #expect(model.inputLevel == InputLevel(bars: 4, quiet: false))
+        await fakes.recorder.send(.idle(language: .ja))
+        await model.settle()
+        #expect(model.inputLevel == nil)
+    }
+
+    @Test func startedAddsToRecordedThisSession() async {
+        let fakes = FakePorts()
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        #expect(model.recordedThisSession.isEmpty)
+        await fakes.events.send(.started(m1))
+        await model.settle()
+        #expect(model.recordedThisSession == [m1])
+    }
+
+    @Test func stoppedSelectsMeetingAndShowsBand() async {
+        let fakes = FakePorts()
+        // The band lasts 500 ms here (5 s in the app); polling instead of `settle()` keeps a loaded full-suite run from
+        // missing it.
+        let (model, task) = await start(fakes, bandDuration: .milliseconds(500))
+        defer { task.cancel() }
+        #expect(model.selectedMeetingID == nil)
+        await fakes.events.send(.stopped(manifest(m1, seconds: 252), .manual))
+        for _ in 0..<400 where model.stoppedBand == nil { try? await Task.sleep(for: .milliseconds(1)) }
+        #expect(model.selectedMeetingID == m1)
+        #expect(model.stoppedBand == AppModel.StoppedBand(id: m1, seconds: 252))
+        for _ in 0..<300 where model.stoppedBand != nil { try? await Task.sleep(for: .milliseconds(10)) }
+        #expect(model.stoppedBand == nil)
+    }
+
+    @Test func stoppedKeepsExistingSelection() async {
+        let fakes = FakePorts()
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        model.selectedMeetingID = m2
+        await fakes.events.send(.stopped(manifest(m1, seconds: 60), .manual))
+        await model.settle()
+        #expect(model.selectedMeetingID == m2)
+        #expect(model.stoppedBand == AppModel.StoppedBand(id: m1, seconds: 60))
+    }
+
+    @Test func minutesReadySelectsRecordedMeetingWhenWindowOpen() async {
+        let fakes = FakePorts()
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        await fakes.events.send(.started(m1))
+        await model.settle()
+        #expect(model.minutesReady(m1, path: "/v/a.md", windowOpen: true))
+        #expect(model.selectedMeetingID == m1)
+        #expect(model.justSaved == AppModel.JustSaved(id: m1, path: "/v/a.md"))
+    }
+
+    @Test func minutesReadyIgnoresImportsAndClosedWindow() async {
+        let fakes = FakePorts()
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        await fakes.events.send(.started(m1))
+        await model.settle()
+        #expect(!model.minutesReady(m2, path: "/v/b.md", windowOpen: true))
+        #expect(!model.minutesReady(m1, path: "/v/a.md", windowOpen: false))
+        #expect(model.selectedMeetingID == nil && model.justSaved == nil)
+    }
+
+    @Test func minutesReadyDoesNotStealEditorSelection() async {
+        let fakes = FakePorts()
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        await setRows(fakes, model, [MeetingRow(id: m1.rawValue, startedAt: now, state: .processing),
+                                     MeetingRow(id: m2.rawValue, startedAt: now, state: .minutesGenerated, filePath: "/v/b.md")])
+        await fakes.events.send(.started(m1))
+        await model.settle()
+        model.selectedMeetingID = m2
+        #expect(!model.minutesReady(m1, path: "/v/a.md", windowOpen: true))
+        #expect(model.selectedMeetingID == m2 && model.justSaved == nil)
+
+        // The selected meeting is still being processed: nothing to edit there, so the new minutes take over.
+        await setRows(fakes, model, [MeetingRow(id: m1.rawValue, startedAt: now, state: .processing),
+                                     MeetingRow(id: m2.rawValue, startedAt: now, state: .processing)])
+        await fakes.events.send(.started(m1))
+        await model.settle()
+        #expect(model.minutesReady(m1, path: "/v/a.md", windowOpen: true))
+        #expect(model.selectedMeetingID == m1)
+    }
+
+    @Test func minutesReadyOnlyOncePerRecording() async {
+        let fakes = FakePorts()
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        await fakes.events.send(.started(m1))
+        await model.settle()
+        #expect(model.minutesReady(m1, path: "/v/a.md", windowOpen: true))
+        model.selectedMeetingID = nil
+        #expect(!model.minutesReady(m1, path: "/v/a.md", windowOpen: true))
+        #expect(model.selectedMeetingID == nil && !model.recordedThisSession.contains(m1))
+    }
+
+    @Test func failedOrTranscriptOnlyEndsAutoOpen() async {
+        let fakes = FakePorts()
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        await fakes.events.send(.started(m1))
+        await fakes.events.send(.started(m2))
+        await model.settle()
+        await setRows(fakes, model, [MeetingRow(id: m1.rawValue, startedAt: now, state: .transcriptOnly),
+                                     MeetingRow(id: m2.rawValue, startedAt: now, state: .failed)])
+        #expect(model.recordedThisSession.isEmpty)
+        #expect(!model.minutesReady(m1, path: "/v/a.md", windowOpen: true))
+        #expect(model.selectedMeetingID == nil)
+    }
+
+    @Test func justSavedClearsOnReselect() async {
+        let fakes = FakePorts()
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        await fakes.events.send(.started(m1))
+        await model.settle()
+        #expect(model.minutesReady(m1, path: "/v/a.md", windowOpen: true))
+        model.selectedMeetingID = m1
+        #expect(model.justSaved == AppModel.JustSaved(id: m1, path: "/v/a.md"))
+        model.selectedMeetingID = m2
+        #expect(model.justSaved == nil)
+        model.selectedMeetingID = m1
+        #expect(model.justSaved == nil)
+    }
+
+    @Test func tooShortPromptsFollowRows() async {
+        let fakes = FakePorts()
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        let withdrawn = WithdrawLog()
+        model.withdrawNotice = { id in await withdrawn.append(id) }
+        await setRows(fakes, model, [MeetingRow(id: m1.rawValue, startedAt: now, state: .tooShort)])
+        #expect(model.prompts == [.recordingTooShort(m1)])
+        model.noticePosted(.recordingTooShort(m1))
+        #expect(model.prompts == [.recordingTooShort(m1)])
+        await setRows(fakes, model, [MeetingRow(id: m1.rawValue, startedAt: now, state: .processing)])
+        #expect(model.prompts.isEmpty)
+        for _ in 0..<100 where await withdrawn.items.isEmpty { try? await Task.sleep(for: .milliseconds(5)) }
+        #expect(await withdrawn.items == ["meeting.tooShort.\(m1.rawValue)"])
+    }
+
+    @Test func readinessActions() async {
+        let fakes = FakePorts(readiness: FakeReadinessPort(readiness(claude: false)))
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        let found = Readiness.Claude(path: "/opt/homebrew/bin/claude", found: true)
+        await fakes.readiness.setRedetectResult(found)
+        await model.perform(.redetectClaude)
+        #expect(await fakes.readiness.calls == ["redetectClaude"])
+        #expect(model.readiness.claude == found)
+
+        await model.perform(.redetectClaudeAndRerun(m1))
+        #expect(await fakes.queue.calls == ["retry(\(m1.rawValue))"])
+        #expect(model.lastError == nil)
+
+        await fakes.readiness.setRedetectResult(.init(path: nil, found: false))
+        await model.perform(.redetectClaudeAndRerun(m1))
+        #expect(model.lastError == "Claude Code（claude）が見つかりません")
+        #expect(await fakes.queue.calls == ["retry(\(m1.rawValue))"])
+        #expect(model.readiness.claude.found == false)
+
+        await model.perform(.retryModelDownload)
+        await model.perform(.installGuide)
+        #expect(await fakes.readiness.calls.suffix(2) == ["retryModelDownload", "installGuide"])
+    }
 }
 
 private actor WithdrawLog {
