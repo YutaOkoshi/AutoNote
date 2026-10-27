@@ -30,7 +30,11 @@ public struct TranscribeStage: QueueStage {
         let resolved = await resolveRunner(manifest.language)
 
         guard let runner = resolved else {
-            guard let live = readLive(id, context.paths), live.utterances.contains(where: { !LiveFeed.isMarker($0) })
+            let live = readLive(id, context.paths)
+            if live == nil, FileManager.default.fileExists(atPath: context.paths.transcriptFile(id, .live).path(percentEncoded: false)) {
+                Self.logger.notice("\(id.rawValue, privacy: .public): live.json exists but could not be read or decoded")
+            }
+            guard let live, live.utterances.contains(where: { !LiveFeed.isMarker($0) })
             else {
                 Self.logger.notice("\(id.rawValue, privacy: .public): no batch engine and no live speech")
                 try await context.manifests.update(id) { $0.status = .failed }
