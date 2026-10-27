@@ -71,6 +71,15 @@ macOS（26.0 以降）のメニューバーで会議を録音し、文字起こ�
 
 注意: ソケット（`<データ領域>/autonote.sock`）のパスは UNIX ドメインソケットの上限（約 104 バイト）に収まる必要がある。長すぎるとソケットを作れず（`pathTooLong`）、アプリは IPC なしで動く（ログに残るだけで画面には出ない）。`/tmp/an-xxxxxx` のような短いパスにする。
 
+## CI / リリース（GitHub Actions）
+
+- `.github/workflows/ci.yml`: main・`plan-*` への push と PR で、macOS 26（`macos-26`、Xcode 26.6）上で `swift build` と `swift test`（時間依存のテストが負荷で落ちることがあるので、失敗したら `--no-parallel` で 1 回だけ再実行）を走らせる。docs/ と `*.md` だけの変更では走らない。同じブランチの古い実行は取り消す。whisper.xcframework と `.build` はキャッシュする
+- `.github/workflows/release.yml`: main への push で `Resources/Info.plist` の `CFBundleShortVersionString` を読み、`v<version>` のタグが無ければ arm64（`macos-26`）と x86_64（`macos-26-intel`）でビルド・テストし、アドホック署名の `AutoNote-<version>-macos-<arch>.zip` を添えた GitHub Release を作る。タグがあれば何もしない
+- バージョンの上げ方: `Resources/Info.plist` の `CFBundleShortVersionString`（例 0.1.0 → 0.2.0）と `CFBundleVersion`（ビルド番号。1 つ上げる）の 2 か所を直して main に push する
+- 配布物は Developer ID 署名・公証をしていない。初回は右クリック →「開く」か `xattr -d com.apple.quarantine AutoNote.app`
+- 無料枠の目安: private リポジトリの GitHub Free は月 2,000 分。macOS ランナーは Linux の約 10 倍の速さで枠を減らす（分単価 $0.062 対 $0.006）ので、macOS で使えるのは実質 月 約 200 分。CI 1 回（キャッシュあり）を 10 分前後とすると 月 約 20 回。リリース 1 回は macOS 2 ジョブで 約 30〜40 分（= 300〜400 分ぶん）。支払い方法を登録していなければ、枠を超えると止まるだけで課金はされない
+- CI と同じアドホック署名の .app を手元で作るなら `AUTONOTE_CODESIGN_IDENTITY=- scripts/build-app.sh release`
+
 ## 設定値: `scripts/config.sh`
 
 Bundle ID（`AUTONOTE_BUNDLE_ID`）と署名証明書名（`AUTONOTE_CERT_NAME`）の唯一の定義。`build-app.sh`・`e2e-check.sh`・`tcc-check.sh` などがここを読む。変えるときはここだけを直す。
