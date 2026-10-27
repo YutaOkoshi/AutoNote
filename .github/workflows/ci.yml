@@ -1,8 +1,9 @@
 name: CI
 
+# 無料枠を守るため push は main だけ。開発ブランチは PR を開いたときに走る
 on:
   push:
-    branches: [main, "plan-*"]
+    branches: [main]
     paths-ignore:
       - "docs/**"
       - "**/*.md"
