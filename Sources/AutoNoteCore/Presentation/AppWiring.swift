@@ -80,6 +80,22 @@ public actor AppWiring {
         }
     }
 
+    /// Launch recovery (I2): a meeting that stopped (or was imported) as `.recorded` but whose job was never
+    /// written — the process quit between the stop and `route` — is enqueued now. Meetings that already have a
+    /// job, and every other status, are left alone. Returns the ids it enqueued, oldest first.
+    @discardableResult
+    public func sweepUnqueued(manifests: [Manifest], queueStatus: QueueStatus) async -> [MeetingID] {
+        let queued = Set(queueStatus.items.map(\.meetingID))
+        let orphans = manifests.filter { $0.status == .recorded && !queued.contains($0.id.rawValue) }
+            .sorted { $0.id.rawValue < $1.id.rawValue }
+            .map(\.id)
+        for id in orphans {
+            logger.notice("launch sweep: \(id.rawValue, privacy: .public) is recorded with no job, enqueuing")
+            await enqueuer.enqueue(id)
+        }
+        return orphans
+    }
+
     /// Only the queue's inputs (output folder, final engine and model) rebuild it.
     public func settingsChanged(from old: Settings, to new: Settings) async {
         guard old.outputFolder != new.outputFolder || old.finalEngine != new.finalEngine

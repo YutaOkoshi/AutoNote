@@ -103,6 +103,23 @@ private func first<T: Sendable>(_ stream: AsyncStream<T>, where condition: @Send
     }
 
     // .stopped(m(.tooShort), .manual) → ids == []、posted == [.recordingTooShort(id)]
+    @Test func launchSweepEnqueuesRecordedMeetingsWithoutAJob() async {
+        // 録音済みでジョブの無い会議 → 起動時の sweep で enqueue。ジョブがある / 録音済みでない会議は触らない（I2）
+        let w = Wiring()
+        var orphan = m(.recorded)
+        orphan.id = MeetingID(rawValue: "20261024-1400-a1b2")
+        var queued = m(.recorded)
+        queued.id = MeetingID(rawValue: "20261024-1500-c3d4")
+        var done = m(.minutesGenerated)
+        done.id = MeetingID(rawValue: "20261024-1600-e5f6")
+        var recording = m(.recording)
+        recording.id = MeetingID(rawValue: "20261024-1700-a7b8")
+        let status = QueueStatus(items: [QueueItemDTO(meetingID: queued.id.rawValue, stage: "transcribe", state: "pending")])
+        let swept = await w.wiring.sweepUnqueued(manifests: [orphan, queued, done, recording], queueStatus: status)
+        #expect(swept == [orphan.id])
+        #expect(await w.enqueuer.ids == [orphan.id])
+    }
+
     @Test func stoppedTooShortIsNotEnqueued() async {
         let w = Wiring(events: [.started(id), .stopped(m(.tooShort), .manual)])
         await w.wiring.run()

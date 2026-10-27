@@ -73,7 +73,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 2. Subscriptions start right away: the socket already accepts commands (ruling X48).
         let wiring = env.wiring, queue = env.queue, model = env.model
         tasks.append(Task { await wiring.run() })
-        tasks.append(Task { await queue.queue.start() })
+        // After the saved jobs are loaded, a `.recorded` meeting with no job (the app quit between a stop and its
+        // `route`) is enqueued again (I2).
+        let manifests = env.manifests, queuePort = env.ports.queue
+        tasks.append(Task {
+            await queue.queue.start()
+            await wiring.sweepUnqueued(manifests: await manifests.all(), queueStatus: await queuePort.status())
+        })
         tasks.append(Task { await model.run() })
         tasks.append(Task { await env.relayQueueNotices() })
         tasks.append(Task { await env.relayOutputFolderNotices() })
@@ -185,7 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return .terminateLater
         case .stopThenTerminate:
             logger.info("quitting while recording (\(String(describing: reason), privacy: .public)): stopping first")
-            replyAfter { await model.perform(.stop) }
+            replyAfter { [env] in await Self.stopAndAwaitJob(model: model, env: env) }
             return .terminateLater
         case .confirm:
             NSApp.activate(ignoringOtherApps: true)
@@ -198,9 +204,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 resetQuitReason()
                 return .terminateCancel
             }
-            replyAfter { await model.perform(.stop) }
+            replyAfter { [env] in await Self.stopAndAwaitJob(model: model, env: env) }
             return .terminateLater
         }
+    }
+
+    /// The longest a quit waits, after the stop, for the stopped meeting's queue job to be written (I2).
+    private static let jobTimeout: Duration = .seconds(3)
+
+    /// Stops, then waits (at most `jobTimeout`) until the stopped meeting has a queue job or left `.recorded`
+    /// (e.g. too short), so a quit right after the stop does not leave a meeting without a job.
+    private static func stopAndAwaitJob(model: AppModel, env: AppEnvironment?) async {
+        let id = model.recorder.meetingID
+        await model.perform(.stop)
+        guard let id, let env else { return }
+        let deadline = ContinuousClock.now + jobTimeout
+        while ContinuousClock.now < deadline {
+            if await env.ports.queue.status().items.contains(where: { $0.meetingID == id.rawValue }) { return }
+            if let m = try? await env.manifests.load(id), m.status != .recorded { return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        logger.error("quit: \(id.rawValue, privacy: .public) has no queue job yet; the launch sweep will enqueue it")
     }
 
     /// Runs `work`, then lets the pending `.terminateLater` go ahead — after at most `stopTimeout` either way.
