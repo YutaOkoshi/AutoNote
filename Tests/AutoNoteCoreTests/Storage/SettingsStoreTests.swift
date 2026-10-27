@@ -25,3 +25,13 @@ import AutoNoteTestSupport
     #expect(!FileManager.default.fileExists(atPath: p.settingsFile.path))
     #expect(FileManager.default.fileExists(atPath: aside.path))
 }
+
+@Test func changeReturnsOldAndNewInOneActorTurn() async throws {
+    // 設定画面の保存は load→mutate→save を 1 回の actor ターンで行い、前後の値を返す（M2）
+    let p = AppPaths(root: try TemporaryDirectory.make()); try p.createBaseDirectories()
+    let store = SettingsStore(paths: p)
+    _ = try await store.update { $0.audioRetentionDays = 7 }
+    let (old, new) = try await store.change { $0.audioRetentionDays = 30 }
+    #expect(old.audioRetentionDays == 7 && new.audioRetentionDays == 30)
+    #expect(try await store.load() == new)
+}

@@ -35,18 +35,18 @@ struct SettingsView: View {
     }
 }
 
-/// Every settings save (brief Step 3): `old = settings.load()` → apply the tab's fields → `SettingsNormalizer` →
-/// `settings.save` → `env.settingsSaved(old:new:)`, which re-applies the hot keys, the login item and the queue
-/// inputs. A tab only changes its own fields, so two open tabs never undo each other.
+/// Every settings save (brief Step 3): one `settings.change` (load → apply the tab's fields → `SettingsNormalizer`
+/// → save, in one actor turn, so a concurrent write such as `ClaudeLocator.fillDefaultPath` is not undone) →
+/// `env.settingsSaved(old:new:)`, which re-applies the hot keys, the login item and the queue inputs. A tab only
+/// changes its own fields, so two open tabs never undo each other.
 @MainActor
 enum SettingsSaving {
-    static func save(_ env: AppEnvironment, _ apply: (inout AutoNoteCore.Settings) -> Void)
+    static func save(_ env: AppEnvironment, _ apply: @escaping @Sendable (inout AutoNoteCore.Settings) -> Void)
         async throws -> (saved: AutoNoteCore.Settings, result: AppEnvironment.SaveResult) {
-        let old = try await env.settings.load()
-        var new = old
-        apply(&new)
-        new = SettingsNormalizer.normalized(new)
-        try await env.settings.save(new)
+        let (old, new) = try await env.settings.change { s in
+            apply(&s)
+            s = SettingsNormalizer.normalized(s)
+        }
         let result = await env.settingsSaved(old: old, new: new)
         return (new, result)
     }

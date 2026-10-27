@@ -32,10 +32,18 @@ public actor SettingsStore {
 
     @discardableResult
     public func update(_ body: @Sendable (inout Settings) -> Void) throws -> Settings {
-        var s = try load()
+        try change(body).new
+    }
+
+    /// `update` that also returns the settings before the change, for callers that react to the difference.
+    /// Load, change and save happen in one actor turn, so no concurrent write is lost.
+    @discardableResult
+    public func change(_ body: @Sendable (inout Settings) -> Void) throws -> (old: Settings, new: Settings) {
+        let old = try load()
+        var s = old
         body(&s)
         try save(s)
-        return s
+        return (old, s)
     }
 
     private func timestamp(_ date: Date) -> String {
