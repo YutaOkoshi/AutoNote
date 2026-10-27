@@ -35,19 +35,11 @@ jobs:
   build:
     needs: version
     if: needs.version.outputs.release == 'true'
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          - runner: macos-26        # Apple シリコン（arm64）
-            arch: arm64
-          - runner: macos-26-intel  # Intel（x86_64）
-            arch: x86_64
-    runs-on: ${{ matrix.runner }}
+    # 1 ランナーで arm64 + x86_64 のユニバーサル .app を作る（Intel ランナーは使わない）
+    runs-on: macos-26
     timeout-minutes: 90
     env:
       VERSION: ${{ needs.version.outputs.version }}
-      ARCH: ${{ matrix.arch }}
     steps:
       - uses: actions/checkout@v5
 
@@ -59,23 +51,26 @@ jobs:
       - name: Test (retry once on failure)
         run: .github/scripts/swift-test-retry.sh
 
-      - name: Build AutoNote.app (ad-hoc signed)
+      - name: Build universal AutoNote.app (ad-hoc signed)
         env:
+          AUTONOTE_BUILD_ARCHS: arm64 x86_64
           AUTONOTE_CODESIGN_IDENTITY: "-"
         run: scripts/build-app.sh release
 
-      - name: Check architecture
+      - name: Check architectures
         run: |
-          lipo -archs build/AutoNote.app/Contents/MacOS/AutoNoteApp
-          lipo build/AutoNote.app/Contents/MacOS/AutoNoteApp -verify_arch "${ARCH}"
+          for exe in AutoNoteApp autonote; do
+            lipo -info "build/AutoNote.app/Contents/MacOS/${exe}"
+            lipo "build/AutoNote.app/Contents/MacOS/${exe}" -verify_arch arm64 x86_64
+          done
 
       - name: Zip
-        run: ditto -c -k --keepParent build/AutoNote.app "AutoNote-${VERSION}-macos-${ARCH}.zip"
+        run: ditto -c -k --keepParent build/AutoNote.app "AutoNote-${VERSION}-macos-universal.zip"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: AutoNote-${{ env.VERSION }}-macos-${{ matrix.arch }}
-          path: AutoNote-${{ env.VERSION }}-macos-${{ matrix.arch }}.zip
+          name: AutoNote-${{ env.VERSION }}-macos-universal
+          path: AutoNote-${{ env.VERSION }}-macos-universal.zip
           if-no-files-found: error
           retention-days: 3
 
@@ -106,4 +101,4 @@ jobs:
             --title "AutoNote ${VERSION}" \
             --generate-notes \
             --notes-file .github/release-notes.md \
-            dist/AutoNote-"${VERSION}"-macos-*.zip
+            "dist/AutoNote-${VERSION}-macos-universal.zip"

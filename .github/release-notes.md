@@ -6,4 +6,4 @@
 > ```
 >
 > アドホック署名はビルドごとに署名が変わるため、マイク・システム音声録音などの許可は更新のたびに求められることがある。
-> `AutoNote-<version>-macos-arm64.zip` は Apple シリコン用、`AutoNote-<version>-macos-x86_64.zip` は Intel Mac 用。
+> `AutoNote-<version>-macos-universal.zip` は Apple シリコンと Intel Mac の両方で動くユニバーサル版。
