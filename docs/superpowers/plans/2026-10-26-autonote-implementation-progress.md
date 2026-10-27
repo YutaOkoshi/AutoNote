@@ -18,7 +18,7 @@
 | 03 機材と自動録音 | plan-03 | **完了**（2026-10-26、HEAD 974aeee） | 基点 9a0fd64。11 タスク（Task 10 Step 4〜7 👤 は利用者待ち）、実行前スキャンで 22 件を裁定（Y1〜Y21）、最終レビュー（opus）で Important 2・Minor 9 → 修正波 1 回 + 再レビュー clean。swift test 348 件、E2E 24 PASS / 0 FAIL / 1 SKIP（02.1 は許可未応答） |
 | 04 文字起こし | plan-04 | 完了（2026-10-27、HEAD 0a76f1f、487 テスト、E2E 25/0/0） | 裁定 Z1〜Z29（下の写し）。ローカル AVX2 xcframework（Z20）、`.silenceFinalize` 採用（Task 9 計測）。Task 12 👤（Apple Silicon）は利用者待ち |
 | 05 議事録と待ち行列 | plan-05 | 完了（2026-10-27、HEAD e121609、630 テスト、E2E 27/0/0） | 裁定 P1・Y1〜Y35（下の写し）。Task 1 👤 と Task 14 Step 6 👤（claude -p の実測）は利用者待ち。計画 06 は Step 6 を配線前の関門にする |
-| 06 UI・CLI・Automations | plan-06 | 進行中（2026-10-27 開始、基点 68bd1e3） | 16 タスク。実行前スキャン（R1〜R36、C1〜C29、U1〜U20）と裁定 X1〜X42 は `.superpowers/sdd/…/rulings.md`（計画を閉じるときに下へ写す）。Task 1〜10 完了（HEAD 423cbeb、746 テスト）。計画 05 Task 14 Step 6 の関門は 2026-10-27 に実行して機能面は合格（X41 で projects の条件を緩和） |
+| 06 UI・CLI・Automations | plan-06 | 完了（2026-10-27、HEAD d948918、808 テスト、E2E 33/0/0） | 基点 68bd1e3。16 タスク（Task 13 は 13a/13b/13c に分割）。実行前スキャン（R1〜R36、C1〜C29、S1〜S16、N1〜N17、U1〜U20）と裁定 X-T3a・X-T5a・X-T6a・X-T8a・X1〜X58（下の写し）。計画 04 の `AudioImporter`（X44）と計画 05 の `resolveOverwrite`（X55）を本計画で修正。最終レビュー（opus）で Important 5・Minor 13 → 修正波 1 回（12 コミット）+ 再レビュー clean。計画 05 Step 6 の関門は 2026-10-27 に実行して合格（X41）。実機の画面確認は「利用者への依頼」参照 |
 
 ## 裁定の写し（計画完了時に台帳から転記）
 
@@ -332,6 +332,71 @@
 
 **Lead 検証（HEAD e121609、2026-10-27）**: `swift test` 630 テスト / 60 スイート 緑（アイドル実行、警告なし）。`scripts/build-app.sh && scripts/e2e-check.sh` 27 PASS / 0 FAIL / 0 SKIP（05.1 は `2026/2026-10-24_1400_架空の定例.md`、05.2 は `2026/2026-10-24_140000.md`）。ログは scratchpad の plan05-final-swift-test.log / plan05-final-e2e.log。
 
+### 計画 06（台帳から転記、2026-10-27）
+- 台帳 `progress.md`・`rulings.md`・`preflight-scan.md`・各タスクのブリーフ/報告/レビューの全文は scratchpad の `sdd-archive-plan-06/` に退避（セッション限り）。以下は裁定だけの写し。
+- # Plan 06 rulings (X-series) — from preflight-scan.md (R/C/S/N/U refs) and task reviews
+- Spec is binding; plan is its argument. Format: Ruling — why — cost if wrong.
+- X-T3a: undecodable automations entries are never in `items`; `save` preserves them; `importReplacing` writes source bytes. (Task 3 done @ 34b0f52.)
+- X-T5a: Task 5 does not reference `AppCommandError`; `runOne` is added in Task 8.
+- X-T6a: wire encoder = `AutoNoteJSON.compactEncoder()` / `decoder()` (R15); no second date format.
+- X-T8a: `OutputFolderServices` delegates to `SharedVaultServices.standard` (R3/N1); `init(paths:services: = .standard)`.
+- X1 (R16/N2): every type carrying `meetingID` that goes through `AutoNoteJSON` (`AutomationRunRecord`, `IPCArgs`, `IPCResult`, `QueueItemDTO`, `RecorderStatusDTO`, `MeetingRow` if applicable) declares `CodingKeys` with `meetingID = "meetingId"` so snake_case round-trips as `meeting_id`. Tests pin the wire key. — the decoder's convertFromSnakeCase produces `meetingId`. — cost: silent nil.
+- X2 (C3): `AutomationRunner` writes `result.json` and the ledger with `AutoNoteJSON.encoder()`/`decoder()` (snake_case `exit_code` etc., E2E 06.6 relies on it).
+- X3 (C4): `AutomationRunRecord.succeeded == (skippedReason == nil && !timedOut && exitCode == 0)`. A skipped run creates NO log folder (`logDirectory == ""`), is not in `recentRuns`, and is not yielded on `records()`. Task 5 notifies `automationFailed` only when `skippedReason == nil && !succeeded`. — skips are not failures. — cost: a skipped manual rerun looks silent; manual runs have `dedupeKey nil` so never skip.
+- X4 (C5): no global serialization in the runner; actor reentrancy is accepted. Order within one `dispatch` is the `for` loop. Ledger mutations are actor-isolated and happen before the first `await` of the spawn. — cost: a recording_started hook may overlap a minutes hook; both are user scripts with separate logs.
+- X5 (C6/N15): `ProcessGroupSpawner` sets `F_SETNOSIGPIPE` on the stdin pipe write end; `SocketServer`/`SocketClient` set `SO_NOSIGPIPE` on every socket fd. No process-wide `signal(SIGPIPE, SIG_IGN)`.
+- X6 (U11/U3): `records()` supports multiple subscribers (each gets its own continuation). `AppModel.automationFailures` is seeded at launch from `recentRuns(limit: 20)` filtered `!succeeded`.
+- X7 (C7/N5): `AppWiring` gives each listener its own consumer Task over the event stream (per-listener FIFO, listeners independent). A slow automation never delays enqueue or live transcription. (Task 13)
+- X8 (R8/N6): Task 13 launches `ClaudeLocator.fillDefaultPath` in a detached Task at startup, off the launch path.
+- X9 (R10/C21): Task 13 adds an integration test: real `RecordingSession` (fake audio sources) + `RecordingSessionActivity(session:)` + the SAME `BatchGate` instance in runner and queue; assert gate pauses on `.started` and resumes on `.stopped`. The `batchGatePausedWhileRecording` tautology is replaced by it.
+- X10 (3c, plan 05 Task 14 Step 6 gate): before dispatching Task 13, the Lead runs the real `claude -p` check once via a sidekick-runner (`autonote dev summarize --fake <fixture> --out <tmp> --claude`), records the outcome in the ledger and master doc. If `claude` is not logged in, record as 👤 and proceed with Task 13 (fake-backed tests still gate correctness). — the user approved verification through real runs; one small summarization is the cost.
+- X11 (R35/N7): Task 13 does NOT delete `Sources/AutoNoteApp/DevChecks.swift` nor the 開発 menu; plan 02's pending 👤 measurements depend on it. Record in the master doc as a deferred cleanup after those measurements.
+- X12 (R36/N8): qualify `SwiftUI.Settings { }` and `AutoNoteCore.Settings` wherever both modules are imported (Tasks 13, 15).
+- X13 (R6/C13/N4): `QueueAdapter` pre-validates: manifest missing → `.notFound("会議が見つかりません: <id>")`; `regenerate` without `final.json` → `.invalid("文字起こしがありません: <id>")`; `retry` with no eligible job → `.invalid("再試行できる処理がありません: <id>")`; `resolveOverwrite`/`acceptShortRecording` map `QueueError` to `.invalid(description)`.
+- X14 (R7): `QueuePort.retry` routing: job `.failed`, or `.waiting` with `notBefore != nil` → `queue.retry`; `done` with `summaryFailure` → `queue.regenerate`; `.waiting` awaiting confirmation → `.invalid("上書きの確認待ちです: <id>")`; no job → X13.
+- X15 (R4/U2/C11): `QueueStatus.items` carries every job in the snapshot (incl. done+summaryFailure; NoticeRelay needs them). `QueueItemDTO` gains `notBefore: Date?` (Task 6). `stage` nil → `""`. Presentation (Task 9 `status`, Task 11 queue section, Task 14) hides `state == "done"`. Labels: `state == "failed"` → "失敗"; `notBefore != nil` → "再試行待ち"; `awaitingConfirmation` → "上書きの確認待ち"; running/pending → `StageLabel.text`.
+- X16 (R12/C18/N3): `NoticeRelay` is seeded with the first `QueueStatus` after launch as `previous` without emitting; emitted notices are deduped in memory by `meeting:generation(:kind)`. Rows refresh runs before the relay (Task 13 ordering).
+- X17 (C10): E2E 06.3 reads `status.recorder.state` (snake_case keys). (Task 16)
+- X18 (C12/U7): `SocketClient.send(_:args:responseTimeout:)` gets `responseTimeout: Duration = .seconds(10)` (Task 7); the CLI passes 30 s for `start`/`stop`, 120 s for `import`, default otherwise (Task 10).
+- X19 (C14/U8): `QueueHolder` stays as a thin box but Task 13 never replaces the queue after launch; settings changes re-register stages via `queue.register(_:)` (same-name replacement, overview 8g). Streams stay valid.
+- X20 (C15): `AppModel` re-reads `rows()` only when the multiset of `(meetingID, state, stage, awaitingConfirmation)` in `QueueStatus` changes, not on progress-only updates.
+- X21 (C16): grace copy comes from Task 11's per-second countdown ("N 秒後に停止"); Task 14's header shows that string, not `Banner.grace`.
+- X22 (C22/N14): Task 13 skips login-item reconciliation and `SMAppService` calls when `AppIdentity.isDataDirectoryOverridden`. Device first-seen notices and the consent window under E2E are acceptable (GUI session).
+- X23 (C25): one validator: Task 15 moves per-definition checks into `AutomationDefinition.problem(duplicateNames:) -> String?` in Automations/, `AutomationsFile` and `AutomationDraft.validate` both call it. Upper bound 86400 added there.
+- X24 (R17): `SettingsNormalizer` only normalizes what `Settings` does not (negative `audioRetentionDays` → 0); the tautological test asserts retention instead.
+- X25 (R21/R22/U4/N10/N11): `RecorderPort` gains `elapsed() async -> TimelineTime?` (Task 8 protocol + fake; `CoordinatorRecorderPort(coordinator:elapsed:)` closure wired to `session.elapsed()` in Task 13). Menu/timer use it. State recording with `meetingID == nil` renders "開始中…" with no timer. `LiveTranscriptBuffer` resets on the `.started(id)` event, not on `meetingID` change.
+- X26 (R27): `PortableDevicesStorage` is created once per store value and reused.
+- X27 (C20/U9): subscribe `audio(for:)` on `.started`; the sub-second gap before subscription is accepted for the live view (final transcript comes from files). `finish()` errors are logged and swallowed. `makeFeed` reads the language from `manifests.load(id)`; coordinator holder avoids the init cycle.
+- X28 (U1): manifest status → row state: `recording`→.recording; `recorded`/`transcribing`/`transcribed`/`generating`→.processing (progressLabel from the queue item, else "処理待ち"); `minutesGenerated`, `transcriptOnly`, `failed`, `tooShort` map 1:1.
+- X29 (U16): `MeetingListBuilder.build(…, timeZone: TimeZone = .current)` parses `IndexEntry.date`/`start` in that zone.
+- X30 (U17): `--help`/`-h`/`help` → usage, exit 0; no arguments → usage on stderr, exit 1 (E2E 6 keeps `usage:` + exit 1).
+- X31 (S14): manual GUI checks run against `AUTONOTE_DATA_DIR=<tmp>`; automate via CLI + osascript per the user's rule; only first permission dialogs are 👤.
+- X32 (R34/N9): implement notifications as planned; Task 12/16 verify empirically whether the alert style sticks; if not, record it and rely on the in-app band as the durable surface.
+- X33 (S13): Task 13 is executed as three dispatches with one review each: 13a Core wiring (`AppWiring`, `LiveTranscriptionWiring`, `QueueAssembly`, tests), 13b `AppEnvironment.make` + launch order, 13c app shell (hotkeys, quit confirm, login item, notifications permission).
+- X34 (U12): `toggleRecording` in `countdown` → manual start; in `grace` → stop; `togglePause` in `idle`/`countdown`/`grace` → no-op.
+- X35 (U5): output folder unset (settings nil/empty) renders "出力フォルダが未設定です" and the band links to settings; unavailable renders the plan's "見つかりません" copy.
+- X36 (U10/C23): views read the dictionary via `AppEnvironment` (concrete), as C23 already allows for `output`/`registry`.
+- X37 (U13): opening the main window/settings calls `NSApp.activate(ignoringOtherApps: true)` first.
+- X38 (U19): Obsidian detection via `NSWorkspace.shared.urlForApplication(toOpen: URL(string: "obsidian://open")!)`; nil → open the file with the default app.
+- X39 (U14/U15/U20/U18): decided at task time — Task 15 notes (devices: `setDisposition` for un-ignore; dictionary issues shown as a footer count+list); `transcriptEngine` not shown; file log out of scope for 06 (parked).
+- X40 (S16/R33): Task 16 fixes the `-h` sed range when it adds header lines.
+- X41 (plan 05 Task 14 Step 6 gate, run 2026-10-27 via X10): real `claude -p` round trip PASSED functionally (exit 0, 7 s, `status == minutes_generated`, 3-line summary in the meeting file, `claude auth status` loggedIn max plan). The third criterion "no new entry under ~/.claude/projects" is relaxed: Claude Code records every session under a project keyed by cwd, and overview §5 deliberately gives AutoNote a dedicated empty `claude-cwd/`, so exactly ONE entry named for that directory appears on first use and never grows per run. New criterion: "the only new projects entry is the `claude-cwd` one". Gate for Task 13 is open. Detail: scratchpad/claude-gate/result.md. — cost if wrong: a stray entry in the user's Claude Code project list, which is the design's intended isolation anyway.
+- X14b (amends X14, from Task 8 concern 4): `QueuePort.retry(id)` when NO job exists for the meeting: manifest status `transcriptOnly`/`failed`/`minutesGenerated` with `final.json` present → `queue.regenerate`; `recorded`/`transcribing`/`transcribed`/`generating` (a job should exist) → `.invalid("処理中です: <id>")`; `tooShort` → `.invalid("短すぎる録音です: <id>")`; no manifest → `.notFound`. A `pending`/`running` job → `.invalid("処理中です: <id>")`. — the menu's 議事録 未生成 → 再実行 path must work after restart when the job file is gone. — cost: a regenerate on a meeting the user did not expect; it only re-summarizes.
+- X13b: `QueueError` cases map to Japanese copy: `notTooShort` → "短すぎる録音ではありません: <id>"; any other → `.invalid("<id>: " + String(describing:))`. Other thrown errors → `.failed(localizedDescription)` as the brief says (concern 5: use `localizedDescription`).
+- X42 (Task 10): CLI success lines for start/stop/pause/resume/bookmark are the implementer's wording (reviewer confirmed consistent). Kept.
+- X43 (Task 12 review): `SystemUserNotifier` is the single owner of notification-tap handling, including opening the privacy pane for `.openPrivacySettings`; it exposes `onOpenWindow` for a plain tap without `meeting_id`. Menu/band buttons open the pane themselves (13c). 13b's notice dedupe keys on `UserNotice.id` + `generation`.
+- Ruling X-T3a: entries that cannot decode into AutomationDefinition (non-object, missing name/command/on, unknown trigger, non-Bool enabled) are NOT in `items`; each goes to `warnings` as "entries[<i>]: <reason>". `save(_:)` preserves them: it re-reads the current file, writes the given definitions, then appends the preserved raw entries verbatim (JSONSerialization objects) so a load→save never rewrites or loses user data. `importReplacing` validates the source parses as a JSON array, then writes the source bytes verbatim (0600 atomic) and returns `load()`. — Why: §14.5 Automations are user-owned config; the brief's types have no slot for a definition without a valid trigger, and silently rewriting a config file is worse than hiding an entry. — Cost if wrong: a later UI task needs a "broken entry" row; it can read `warnings`.
+- Ruling X44: the hang is a correctness defect and is fixed before the 13a review (pre-review concern, not a review fix round). Dispatched to a FRESH opus debugger (brief task-13a-fix1-brief.md) rather than resuming the implementer, because the implementer has 159k tokens / 5.4 h of context and a hang investigation needs a clean context with `sample` evidence — cost if wrong: one extra dispatch. Task 12 fix round still queued (one implementer at a time; shared .build and index).
+- Ruling X45: 13b also creates WorkspaceOpener.swift (AppPorts.opener needs a FileOpener) and LoginItem.swift (launch item 6); HotKeyCenter.apply in settingsSaved is left as a `shortcutsChanged` hook for 13c; AutoNoteApp.swift gains the delegate adaptor but keeps the plan 02 temporary menu until 13c. Cost if wrong: 13c re-touches two small files.
+- Ruling X46: scripts/e2e-check.sh check_app_launch (and every E2E that launches the app) must set AUTONOTE_DATA_DIR to a SHORT temp dir (mktemp -d /tmp/an-XXXXXX, not the scratchpad) — owned by Task 16; until then the Lead runs e2e with AUTONOTE_DATA_DIR exported. Cost if wrong: a dev build registered as the user's login item.
+- Ruling X47: pathTooLong on the socket is logged and the app keeps running without IPC — acceptable for now; Task 16 README notes the data-dir path limit. 2 s main-thread wait in applicationWillTerminate: left to the 13b reviewer / final review.
+- Ruling X50: 13c adds placeholder `Window(id: "main")` and `SwiftUI.Settings` scenes (Task 14 / 15 fill them) so env.openWindow, ウィンドウを開く and SettingsLink work now; consent Window id `consent` per brief. Brief's Step 8 `git rm DevChecks.swift` overridden by X11. Cost if wrong: Task 14/15 replace two placeholder views.
+- Ruling X51: idle menu-bar symbol follows Core's MenuBarPresentation (waveform idle, hourglass while a job runs) — spec-driven; E2E 7b runs with no jobs so it still reads waveform. Ruling X52: 設定… is a Button that activates the app then calls openSettings (X37 precedence over SettingsLink). Automation-failure item wording 「Automation 失敗: <name>（再実行）」 accepted provisionally; final review checks spec §14.5.
+- Ruling X53: `role: .destructive` is restored on 「この会議を削除」 and 「破棄」 — the synthetic-click limitation is a test-harness artifact, not a product reason; the review's fix round carries it. The 再実行→残す→完了-without-minutes observation is a named-risk check for the Task 14 reviewer and, if it is Core behaviour, a final-review item (N-14).
+- Ruling X55: the Core resolveOverwrite defect is fixed in this plan (not deferred to the final wave) by a fresh sonnet implementer with a TDD test in the plan 05 queue tests, dispatched after the Task 14 fix round (one implementer at a time). Cost if wrong: one small Core commit on plan-06.
+- Ruling X57 (fix wave scope, ONE wave): I1 (answer bands derived from queue state + onPost regardless of center.add + withdraw on resolve = M8), I2 (launch sweep enqueues .recorded manifests without a job + bounded wait in the quit path + test), I3 (CLI timeouts: automations run = timeoutRange.upperBound + kill grace + margin; import = 24 h after connect; CLITests), I4 (refuse save over an unparseable automations.json; tab disables edits with the warning; test), I5 (unsaved-edit confirmation on selection change and 再生成), plus M1, M2 (SettingsStore.update), M4 (automations run exits 1 on failure, child code kept in output — spec §16 wins over Task 10's choice), M5 (minutes.json written only after the Vault write / rolled back on cancel), M9 (notification delegate set synchronously at launch), M11 (timing bounds as recommended), M12 (row context menu 再実行), M13 (shared minutesUsable helper). Accepted/parked: M3, M6, M7, M10.
+- Ruling X58 (declined-to-judge items): resolveOverwrite(false) completing `automations` without firing is correct (no Vault write happened); `autonote` linking AutoNoteTestSupport for `dev` commands is pre-existing (plan 01) — accept; batch engine from Settings.defaultLanguage is the plan 04/05 contract — accept; timeSensitive downgrade, Vault rescan cost, one thread per socket connection (0600 socket in 0700 dir) — accept.
+
 ## 利用者への依頼（後回しにした 👤 手順）
 
 ### 計画 02 Task 1（TCC まとめ確認）— 2026-10-26
@@ -377,11 +442,22 @@
    "$AUTONOTE_CLI" dev summarize --fake "$TMPDIR/t1.json" --out "$TMPDIR/claude-check" --claude
    ```
    `t1.json` の形は `{"engine","language":"ja","utterances":[{"start","end","speaker","text","is_final"}]}`。合格: 出力 JSON の `status` が `minutes_generated`、会議ファイルに 3 行の要約がある、`~/.claude/projects` に新しいエントリが増えていない。
+   → **2026-10-27 に Lead が実行済み（裁定 X10/X41）**: 終了コード 0、7 秒、`status == minutes_generated`、会議ファイルに 3 行の要約、`claude auth status` はログイン済み（max プラン）。第 3 の基準「`~/.claude/projects` に新しいエントリが増えていない」は緩和した: Claude Code は cwd ごとにセッションを記録し、overview §5 が AutoNote 専用の空の `claude-cwd/` を与えているので、そのディレクトリ名のエントリがちょうど 1 つ現れるのが正しい。利用者がやり直す必要はない。項目 1（60 分・120 分の `--setting-sources project` 計測）は引き続き利用者判断。
 3. 結果が出たら Lead が次を更新する。
    - 要件書 §8.1 の括弧書き（60 分・120 分は `--setting-sources user` でだけ測った）を、「60 分・120 分とも `--setting-sources project` で `structured_output` が返った。計画 05 Task 1」に置き換え、§19 の項目 6 に「project でも確認済み」を足す
    - `docs/superpowers/research/2026-10-24-spike-results.md` の項目 6 に project での再測定（回・stdin バイト数・所要時間・入力トークンの内訳・出力トークン・件数・スキーマ検査）を 2 行足し、1 時間あたりの入力トークンと固定の上乗せを 1 行で書く
    - 60 分・120 分の実測入力トークンが推定式（文字数 ÷ 1.0 + 16,000。60 分は 38,300、120 分は 60,557）を超えたら、`PromptBuilder.charsPerToken` と分割閾値（200k）を実測から下げる
    - 失敗した場合は結果をそのまま書く。§8.1 の変更は利用者の判断
+
+### 計画 06（アプリの実機確認。許可ダイアログと実キー操作が要る）— 2026-10-27
+自動化できた確認（ビルド、`swift test`、E2E 33 項目、`AUTONOTE_DATA_DIR` の一時ディレクトリでの起動・ソケット・CLI・Automation 実行・ファイル効果）は Lead 側で済んでいる。残りは画面を実際に触るものだけで、手順は `README.md` の「手動で確認すること（利用者の手が要る）」に一覧がある。要点:
+1. 初回の許可ダイアログ（マイク、システム音声、通知）に答える。通知のスタイルが「通知パネル」になっていることを確認する。
+2. 実キーで ⌃⌥B / ⌃⌥R / ⌃⌥P（合成キーイベントでは Carbon のホットキーが発火しないため、自動では確認できていない）。
+3. 2 分ほど録音して、ライブ文字起こし（部分結果は薄い色、上へスクロールすると追従が止まり「最新へ」で戻る）、ブックマークと一時停止の印、停止後に待ち行列へ入ること、30 秒の録音が「短すぎる録音」になり「文字起こしする」「破棄」が効くこと。
+4. 「この会議を削除」「破棄」を実際のマウスでクリックする（`role: .destructive` のボタンは合成クリックが届かないため未確認）。確認ダイアログの文言と削除結果を見る。
+5. 録音中に「終了」→ 確認が出る。ログイン時起動をオンにしてログアウト・ログインで常駐する（`build/AutoNote.app` を使う場所に置いてから）。
+6. 設定画面の各タブの見た目（選べないエンジン行が灰色、ショートカット入力欄、Automation の編集中に CLI で import したときの「元の定義が見つかりません」）。
+問題があれば、その画面名と操作を書いて知らせてほしい。コード側はこれに依存せず完成している。
 
 ## 再開手順
 1. この表で進行中の計画を見る。そのブランチに checkout。
