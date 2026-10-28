@@ -62,7 +62,9 @@ private struct Harness {
         for t in tasks { t.cancel() }
     }
 
+    /// As in the app: the recording's `.started` event, then its confirmed feed.
     func start(_ id: MeetingID) async throws {
+        await scheduler.handle(.started(id))
         let (stream, continuation) = AsyncStream<[Utterance]>.makeStream(bufferingPolicy: .bufferingNewest(1))
         inner.mutate { $0[id] = continuation }
         feeds.yield(LiveConfirmedFeed(meetingID: id, utterances: stream))
@@ -130,8 +132,29 @@ private struct Harness {
         try await h.advance(a, 60)
         #expect(await h.requests() == 0)
         #expect(await h.summarizer.readyChecks == 0)
-        #expect(h.logs.value.contains("live summary: off (\(a.rawValue))"))
+        try await waitUntil { h.logs.value.contains("live summary: off (\(a.rawValue))") }
+        #expect(h.logs.value.filter { $0.hasPrefix("live summary: off (") } == ["live summary: off (\(a.rawValue))"])
         #expect(await h.latest(a) == nil)
+    }
+
+    /// Final review Minor 3: the off line appears at every recording start, also when live transcription does not
+    /// start (no confirmed feed ever arrives).
+    @Test func offLineIsLoggedAtStartWithoutAFeed() async throws {
+        let h = await Harness(settings: Settings())
+        defer { h.stop() }
+        await h.scheduler.handle(.started(a))
+        try await waitUntil { h.logs.value == ["live summary: off (\(a.rawValue))"] }
+        #expect(await h.scheduler.phase(a) == nil)
+    }
+
+    @Test func noOffLineWhenOn() async throws {
+        let h = await Harness()
+        defer { h.stop() }
+        try await h.start(a)
+        try await h.say(a, lines(1))
+        try await h.advance(a, 20)
+        #expect(await h.requests() == 1)
+        #expect(!h.logs.value.contains { $0.hasPrefix("live summary: off (") })
     }
 
     @Test func firstCallAfterTheInterval() async throws {
@@ -416,6 +439,41 @@ private struct Harness {
         #expect(await h.scheduler.activeMeetings.isEmpty)
         try await h.advance(a, 60)
         #expect(await h.requests() == 2)
+    }
+
+    /// Final review Minor 1: a mic utterance confirmed after a tick consumed a later-ending system utterance
+    /// is still sent by the final call on stop.
+    @Test func lateOtherTrackUtteranceReachesTheFinalCall() async throws {
+        let h = await Harness()
+        defer { h.stop() }
+        try await h.start(a)
+        let system = u(10, .other, "相手の発言", end: 18)
+        let mic = u(12, .me, "最後のひとこと", end: 16)
+        try await h.say(a, [system])
+        try await h.advance(a, 20)
+        #expect(await h.requests() == 1)
+        #expect(await h.latest(a)?.state?.consumedThrough == 18)
+        try await h.say(a, [system, mic])
+        h.finish(a)
+        try await waitUntil { await h.scheduler.phase(a) == .ended }
+        let requests = await h.summarizer.requests
+        #expect(requests.count == 2)
+        #expect(requests.last?.utterances.contains(mic) == true)
+        #expect(h.saved.value.last?.1.consumedThrough == 18)
+    }
+
+    /// Final review Minor 2: cancelling the scheduler (quit) cancels the call in flight, so the runner can stop claude.
+    @Test func cancellingTheSchedulerCancelsTheCallInFlight() async throws {
+        let h = await Harness()
+        try await h.start(a)
+        try await h.say(a, lines(1))
+        await h.hold()
+        try await h.advance(a, 20)
+        #expect(await h.scheduler.phase(a) == .calling)
+        h.stop()
+        try await waitUntil { await h.summarizer.cancelledCalls == 1 }
+        #expect(await h.summarizer.inFlight == 0)
+        await h.release()
     }
 
     @Test func stopWithoutNewUtterancesMakesNoFinalCall() async throws {

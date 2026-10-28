@@ -2,7 +2,8 @@ import AutoNoteCore
 import Foundation
 
 /// Returns `results` in order, one per call, and records every request. Once they run out, call n returns
-/// `now: "呼び出し n"` with the previous decisions and todos. `hold()` parks the next single call until `release()`.
+/// `now: "呼び出し n"` with the previous decisions and todos. `hold()` parks the next single call until `release()`
+/// or until its task is cancelled.
 public actor ScriptedLiveSummarizer: LiveSummarizer {
     private let ready: SummarizerError?
     private var results: [Result<LiveSummaryOutput, SummarizerError>]
@@ -10,6 +11,8 @@ public actor ScriptedLiveSummarizer: LiveSummarizer {
     public private(set) var readyChecks = 0
     public private(set) var inFlight = 0
     public private(set) var maxConcurrent = 0
+    /// Calls that saw their task cancelled (a held call wakes on cancellation and throws `CancellationError`).
+    public private(set) var cancelledCalls = 0
     private var holdNext = false
     private var held: [CheckedContinuation<Void, Never>] = []
 
@@ -30,7 +33,15 @@ public actor ScriptedLiveSummarizer: LiveSummarizer {
         defer { inFlight -= 1 }
         if holdNext {
             holdNext = false
-            await withCheckedContinuation { held.append($0) }
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { held.append($0) }
+            } onCancel: {
+                Task { await self.release() }
+            }
+        }
+        if Task.isCancelled {
+            cancelledCalls += 1
+            throw CancellationError()
         }
         guard !results.isEmpty else {
             return LiveSummaryOutput(now: "呼び出し \(n)", decisions: r.previous.decisions, todos: r.previous.todos)

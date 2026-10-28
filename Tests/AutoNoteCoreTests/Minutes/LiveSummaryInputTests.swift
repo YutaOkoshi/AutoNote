@@ -53,6 +53,23 @@ import Foundation
         #expect(LiveSummaryInputBuilder.finalUtterances(mixed).map(\.text) == ["a", "新しい"])
     }
 
+    /// Final review Minor 1: an utterance confirmed late on the other track, ending before `consumedThrough`,
+    /// is new when it is not among the utterances already sent.
+    @Test func lateConfirmedUtteranceEndingBeforeConsumedThroughIsNew() throws {
+        let system = Utterance(start: TimelineTime(seconds: 280), end: TimelineTime(seconds: 300), speaker: .other,
+                               text: "相手の発言", isFinal: true)
+        let mic = Utterance(start: TimelineTime(seconds: 290), end: TimelineTime(seconds: 297), speaker: .me,
+                            text: "最後のひとこと", isFinal: true)
+        // Without the sent set (the CLI path) the end-time rule stands.
+        #expect(LiveSummaryInputBuilder.request(previous: state(consumedThrough: 300), confirmed: [system, mic]) == nil)
+        let r = try #require(LiveSummaryInputBuilder.request(previous: state(consumedThrough: 300), confirmed: [system, mic],
+                                                             alreadySent: [system]))
+        #expect(r.utterances == [system, mic])
+        #expect(r.consumedThrough == 297)
+        #expect(LiveSummaryInputBuilder.request(previous: state(consumedThrough: 300), confirmed: [system, mic],
+                                                alreadySent: [system, mic]) == nil)
+    }
+
     @Test func missingEndUsesStart() throws {
         let r = try #require(LiveSummaryInputBuilder.request(previous: .empty, confirmed: [u(50, nil, "a")]))
         #expect(r.consumedThrough == 50)

@@ -54,6 +54,10 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
         var backoffWait: TimeInterval?
         var backoffUntil: Date?
         var tasks: [Task<Void, Never>] = []
+        /// The call in flight, cancelled only when the scheduler itself is cancelled (quit), so the runner stops claude.
+        var inFlight: Task<Outcome, Never>?
+        /// The confirmed utterances already sent in a successful call this recording (what "new" is measured against).
+        var sent: Set<Utterance> = []
     }
 
     private enum Outcome: Sendable {
@@ -75,10 +79,19 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
     // MARK: - Inputs
 
     /// Never waits: `.paused` holds every session's calls, `.resumed` / `.started` / `.stopped` release them.
+    /// `.started` also logs `live summary: off (<id>)` when the setting is off, whether or not live transcription
+    /// starts (a meeting without a live transcript never gets a feed, so `drive` cannot log it).
     public func handle(_ e: RecordingEvent) {
         switch e {
         case .paused: paused = true
-        case .resumed, .started, .stopped: paused = false
+        case .started(let id):
+            paused = false
+            let deps = self.deps
+            Task {
+                guard !(await deps.settings().liveSummaryEnabled) else { return }
+                deps.log("live summary: off (\(id.rawValue))")
+            }
+        case .resumed, .stopped: paused = false
         default: break
         }
     }
@@ -91,6 +104,7 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
             sessions[id]?.cancelled = true
             sessions[id]?.sleeper?.cancel()
             for t in sessions[id]?.tasks ?? [] { t.cancel() }
+            sessions[id]?.inFlight?.cancel()
         }
     }
 
@@ -142,11 +156,7 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
     private func drive(_ id: MeetingID) async {
         let started = deps.clock.now()
         let initial = await deps.settings()
-        if initial.liveSummaryEnabled {
-            _ = await readySummarizer(id, initial)
-        } else {
-            deps.log("live summary: off (\(id.rawValue))")
-        }
+        if initial.liveSummaryEnabled { _ = await readySummarizer(id, initial) }  // off: `handle(.started)` logs it
         var due = started.addingTimeInterval(Self.interval(initial))
         while isRunning(id) {
             sessions[id]?.phase = .sleeping(until: due)
@@ -174,6 +184,7 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
         sessions[id]?.summarizer = nil
         sessions[id]?.confirmed = []
         sessions[id]?.tasks = []
+        sessions[id]?.sent = []
     }
 
     /// Returns the interval read at its start and whether it called the summarizer.
@@ -188,13 +199,17 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
         }
         guard let summarizer = await readySummarizer(id, settings) else { return (interval, false) }
         guard let current = sessions[id],
-              let request = LiveSummaryInputBuilder.request(previous: current.state ?? .empty, confirmed: current.confirmed) else {
+              let request = LiveSummaryInputBuilder.request(previous: current.state ?? .empty, confirmed: current.confirmed,
+                                                            alreadySent: current.sent) else {
             setStatus(id, .active)
             return (interval, false)
         }
         sessions[id]?.phase = .calling
-        let outcome = await Self.call(request, summarizer: summarizer, clock: deps.clock).value
-        await apply(outcome, to: id, interval: interval)
+        let call = Self.call(request, summarizer: summarizer, clock: deps.clock)
+        sessions[id]?.inFlight = call
+        let outcome = await call.value
+        sessions[id]?.inFlight = nil
+        await apply(outcome, to: id, request: request, interval: interval)
         return (interval, true)
     }
 
@@ -206,16 +221,19 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
         if let until = s.backoffUntil, deps.clock.now() < until { return }
         if await deps.queueInRateLimitWait() { return }
         guard let current = sessions[id],
-              let request = LiveSummaryInputBuilder.request(previous: current.state ?? .empty, confirmed: current.confirmed),
+              let request = LiveSummaryInputBuilder.request(previous: current.state ?? .empty, confirmed: current.confirmed,
+                                                            alreadySent: current.sent),
               let summarizer = await readySummarizer(id, settings) else { return }
         sessions[id]?.phase = .calling
         let deadline = deps.clock.now().addingTimeInterval(Self.finalCallTimeoutSeconds)
         let call = Self.call(request, summarizer: summarizer, clock: deps.clock)
+        sessions[id]?.inFlight = call
+        defer { sessions[id]?.inFlight = nil }
         guard let outcome = await Self.first(call, until: deadline, clock: deps.clock) else {
             deps.log("live summary: failed (timedOut) (\(id.rawValue))")
             return
         }
-        await apply(outcome, to: id, interval: Self.interval(settings))
+        await apply(outcome, to: id, request: request, interval: Self.interval(settings))
     }
 
     /// The session's summarizer, made and checked on first use; nil (and disabled, logged once) when that fails.
@@ -234,11 +252,12 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
         }
     }
 
-    private func apply(_ outcome: Outcome, to id: MeetingID, interval: TimeInterval) async {
+    private func apply(_ outcome: Outcome, to id: MeetingID, request: LiveSummaryRequest, interval: TimeInterval) async {
         guard sessions[id] != nil else { return }
         switch outcome {
         case .success(let state):
             sessions[id]?.state = state
+            sessions[id]?.sent.formUnion(request.utterances)
             sessions[id]?.failures = 0
             sessions[id]?.backoffWait = nil
             sessions[id]?.backoffUntil = nil
@@ -246,6 +265,7 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
             await deps.save(id, state)
             emit(id)
         case .failure(let error):
+            if error is CancellationError { return }       // the scheduler was cancelled (quit)
             switch error as? SummarizerError {
             case .rateLimited:
                 let wait = min((sessions[id]?.backoffWait ?? interval) * 2, Self.maxBackoffSeconds)
@@ -292,7 +312,8 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
         (error as? SummarizerError).map(ClaudeCodeSummarizer.className) ?? "failed"
     }
 
-    /// The call runs in its own task, so waking or cancelling the session never cancels it.
+    /// The call runs in its own task, so waking or closing the session never cancels it; only cancelling the
+    /// scheduler does (through `Session.inFlight`).
     /// `updatedAt` is when the result arrived.
     private static func call(_ r: LiveSummaryRequest, summarizer: any LiveSummarizer, clock: any QueueClock) -> Task<Outcome, Never> {
         Task.detached {

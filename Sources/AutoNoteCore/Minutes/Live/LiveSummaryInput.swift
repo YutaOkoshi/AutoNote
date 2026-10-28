@@ -26,10 +26,14 @@ public enum LiveSummaryInputBuilder {
         }
     }
 
-    /// Everything after `previous.consumedThrough` plus at least the last `contextSeconds`; nil when nothing is new.
-    public static func request(previous: LiveSummaryState, confirmed: [Utterance]) -> LiveSummaryRequest? {
+    /// Every new utterance and everything after `previous.consumedThrough`, plus at least the last `contextSeconds`;
+    /// nil when nothing is new. With `alreadySent` (the scheduler's in-memory record of this recording), an utterance
+    /// is new when it is not in it, so one confirmed late on the other track that ends before `consumedThrough` is
+    /// still sent once. Without it (a state read from a file) an utterance is new when it ends after `consumedThrough`.
+    public static func request(previous: LiveSummaryState, confirmed: [Utterance],
+                               alreadySent: Set<Utterance>? = nil) -> LiveSummaryRequest? {
         let usable = finalUtterances(confirmed)
-        let newer = usable.filter { endSeconds($0) > previous.consumedThrough }
+        let newer = usable.filter { u in alreadySent.map { !$0.contains(u) } ?? (endSeconds(u) > previous.consumedThrough) }
         guard let last = newer.map(endSeconds).max() else { return nil }
         let from = min(previous.consumedThrough, last - contextSeconds)
         let window = usable.enumerated()
