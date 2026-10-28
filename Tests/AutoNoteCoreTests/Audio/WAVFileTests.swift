@@ -36,7 +36,7 @@ import AutoNoteTestSupport
     private func ramp(_ n: Int, dataBytes: Int? = nil) throws -> URL {
         let url = try TemporaryDirectory.make().appending(path: "r.wav")
         var data = WAVFile.header(sampleRate: 16_000, channels: 1, bitsPerSample: 16, dataBytes: dataBytes ?? n * 2)
-        (0..<n).map { Int16($0) }.withUnsafeBytes { data.append(contentsOf: $0) }
+        (0..<n).map { Int16(truncatingIfNeeded: $0) }.withUnsafeBytes { data.append(contentsOf: $0) }
         try data.write(to: url)
         return url
     }
@@ -69,5 +69,14 @@ import AutoNoteTestSupport
         let url = try ramp(1000, dataBytes: 64_000)
         #expect(try WAVFile.readSamples(url, in: 900..<2000) == (900..<1000).map { Int16($0) })
         #expect(try WAVFile.readSamples(url, in: 2000..<3000).isEmpty)
+    }
+
+    @Test func rangedReadSpansSeveralChunks() throws {
+        // 1 200 000 サンプル（約 2.4 MB）。100 000..<1 150 000 は 1 MiB の読み取り単位を 2 回またぐ
+        let n = 1_200_000
+        let url = try ramp(n)
+        let expected = (0..<n).map { Int16(truncatingIfNeeded: $0) }
+        #expect(try WAVFile.readSamples(url, in: 100_000..<1_150_000) == Array(expected[100_000..<1_150_000]))
+        #expect(try WAVFile.readSamples(url) == expected)
     }
 }

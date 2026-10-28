@@ -14,6 +14,20 @@ private func s(_ seconds: Double) -> Int { Int(seconds * 16_000) }
         #expect(BatchWindowPlanner.Config() == .init(nominal: 600, lookback: 60, overlap: 5, tailMerge: 120))
     }
 
+    @Test func defaultsAndTheTestConfigPassThePreconditions() {
+        _ = BatchWindowPlanner()
+        _ = BatchWindowPlanner(config: small)
+        _ = BatchWindowPlanner(config: .init(nominal: 20, lookback: 0, overlap: 0, tailMerge: 0))
+    }
+
+    @Test func invalidConfigTraps() async {
+        // nominal ≤ 0 や負の overlap は plan が進まず無限ループ、負の lookback は Range で trap する
+        await #expect(processExitsWith: .failure) { _ = BatchWindowPlanner(config: .init(nominal: 0, lookback: 0, overlap: 0, tailMerge: 0)) }
+        await #expect(processExitsWith: .failure) { _ = BatchWindowPlanner(config: .init(nominal: 20, lookback: 6, overlap: -1, tailMerge: 4)) }
+        await #expect(processExitsWith: .failure) { _ = BatchWindowPlanner(config: .init(nominal: 20, lookback: -1, overlap: 5, tailMerge: 4)) }
+        await #expect(processExitsWith: .failure) { _ = BatchWindowPlanner(config: .init(nominal: 20, lookback: 6, overlap: 5, tailMerge: -1)) }
+    }
+
     @Test func shortFileIsOneWindow() {
         #expect(plan(tone(18), small) == [BatchWindow(index: 0, read: 0..<s(18), owned: 0..<s(18), isLast: true)])
         #expect(plan(tone(24), small).count == 1)

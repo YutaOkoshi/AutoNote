@@ -53,6 +53,8 @@ public struct BatchWindowPlanner: Sendable {
     private let config: Config
 
     public init(config: Config = .init()) {
+        precondition(config.nominal > 0 && config.lookback >= 0 && config.overlap >= 0 && config.tailMerge >= 0,
+                     "nominal must be positive and lookback, overlap and tailMerge non-negative")
         precondition(config.lookback <= config.nominal, "lookback must not exceed nominal")
         precondition(config.overlap < config.nominal, "overlap must be shorter than nominal")
         self.config = config
