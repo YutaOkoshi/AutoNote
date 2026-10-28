@@ -231,10 +231,16 @@ struct MinutesMissingView: View {
     let shell: AppShell
     let row: MeetingRow
     @State private var transcript: [LiveLine] = []
+    /// The stored live summary, kept read-only after the stop.
+    @State private var stored: LiveSummaryState?
 
     var body: some View {
         VStack(spacing: 0) {
             FailureBand(env: env, model: model, shell: shell, row: row, item: queueItem)
+            if let card = LiveSummaryPresentation.card(state: model.liveSummary(for: MeetingID(rawValue: row.id))?.state ?? stored,
+                                                       status: .active, updated: nil) {
+                LiveSummaryCard(content: card)
+            }
             if transcript.isEmpty {
                 ContentUnavailableView("確定版の文字起こしはありません", systemImage: "text.alignleft")
                     .frame(maxHeight: .infinity)
@@ -248,7 +254,9 @@ struct MinutesMissingView: View {
             }
         }
         .task(id: row.id) {
-            let t = try? await env.ports.meetings.transcript(MeetingID(rawValue: row.id), kind: .final)
+            let id = MeetingID(rawValue: row.id)
+            stored = try? await env.ports.meetings.liveSummary(id)
+            let t = try? await env.ports.meetings.transcript(id, kind: .final)
             transcript = LiveTranscriptView.lines(t?.utterances ?? [])
         }
     }

@@ -29,6 +29,11 @@ struct RecordingDetailView: View {
             .disabled(!active)
             .padding(12)
             Divider()
+            if let update = r.meetingID.flatMap(model.liveSummary(for:)),
+               let card = LiveSummaryPresentation.card(state: update.state, status: update.status,
+                                                       updated: model.liveSummaryUpdatedText) {
+                LiveSummaryCard(content: card)
+            }
             if model.live.lines.isEmpty {
                 Text("聞き取り中…")
                     .foregroundStyle(.secondary)

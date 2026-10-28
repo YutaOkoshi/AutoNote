@@ -10,6 +10,8 @@ struct ProcessingDetailView: View {
     let row: MeetingRow
     @State private var lines: [LiveLine] = []
     @State private var loadError: String?
+    /// The stored live summary, kept read-only after the stop.
+    @State private var stored: LiveSummaryState?
 
     var body: some View {
         let stage = queueItem?.stage ?? ""
@@ -42,6 +44,10 @@ struct ProcessingDetailView: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
+            if let card = LiveSummaryPresentation.card(state: model.liveSummary(for: MeetingID(rawValue: row.id))?.state ?? stored,
+                                                       status: .active, updated: nil) {
+                LiveSummaryCard(content: card)
+            }
             if let loadError {
                 ContentUnavailableView("文字起こしを読めませんでした", systemImage: "doc.questionmark", description: Text(loadError))
                     .frame(maxHeight: .infinity)
@@ -61,6 +67,7 @@ struct ProcessingDetailView: View {
 
     private func load() async {
         let id = MeetingID(rawValue: row.id)
+        stored = try? await env.ports.meetings.liveSummary(id)
         do {
             let transcript = try await env.ports.meetings.transcript(id, kind: .live)
             let replacer = Replacer(await Self.dictionary(env).replacements)
