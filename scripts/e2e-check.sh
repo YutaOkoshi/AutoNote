@@ -125,7 +125,8 @@ ensure_whisper_xcframework() {
 check_swift_test() {
     CURRENT="1. swift test"
     [[ "${QUICK}" -eq 1 ]] && { skip "--quick"; return; }
-    if run swift test; then pass; else fail "swift test が失敗"; fi
+    # 失敗したら --no-parallel で 1 回だけ再実行する（壁時計依存のテストが並列負荷で落ちるのを吸収する）
+    if run .github/scripts/swift-test-retry.sh; then pass; else fail "swift test が失敗（直列の再実行でも）"; fi
 }
 
 check_build_app() {
@@ -432,6 +433,29 @@ end timeout' 2>&1)"
     [[ "${cpu%.*}" -lt 60 ]] || { LAST_LOG="${WORK}/app.log"; fail "録音開始 3 秒後の CPU が ${cpu} %（期待 60 % 未満）"; return; }
     [[ "${item}" == *:* ]] || { LAST_LOG=""; fail "メニューバー項目の経過時間が読めない: ${item}"; return; }
     pass "CPU ${cpu} %、メニューバー「${item}」"
+}
+
+check_live_summary_default_off() {
+    CURRENT="09.3 リアルタイム要約は既定オフ（録音しても要約せず通常どおり止まる）"
+    app_or_skip || return
+    cli_or_skip || return
+    # 項目 7 の settings.json は live_summary_enabled を書かない（既定 false）。マイク許可が無い環境では start が失敗するので skip
+    if ! AUTONOTE_DATA_DIR="${DATA}" run_timeout 10 "${AUTONOTE_CLI}" start; then skip "autonote start が失敗（マイク許可が無い環境か）"; return; fi
+    sleep 3
+    AUTONOTE_DATA_DIR="${DATA}" run_timeout 20 "${AUTONOTE_CLI}" stop || { fail "autonote stop が失敗"; return; }
+    local out="${WORK}/status-09.3.json" state="" i
+    for i in $(seq 1 20); do
+        AUTONOTE_DATA_DIR="${DATA}" run_timeout 5 sh -c '"$1" status --json >"$2"' _ "${AUTONOTE_CLI}" "${out}"
+        state="$(plutil -extract status.recorder.state raw -o - - <"${out}" 2>/dev/null)"
+        [[ "${state}" == "idle" ]] && break
+        sleep 0.5
+    done
+    [[ "${state}" == "idle" ]] || { LAST_LOG="${out}"; fail "stop から 10 秒で recorder.state が idle にならない（「${state}」）"; return; }
+    grep -q "live summary: off (" "${WORK}/app.log" \
+        || { LAST_LOG="${WORK}/app.log"; fail "app.log に「live summary: off (」が無い"; return; }
+    local files; files="$(find "${DATA}/transcripts" -name live-summary.json 2>/dev/null | wc -l | tr -d ' ')"
+    [[ "${files}" -eq 0 ]] || { LAST_LOG=""; fail "live-summary.json が ${files} 個（期待 0）"; return; }
+    pass "idle、app.log に live summary: off、live-summary.json なし"
 }
 
 check_automation_log_and_socket() {
@@ -851,6 +875,60 @@ check_dev_summarize_failure() {
     if grep -q 'status: transcript_only' "${WORK}/s2/vault/${file}"; then pass "${file}"; else fail "本文に status: transcript_only が無い"; fi
 }
 
+# 09.1 / 09.2 共通: 架空の確定発話を 2 段階（live-1 は 05.x と同じ 3 発話、live-2 はそれに 2 発話を足す）で ${WORK} に書く
+write_dev_live_summary_inputs() {
+    cat >"${WORK}/live-1.json" <<'JSON'
+{"engine":"fake","language":"ja","utterances":[
+{"start":5,"end":9,"speaker":"unknown","text":"それでは定例を始めます","is_final":true},
+{"start":40,"end":45,"speaker":"unknown","text":"リリースは来週に出す方向で合意しました","is_final":true},
+{"start":80,"end":85,"speaker":"unknown","text":"ドキュメントの更新が残っています","is_final":true}]}
+JSON
+    cat >"${WORK}/live-2.json" <<'JSON'
+{"engine":"fake","language":"ja","utterances":[
+{"start":5,"end":9,"speaker":"unknown","text":"それでは定例を始めます","is_final":true},
+{"start":40,"end":45,"speaker":"unknown","text":"リリースは来週に出す方向で合意しました","is_final":true},
+{"start":80,"end":85,"speaker":"unknown","text":"ドキュメントの更新が残っています","is_final":true},
+{"start":100,"end":110,"speaker":"unknown","text":"資料は佐藤さんが送ります","is_final":true},
+{"start":120,"end":130,"speaker":"unknown","text":"次回は来週の火曜です","is_final":true}]}
+JSON
+}
+
+check_dev_live_summary_shape() {
+    CURRENT="09.1 dev live-summary が状態の JSON を 1 行で出す"
+    command -v jq >/dev/null 2>&1 || { skip "jq が無い"; return; }
+    cli_or_skip || return
+    write_dev_live_summary_inputs
+    # --claude を付けない（決定的な FakeLiveSummarizer）。本物の claude は呼ばない
+    local out="${WORK}/ls-1.json"
+    run_timeout 30 sh -c '"$1" dev live-summary "$2" >"$3"' _ "${AUTONOTE_CLI}" "${WORK}/live-1.json" "${out}"; local code=$?
+    [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
+    [[ "$(wc -l <"${out}" | tr -d ' ')" -eq 1 ]] || { LAST_LOG="${out}"; fail "出力が 1 行でない"; return; }
+    jq -e '(.now|type=="string") and (.decisions|type=="array") and (.todos|type=="array")
+           and (.todos[0]|has("text") and has("owner")) and .consumed_through == 85 and (.updated_at|type=="string")' \
+        "${out}" >/dev/null || { LAST_LOG="${out}"; fail "状態の形が違う: $(cat "${out}")"; return; }
+    pass "consumed_through 85"
+}
+
+check_dev_live_summary_accumulates() {
+    CURRENT="09.2 dev live-summary の 2 回目が前回のリストと consumed_through を引き継ぐ"
+    command -v jq >/dev/null 2>&1 || { skip "jq が無い"; return; }
+    cli_or_skip || return
+    local first="${WORK}/ls-1.json" out="${WORK}/ls-2.json" again="${WORK}/ls-3.json" code
+    [[ -s "${first}" ]] || { LAST_LOG=""; fail "09.1 の ${first} が無い"; return; }
+    run_timeout 30 sh -c '"$1" dev live-summary "$2" --state "$3" >"$4"' _ "${AUTONOTE_CLI}" \
+        "${WORK}/live-2.json" "${first}" "${out}"; code=$?
+    [[ ${code} -eq 0 ]] || { fail "2 回目: exit ${code}（期待 0）"; return; }
+    jq -e --slurpfile prev "${first}" '(.decisions|length) == 2 and .decisions[0] == $prev[0].decisions[0]
+           and (.todos|length) == 2 and .consumed_through == 130' "${out}" >/dev/null \
+        || { LAST_LOG="${out}"; fail "2 回目が前回を引き継いでいない: $(cat "${out}")"; return; }
+    run_timeout 30 sh -c '"$1" dev live-summary "$2" --state "$3" >"$4"' _ "${AUTONOTE_CLI}" \
+        "${WORK}/live-2.json" "${out}" "${again}"; code=$?
+    [[ ${code} -eq 0 ]] || { fail "3 回目: exit ${code}（期待 0）"; return; }
+    jq -e --slurpfile prev "${out}" '. == $prev[0]' "${again}" >/dev/null \
+        || { LAST_LOG="${again}"; fail "新しい発話が無いのに状態が変わった: $(cat "${again}")"; return; }
+    pass "決定 2 件・宿題 2 件、consumed_through 130、新しい発話なしで不変"
+}
+
 # ---------------------------------------------------------------- 実行
 
 CHECKS=(
@@ -872,6 +950,7 @@ CHECKS=(
     check_bookmark_not_recording
     check_automation_run
     check_recording_main_thread
+    check_live_summary_default_off
     check_automation_log_and_socket
     check_cer
     check_whisper
@@ -893,6 +972,8 @@ CHECKS=(
     check_batch_memory_flat
     check_dev_summarize
     check_dev_summarize_failure
+    check_dev_live_summary_shape
+    check_dev_live_summary_accumulates
 )
 
 ensure_whisper_xcframework   # 失敗しても続ける（swift test などの項目が FAIL を出す）

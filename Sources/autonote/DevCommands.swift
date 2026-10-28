@@ -19,9 +19,10 @@ enum DevCommands {
         case "transcribe": return await DevTranscribe.run(rest)
         case "models": return await DevModels.run(rest)
         case "summarize": return await DevSummarize.run(rest)
+        case "live-summary": return await DevLiveSummary.run(rest)
         default:
             return usageError([renderFixtureUsage, DevRecord.usage, DevImport.usage, DevAutoRecord.usage, DevDevices.usage,
-                               DevEngines.usage, DevTranscribe.usage, DevModels.usage, DevSummarize.usage].joined(separator: "\n"))
+                               DevEngines.usage, DevTranscribe.usage, DevModels.usage, DevSummarize.usage, DevLiveSummary.usage].joined(separator: "\n"))
         }
     }
 
