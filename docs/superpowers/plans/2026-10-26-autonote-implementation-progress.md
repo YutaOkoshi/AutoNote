@@ -504,6 +504,50 @@ Approve with fixes（Critical 0 / Important 3 / Minor 8）。修正波（opus、
 #### Lead 検証
 `swift test --no-parallel` 946/946（88 スイート）。`scripts/build-app.sh` OK。E2E 40 項目のうち 39 PASS、項目 1（並列 `swift test`）だけが上記の wall-clock クラスで FAIL（3 回とも負荷あり）。08.1 PASS（RSS 420→509〜537 MB、footprint 327→334〜341 MB、窓 6 個）、08.2 PASS。被験者テストは画面の変更がないため実施しない（計画 09 でまとめて行う）。
 
+### 計画 09（台帳から転記、2026-10-28）
+
+仕様 `docs/superpowers/specs/2026-10-28-live-summary-design.md`（builder check に裁定済み）、計画 `docs/superpowers/plans/2026-10-28-autonote-09-live-summary.md`（opus が作成、9 タスク）。ブランチ plan-08 の続き（計画 08 の 9e51063 から）。利用者の要望（2026-10-28）: 「今何の話をしているんだっけ？」の 1 文と、開始からの決定事項・宿題を 10〜30 秒単位でリアルタイムに見たい。間隔は設定画面から変えたい。
+
+#### タスクと担当モデル・コミット
+- Task 1 設定 3 キー（既定オフ・20 秒・haiku）と一般タブの節、`externalNotice`（sonnet、5e406bf）。レビュー sonnet: ✅ / Approved。
+- Task 2 `LiveSummaryState`・入力の切り出し（`consumedThrough` 以降 ∪ 直近 120 秒、8,000 文字で「[前略]」）・プロンプト・スキーマ・保存（opus、cdfa283 + 修正 e9fe34a）。レビュー opus: ✅ / Important 1（`consumedThrough` 以降を全部送るテストの穴）→ 修正ラウンド 1（テストのみ、変異で赤を確認）→ 受け入れ。
+- Task 3 `ClaudeLiveSummarizer`（`arguments(schema:model:)` と `classify(_:as:)` を最終議事録と共有、60 秒、`live-summary-cwd`）、`FakeLiveSummarizer`（opus、3bf0464）。レビュー opus: ✅ / Approved。
+- Task 4 `LiveTranscriptionWiring.confirmedFeeds()`（会議 ID つきの確定発話の流れ。`LiveFeed.finish()` 後に閉じる）（opus、315795d）。レビュー opus: ✅ / Approved。
+- Task 5 `LiveSummaryScheduler`（周期・一時停止・利用制限の ×2 バックオフ上限 300 秒・待ち行列の利用制限中は休止・3 回失敗で failing・停止時の最後の 1 回 60 秒）（opus、c816893）。レビュー opus: ✅ / Approved。
+- Task 6 `AppModel` への配線・`LiveSummaryPresentation`（カード文言）・`MeetingsPort.liveSummary`・アプリ配線（opus、d2538c3 + 修正 7f3fa99）。レビュー opus: ✅ / Important 1（「n 秒前に更新」がティックで進むテストの穴）→ 修正ラウンド 1（テストのみ、変異で赤を確認）→ 受け入れ。
+- Task 7 カードの画面（録音中・処理中・議事録なし）（opus、bdf6f62）。偽 claude での GUI 確認（スクリーンショット 4 枚）と E2E 全件。レビュー opus: ✅ / Approved。
+- Task 8 CLI `dev live-summary`（既定は偽、`--claude` で本物）、E2E 09.1〜09.3、E2E 1 番を `swift-test-retry.sh` 経由に（opus、0a5fa78）。レビュー opus: ✅ / Approved。
+- Task 9 概要 §8k・利用者ガイドの節・仕様の追記（opus、b6636ae）。レビュー sonnet: ✅ / 正確性 ✅。
+
+#### 事前スキャン（2026-10-28）
+sonnet が表を作成（組 21 行・自己 9 行）。仕様の値はすべて一致、未定義の名前なし。裁定 8 件: (1) CLI の usage 登録は既存の型に従う、(2) `claude auth status` は録音開始時に要約側の Task で 1 回、(3) 停止後の読み取り専用カードは「n 秒前に更新」を出さない（仕様に追記）、(4) E2E 09.3 の `live summary: off (` は録音開始ごとに必ず出す、(5) 計画に assertion の無いテスト名は実装者が具体的な `#expect` を書く、(6) 重複ロジック（最終発話のフィルタ・claude の探索・E2E のフィクスチャ）は 1 か所に、(7) Task 7 と 09.3 のマイクは `say -v Kyoko` で 👤 不要、(8) Task 1〜5/9 は `--quick`、7/8 と Lead 検証は全件。
+
+#### 裁定
+- Task 7 の裁定: カードの高さは `onGeometryChange` で測った内容の高さと 220 pt の小さい方（`maxHeight` だけでは余白が残る）。利用制限の表示確認は同じ録音内で偽 claude を切り替えて行った。
+- Task 8 の裁定: E2E は 41 ではなく 43 項目（変更前が 39 関数 40 行の数え違い）。`live summary: off (` はスケジューラが既に出していた。
+- テスト数: `swift test --no-parallel` 1025 件（95 スイート）。計画 08 で持ち越した wall-clock クラスの flake は、E2E 1 番を CI と同じ再試行スクリプトに変えて吸収した（今回の Lead 検証では再試行なしで通過）。
+
+#### 最終レビュー（opus、9e51063..b6636ae）と修正波
+Ready to merge（Critical 0 / Important 0 / Minor 4）。Review Focus 5 件はそれぞれ名前のとおりのテストがあり、規則を壊すと落ちることを確認。判断保留（すべて範囲外と裁定）: 設定 JSON の型違いで全体のデコードが落ちる（既存の型）、別会議の呼び出しの同時実行（仕様は同一会議内だけ禁止）、議事録と利用枠の共有カウンタなし、間隔変更が現在の待ちの後から効く（仕様どおり）、破棄した会議の `live-summary.json` が空ディレクトリを作り直す（無害）、CLI が TestSupport をリンク（既存）、議事録経路の終了時の孤児プロセス。
+修正波（opus、b6636ae → 468bf7d, ca97665）: F1 遅れて確定した他トラックの発話が停止時の最後の 1 回から漏れる → 録音ごとに「送った発話」の集合で判定（`consumedThrough`・ファイル・CLI は不変）、F2 終了時に進行中の claude を取り消す（ランナーの取り消しで子プロセスを止める。Task 3 で退避した held call の取り消し無視も解消）、F3 ライブ文字起こしが始められなくても `live summary: off (` を出す（スケジューラが `.started` で出す形に）、F4 ガイドの休止・失敗の説明、Task 8 M1 09.3 が off 行の件数の増加を見る、Task 7 M1 会議切り替え時に `stored` を消して取り消し済みの読み込みを捨てる。再レビュー（opus）: 6/6 Addressed、回帰なし。
+
+#### 繰り越した Minor（未対応。次の計画の該当箇所を触るときに拾う）
+- 終了が `tick`/`finalCall` の `inFlight` 設定前の待ちに重なると、その後に始まる呼び出しは取り消されない。最後の 1 回が 60 秒で打ち切られても claude プロセスはランナー自身の 60 秒まで走る。
+- `pausedForRateLimit` の表示が通常の失敗の後に残ることがある。一時停止/オフが判定と呼び出しの間に入ると 1 回余計に呼ぶ。会議ごとの記録は終了まで残り、33 会議で 32 深さの再生から録音中の更新が落ちうる。60 秒上限のテストは 59 秒で見ている。
+- `applyLiveSummary` と `updateElapsed` の有効会議の guard が重複。`AppDelegate` の `liveSummaryTask` の doc comment。初回表示の 1 フレームで高さ 0 のカード。停止後 2 ビューでカード式が重複。
+- CLI: `--state --claude` が `--claude` をファイル名として読む（exit 1）。`FakeLiveSummarizer` の文言は E2E でしか固定されていない。timeout がランナーに渡ることのテストなし。
+- 利用制限で議事録の待ちに入っているときの表示文と、ライブ要約自身のバックオフの表示文が同じ（意図どおりだが区別できない）。
+
+#### Lead 検証（ca97665、負荷 2.5〜2.7）
+`swift test --no-parallel` 1025/1025（95 スイート、64 秒）。`scripts/build-app.sh` OK。E2E 43/43（201 秒）: 1 番は再試行なしで通過、09.1（consumed_through 85）、09.2（2 回目で決定 2 件・宿題 2 件・consumed_through 130 を引き継ぎ、新しい発話なしで不変）、09.3（off 行 1→2 件、live-summary.json なし）。
+
+#### 実機確認（ゼロコンテキスト被験者 2 名、リアルタイム要約オン・本物の claude、2026-10-28）
+手順は計画 07 と同じ（新規 `AUTONOTE_DATA_DIR`、`defaults delete`、デスクトップのテストフォルダ削除、`say -v Kyoko` の会議音声を背景で 2 話題ループ、axtool のみで操作、画面以外は読まない）。ブリーフは計画 09 用に課題を差し替えた（設定を自力で探してオン → 120 秒録音して 30 秒ごとに観察 → 停止後の変化 → 終了）。スクリーンショットと全文は scratchpad `zc-shots-p09-1/`・`zc-shots-p09-2/`。
+- 結果: 2 名とも 5 課題すべて成功、所感 4/5・4/5。設定は一般タブ最下部の「リアルタイム要約」>「録音中に要約を表示する」（既定オフ）を 4〜6 手で発見。録音開始から 30 秒で「いま／決定事項／宿題」が出て、20 秒ごとに育った（被験者 2: 決定 3→7 件、宿題 1→3 件、「いま」は議題確認 → 予算 → 採用面接と追随。宿題に担当「— 鈴木」が付く）。停止直後もカードが残り、約 60 秒後に議事録に置き換わった（引用「新機能のリリースは11月10日を目標とし、田中さんが今週中にテスト結果をまとめる。」）。`live-summary.json` は `consumed_through` 172.8、決定 7・宿題 3 で保存されていた。
+- 両名が挙げた最大の問題（P1、計画 10 へ）: 要約欄が伸びると 220 pt で切れ、一番大事な宿題と「n 秒前に更新」がスクロール領域の中に隠れる。スクロールできる見た目の手がかりもない。対策案: 更新時刻の行をスクロール領域の外に出す、上限を高さではなく件数で切って「ほか n 件」を出す、またはカードを折りたたみ式にする。
+- その他の指摘: 設定の注意書きとスイッチが既定のウィンドウ高では画面外（スクロールが要る）。停止直後のカードに「録音中の暫定版」という表示がない。最初の更新で既に話した決定事項が「（なし）」だった（モデルの初回応答。2 回目で回復）。停止直後に「いま」が 1 つ前の話題に戻った（被験者 2。会議音声が 6 行をループしているため、停止時点の実際の話題がそれで、誤りではない可能性が高い。本物の会議で再確認）。録音の長さが一覧「3 分」と帯「2 分 40 秒」で食い違う（既存。丸めの違い）。
+- 利用枠: 録音約 2.5〜3 分で 1 名あたり約 8〜9 回の `claude -p`（haiku）+ 議事録 1 回。
+
 ## 利用者への依頼（後回しにした 👤 手順）
 
 ### 計画 02 Task 1（TCC まとめ確認）— 2026-10-26
