@@ -27,6 +27,9 @@ public enum LiveSummaryPresentation {
     public static let emptyItem = "（なし）"
     public static let pausedText = "要約を休止中（Claude の利用制限）"
     public static let failingText = "要約を更新できません"
+    /// The collapse toggle's accessibility labels (plan 10).
+    public static let collapseLabel = "要約を折りたたむ"
+    public static let expandLabel = "要約を広げる"
 
     /// Whole seconds since `updatedAt`, never negative.
     public static func updatedText(updatedAt: Date, now: Date) -> String {

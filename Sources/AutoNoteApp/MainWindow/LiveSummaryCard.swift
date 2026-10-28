@@ -2,45 +2,95 @@ import AutoNoteCore
 import SwiftUI
 
 /// The live summary (plan 09): what is being discussed now, the decisions and the to-dos, in a band like
-/// `StatusHeader`'s. Scrolls inside a capped height so a long list never pushes the live transcript away.
+/// `StatusHeader`'s. Three parts (plan 10): a header with 「いま」 and the collapse toggle, a body with the
+/// decisions and to-dos that scrolls inside a capped height (a fade at its foot when more is below), and a
+/// footer with the status and 「n 秒前に更新」 that stays visible even when collapsed.
 struct LiveSummaryCard: View {
     let content: LiveSummaryCardContent
-    /// The content's own height, so a short summary takes only its rows and a long one stops at 220 pt.
+    /// One preference shared by the recording, processing and minutes-missing screens; expanded by default.
+    @AppStorage("live_summary_card_collapsed") private var collapsed = false
+    /// The body's own height, so a short summary takes only its rows and a long one stops at the cap.
     @State private var contentHeight: CGFloat = 0
 
+    private static let maxBodyHeight: CGFloat = 220
+    private static let fadeHeight: CGFloat = 18
+    private static let bandColor = Color.secondary.opacity(0.12)
+
     var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            header
+            if !collapsed { scrollingBody }
+            footer
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Self.bandColor)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                title(LiveSummaryPresentation.nowTitle)
+                Text(content.now).font(.body.bold()).lineLimit(1).truncationMode(.tail)
+            }
+            Spacer(minLength: 0)
+            Button(action: toggle) {
+                Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                    .frame(width: 16, height: 16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(collapsed ? LiveSummaryPresentation.expandLabel : LiveSummaryPresentation.collapseLabel)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: toggle)
+    }
+
+    private var scrollingBody: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
-                title(LiveSummaryPresentation.nowTitle)
-                Text(content.now).font(.body.bold())
                 title(LiveSummaryPresentation.decisionsTitle)
                 items(content.decisions)
                 title(LiveSummaryPresentation.todosTitle)
                 items(content.todos)
-                if content.status != nil || content.updated != nil {
-                    HStack(spacing: 8) {
-                        Spacer()
-                        if let status = content.status {
-                            Text(status).font(.caption).foregroundStyle(.secondary)
-                        }
-                        if let updated = content.updated {
-                            Text(updated).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         }
+        .scrollIndicators(.visible)
         .scrollBounceBehavior(.basedOnSize)
-        // The content's height, capped at 220 pt (a plain `maxHeight` frame would grow to the cap even for 3 rows).
-        .frame(height: min(contentHeight, 220))
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(Color.secondary.opacity(0.12))
-        .overlay(alignment: .bottom) { Divider() }
+        // The content's height, capped (a plain `maxHeight` frame would grow to the cap even for 3 rows).
+        .frame(height: min(contentHeight, Self.maxBodyHeight))
+        .overlay(alignment: .bottom) {
+            if contentHeight > Self.maxBodyHeight {
+                // 「続きがある」: the band's own color rising to clear over the last rows.
+                LinearGradient(colors: [Self.bandColor.opacity(0), Self.bandColor], startPoint: .top, endPoint: .bottom)
+                    .frame(height: Self.fadeHeight)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    /// The status (paused / failing) and 「n 秒前に更新」, outside the scroll area; absent when both are nil.
+    @ViewBuilder private var footer: some View {
+        if content.status != nil || content.updated != nil {
+            HStack(spacing: 8) {
+                Spacer()
+                if let status = content.status {
+                    Text(status).font(.caption).foregroundStyle(.secondary)
+                }
+                if let updated = content.updated {
+                    Text(updated).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func toggle() {
+        withAnimation(.easeInOut(duration: 0.15)) { collapsed.toggle() }
     }
 
     private func title(_ text: String) -> some View {

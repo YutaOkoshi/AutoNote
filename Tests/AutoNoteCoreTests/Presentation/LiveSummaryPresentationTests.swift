@@ -42,4 +42,9 @@ import AutoNoteTestSupport
         #expect(LiveSummaryPresentation.pausedText == "要約を休止中（Claude の利用制限）")
         #expect(LiveSummaryPresentation.failingText == "要約を更新できません")
     }
+
+    @Test func collapseToggleLabels() {
+        #expect(LiveSummaryPresentation.collapseLabel == "要約を折りたたむ")
+        #expect(LiveSummaryPresentation.expandLabel == "要約を広げる")
+    }
 }
