@@ -40,7 +40,7 @@
 5. **表示。** 録音中の右ペイン（`RecordingDetailView`）のライブ文字起こしの**上**にカードを置く: 「いま」（太字の 1 文）、「決定事項」（箇条書き）、「宿題」（箇条書き。担当があれば末尾に「— 担当」）、右下に「n 秒前に更新」。最初の結果が来るまでカードは出さない（「準備中」も出さない）。オフのときは出さない。停止後の `ProcessingDetailView` と、議事録が作れなかった会議の `MinutesMissingView`（transcript_only / failed。利用制限で議事録が無いときはこれが唯一の要約）にも同じカードを読み取り専用で残し、議事録ができたら（`CompletedDetailView`）出さない。
 6. **保存。** 更新のたびに `transcripts/<id>/live-summary.json`（`live.json` の隣。状態 + 更新時刻 + `consumedThrough`）を書く。再起動後に `ProcessingDetailView` が読めるように。manifest・minutes.json・最終議事録は変えない。
 7. **設定画面。** 一般タブの Claude の設定（モデル・パス）の下に「リアルタイム要約」の節: オン/オフ（`liveSummaryEnabled`、**既定オフ**。会議中に発話テキストを Claude に送り続け、利用枠を消費するため。利用者は自分でオンにする）、更新間隔（秒。10〜120、既定 20）、モデル（既定 `haiku`）。JSON キーは snake_case（`live_summary_enabled` / `live_summary_interval_seconds` / `live_summary_model`）。間隔の変更は次の周期から効く（録音の再開始は要らない）。一般タブの外部送信の説明文（`externalNotice`）に「リアルタイム要約をオンにすると録音中も確定した発話のテキストを送る」を足す。議事録タブ（`_autonote/` のファイル編集）には置かない。
-8. **プロンプト。** `DefaultPrompt.liveInstructions` に固定文を置く。言語は議事録と同じ設定。「推測で決定事項を作らない」「決まっていないことは宿題にも入れない」「`now` は話題を名詞中心の 1 文で」を明記する。スキーマは `--json-schema` で固定。
+8. **プロンプト。** `DefaultPrompt.liveInstructions` に固定文を置く。出力の言語は発話と同じ言語（上の 1。言語の設定は作らない）。「推測で決定事項を作らない」「決まっていないことは宿題にも入れない」「`now` は話題を名詞中心の 1 文で」を明記する。スキーマは `--json-schema` で固定。
 9. **CLI と E2E。** `autonote dev live-summary <live.json> [--state <json>] [--claude]` を足す。`dev summarize` と同じ向きで、`--claude` を付けたときだけ本物の claude を呼び、付けなければ決定的な偽の状態（発話数と `consumedThrough` から作る）を返す。E2E はこれで JSON の形と累積（2 回目の呼び出しで前回のリストと `consumedThrough` が引き継がれる）を固定する。GUI 側の周期・条件・バックオフ・停止時の最後の 1 回は `swift test`（偽の要約器 + 偽の時計。`AppModel.settle()` の `streamCount` を購読の追加に合わせて直す）で固定する。GUI の E2E は既定オフなので claude を呼ばない（E2E 13 番の方針どおり）。「カードが出ない・録音が通常どおり止まる」だけ確かめる。
 
 ## 制約
