@@ -548,6 +548,24 @@ Ready to merge（Critical 0 / Important 0 / Minor 4）。Review Focus 5 件は�
 - その他の指摘: 設定の注意書きとスイッチが既定のウィンドウ高では画面外（スクロールが要る）。停止直後のカードに「録音中の暫定版」という表示がない。最初の更新で既に話した決定事項が「（なし）」だった（モデルの初回応答。2 回目で回復）。停止直後に「いま」が 1 つ前の話題に戻った（被験者 2。会議音声が 6 行をループしているため、停止時点の実際の話題がそれで、誤りではない可能性が高い。本物の会議で再確認）。録音の長さが一覧「3 分」と帯「2 分 40 秒」で食い違う（既存。丸めの違い）。
 - 利用枠: 録音約 2.5〜3 分で 1 名あたり約 8〜9 回の `claude -p`（haiku）+ 議事録 1 回。
 
+### 計画 10（小。台帳は scratchpad `plan10-card/`、2026-10-28）
+
+利用者の指示（2026-10-28、v0.2.0 公開後）: 「『n 秒前に更新』の行だけスクロール領域の外に出す。更新中かどうかは常に見えるように」「カードを折りたたみ式にして、必要なときだけ全体を広げる」「スクロールできるようにして」。計画 09 の被験者 2 名が最大の問題に挙げたカードの高さ切れへの対処。ブランチ plan-10（main c2bbb63 から）。仕様書は作らず、Lead のブリーフ（scratchpad `plan10-card/brief.md`）を要件にした。
+
+#### 実装（opus、c2bbb63 → ed7221a, 106894d, ae1782b）
+- `LiveSummaryCard` を 3 段に: ヘッダ（「いま」の 1 文を 1 行で、右端に折りたたみボタン。ヘッダ全体のクリックでも切り替え）、本文（決定事項・宿題だけが ScrollView、`min(内容, 220 pt)`、`scrollIndicators(.visible)`、溢れていて末尾でないときだけ下端 18 pt を `mask` のグラデーションで消す。`onScrollGeometryChange` で末尾を検出）、フッタ（状態と「n 秒前に更新」。スクロール外で常に見え、折りたたんでも残る）。
+- 折りたたみは `@AppStorage("live_summary_card_collapsed")`（既定は広げる。録音中・処理中・議事録なしの 3 画面で共有）。ボタンの accessibility label は `LiveSummaryPresentation.collapseLabel`「要約を折りたたむ」/ `expandLabel`「要約を広げる」（テストで固定）。
+- 副産物: v0.2.0 の版上げで `Info.plist` だけを 0.2.0 にし `AutoNoteVersion.current` が 0.1.0 のままだった（E2E 5b で検出。v0.2.0 の manifest と vault の `appVersion` は 0.1.0 と書かれる）。定数を 0.2.0 に揃え、`.github/scripts/release-version.sh` に両者の不一致で失敗する guard を足した。**次回から版上げは `Resources/Info.plist` と `Sources/AutoNoteCore/AutoNoteVersion.swift` の両方。**
+- 偽 claude（決定 10 件・宿題 6 件）での GUI 確認: 広げた状態で下端のフェードとフッタ、末尾までスクロールで最後の宿題が見える、折りたたみでヘッダとフッタだけ、停止後の画面に折りたたみが引き継がれフッタは出ない（scratchpad `plan10-card/shots/`）。
+
+#### レビューと裁定
+- レビュー（opus、c2bbb63..106894d）: 仕様 ✅ / Approved、Critical・Important なし。Minor「末尾までスクロール → 折りたたみ → 広げ直すと `atEnd` が残りフェードが出ない」→ 修正ラウンド 2（ae1782b、切り替えと本文の `onAppear` で `atEnd = false`）。
+- 受け入れた逸脱: chevron のクリック領域 16×16 pt。`@AppStorage` は本物の UserDefaults ドメインに書く（データディレクトリとは別。被験者テストの `defaults delete` で消える）。
+- 裁定: 実装者の最初の E2E で 7b/07.3 が落ちたのは、録音中のアプリを `kill` で止めようとして `QuitPolicy` が終了を拒んだまま残っていたため（設計どおり）。**GUI 確認の後始末はメニューの「終了」で行う**。`AudioImporter.swift:96` の Sendable 警告（`AVAssetTrack` のクロージャ捕捉）は既存で、フルリビルド時だけ出る。未対応。
+
+#### Lead 検証（106894d、負荷 2.3〜4.2）
+`swift build` 警告 0（増分）。`swift test --no-parallel` 1026/1026（95 スイート、65 秒）。`scripts/build-app.sh` OK。E2E 43/43（205 秒、5b は 0.2.0 で一致、1 番は再試行なし）。ae1782b は build + `--quick` 37/0/6。被験者テストは未実施（指示があれば計画 09 の手順で回す）。
+
 ## 利用者への依頼（後回しにした 👤 手順）
 
 ### 計画 02 Task 1（TCC まとめ確認）— 2026-10-26
