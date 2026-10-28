@@ -119,6 +119,20 @@ import Testing
         #expect(zip(values, values.dropFirst()).allSatisfy { $0 <= $1 })
     }
 
+    @Test func importedTrackRunsThroughWindows() async throws {
+        let (paths, m) = try setUp([(.mic, "import-000.wav", 0, 40)], source: .imported)
+        try PCMAudio.writeWAV(tone(40), to: paths.tracksDirectory(m.id).appending(path: "import-000.wav"))   // setUp は無音を書く
+        let core = FakeWhisperCore(windows: [[.init(start: 1, end: 3, text: "前")], [.init(start: 6.5, end: 8, text: "後")]])
+        let windows = BatchWindowPlanner.Config(nominal: 20, lookback: 6, overlap: 5, tailMerge: 4)
+        let gate = BatchGate()
+        let r = try await FinalTranscriptionRunner(
+            transcriber: WhisperBatchTranscriber(core: core, gate: gate, windows: windows), engineName: engine, paths: paths, gate: gate)
+            .run(manifest: m, dictionary: DictionaryFile.default, fillerRemoval: false, progress: { _ in })
+        #expect(core.runCount == 2)
+        #expect(r.raw.utterances.map(\.start.seconds) == [1, 21.5])
+        #expect(r.raw.utterances.map(\.speaker) == [.unknown, .unknown])
+    }
+
     @Test func cancellationIsRethrownAsIs() async throws {
         let (paths, m) = try setUp([(.mic, "mic-000.wav", 0, 2)])
         let gate = BatchGate()

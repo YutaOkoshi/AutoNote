@@ -38,10 +38,13 @@ public struct TranscriberFactory: Sendable {
         WhisperLiveTranscriber(core: try WhisperContext(modelURL: modelURL, machine: machine, threads: liveWhisperThreads))
     }
 
-    /// Batch whisper on a model file outside the manager (the dev CLI's `--model-path`).
-    public static func whisperBatch(modelURL: URL, machine: MachineKind, gate: BatchGate) throws -> any BatchTranscriber {
+    /// Batch whisper on a model file outside the manager (the dev CLI's `--model-path`). `log` gets one line per
+    /// window (nil: the unified log).
+    public static func whisperBatch(modelURL: URL, machine: MachineKind, gate: BatchGate,
+                                    log: (@Sendable (String) -> Void)? = nil) throws -> any BatchTranscriber {
         WhisperBatchTranscriber(
-            core: try WhisperContext(modelURL: modelURL, machine: machine, threads: WhisperContext.batchThreads), gate: gate)
+            core: try WhisperContext(modelURL: modelURL, machine: machine, threads: WhisperContext.batchThreads), gate: gate,
+            log: log ?? WhisperBatchTranscriber.systemLog)
     }
 
     private func modelURL(_ c: EngineChoice) async throws -> URL {

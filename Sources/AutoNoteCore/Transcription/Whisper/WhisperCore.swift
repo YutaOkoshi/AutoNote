@@ -30,7 +30,7 @@ public enum WhisperDecodeMode: Sendable {
 }
 
 public struct WhisperRunRequest: Sendable {
-    /// 16 kHz mono samples of the whole file (or live window).
+    /// 16 kHz mono samples of one batch window (or live window).
     public var samples: [Float]
     /// Where decoding starts inside `samples` (whisper `offset_ms`).
     public var offsetSeconds: Double
