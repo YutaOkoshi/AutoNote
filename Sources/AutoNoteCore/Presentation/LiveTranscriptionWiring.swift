@@ -16,6 +16,19 @@ public struct LiveFeedStart: Sendable {
     }
 }
 
+/// One meeting's confirmed utterances: each element is the whole display list reduced to finals without markers
+/// (dictionary replacements applied). Only the newest is kept for a slow reader; the stream ends after the meeting's
+/// `LiveFeed.finish()` has drained its last results.
+public struct LiveConfirmedFeed: Sendable {
+    public let meetingID: MeetingID
+    public let utterances: AsyncStream<[Utterance]>
+
+    public init(meetingID: MeetingID, utterances: AsyncStream<[Utterance]>) {
+        self.meetingID = meetingID
+        self.utterances = utterances
+    }
+}
+
 /// Drives a `LiveFeed` from the recording events (overview §8b (3)) and republishes its display list.
 /// A feed that cannot be made or started is logged; the meeting records on without a live transcript.
 public actor LiveTranscriptionWiring: LiveTranscriptPort {
@@ -32,6 +45,10 @@ public actor LiveTranscriptionWiring: LiveTranscriptPort {
     private var subscribers: [UUID: AsyncStream<[Utterance]>.Continuation] = [:]
     /// The newest display list, handed to each new subscriber; nil until a feed has published one.
     private(set) var latest: [Utterance]?
+    private var feedSubscribers: [UUID: AsyncStream<LiveConfirmedFeed>.Continuation] = [:]
+    /// Kept outside `Running`: `stop()` clears `running` first, but the forward task still publishes until it ends.
+    private var confirmedStreams: [MeetingID: [UUID: AsyncStream<[Utterance]>.Continuation]] = [:]
+    private var latestConfirmed: [MeetingID: [Utterance]] = [:]
 
     public init(audio: @Sendable @escaping (Track) async -> AsyncStream<AudioChunk>,
                 makeFeed: @Sendable @escaping (MeetingID) async throws -> LiveFeedStart) {
@@ -70,6 +87,29 @@ public actor LiveTranscriptionWiring: LiveTranscriptPort {
         return stream
     }
 
+    /// Each subscriber gets one `LiveConfirmedFeed` per meeting whose feed started (the running one at once).
+    public func confirmedFeeds() -> AsyncStream<LiveConfirmedFeed> {
+        let (stream, continuation) = AsyncStream<LiveConfirmedFeed>.makeStream()
+        let id = UUID()
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.unsubscribeFeeds(id) }
+        }
+        feedSubscribers[id] = continuation
+        if let running { continuation.yield(confirmedFeed(for: running.id)) }
+        return stream
+    }
+
+    private func confirmedFeed(for meeting: MeetingID) -> LiveConfirmedFeed {
+        let (stream, continuation) = AsyncStream<[Utterance]>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let id = UUID()
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.unsubscribeConfirmed(id, from: meeting) }
+        }
+        confirmedStreams[meeting, default: [:]][id] = continuation
+        if let latest = latestConfirmed[meeting] { continuation.yield(latest) }
+        return LiveConfirmedFeed(meetingID: meeting, utterances: stream)
+    }
+
     private func begin(_ id: MeetingID) async {
         // Clear the previous meeting first: a meeting whose feed cannot be built shows no live transcript.
         publish([])
@@ -83,8 +123,10 @@ public actor LiveTranscriptionWiring: LiveTranscriptPort {
             return
         }
         let feed = start.feed
+        // Register before the forward task can publish, so no subscriber misses the first list.
+        for continuation in feedSubscribers.values { continuation.yield(confirmedFeed(for: id)) }
         let forwardTask = Task {
-            for await utterances in list { self.publish(utterances) }
+            for await utterances in list { self.publish(utterances, for: id) }
         }
         var audioTasks: [Task<Void, Never>] = []
         for track in [Track.mic, .system] {
@@ -111,11 +153,32 @@ public actor LiveTranscriptionWiring: LiveTranscriptPort {
             logger.error("\(current.id.rawValue, privacy: .public): live transcript finish failed (\(String(describing: error), privacy: .public))")
         }
         await current.forwardTask.value
+        // The forward task has published the drained list; ending the confirmed streams lets the reader run its last pass.
+        for continuation in (confirmedStreams.removeValue(forKey: current.id) ?? [:]).values { continuation.finish() }
+        latestConfirmed[current.id] = nil
     }
 
     private func publish(_ utterances: [Utterance]) {
         latest = utterances
         for continuation in subscribers.values { continuation.yield(utterances) }
+    }
+
+    /// Display subscribers get every list; the meeting's confirmed streams get its finals when they change.
+    private func publish(_ utterances: [Utterance], for meeting: MeetingID) {
+        publish(utterances)
+        let confirmed = LiveSummaryInputBuilder.finalUtterances(utterances)
+        guard latestConfirmed[meeting] != confirmed else { return }
+        latestConfirmed[meeting] = confirmed
+        for continuation in (confirmedStreams[meeting] ?? [:]).values { continuation.yield(confirmed) }
+    }
+
+    private func unsubscribeFeeds(_ id: UUID) {
+        feedSubscribers[id] = nil
+    }
+
+    private func unsubscribeConfirmed(_ id: UUID, from meeting: MeetingID) {
+        confirmedStreams[meeting]?[id] = nil
+        if confirmedStreams[meeting]?.isEmpty == true { confirmedStreams[meeting] = nil }
     }
 
     private func unsubscribe(_ id: UUID) {

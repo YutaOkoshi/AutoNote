@@ -49,21 +49,23 @@ private func silentWAV(_ url: URL, seconds: Int) throws {
 
 private struct LiveFixture {
     let paths: AppPaths
-    let mic = FakeLiveTranscriber(script: [u(1, .unknown, "おはようございます")])
-    let system = FakeLiveTranscriber(script: [u(2, .unknown, "よろしくお願いします")])
+    let mic: FakeLiveTranscriber
+    let system: FakeLiveTranscriber
     let micChunks: AsyncStream<AudioChunk>
     let micInput: AsyncStream<AudioChunk>.Continuation
     let systemChunks: AsyncStream<AudioChunk>
     let systemInput: AsyncStream<AudioChunk>.Continuation
     let live: LiveTranscriptionWiring
 
-    init() throws {
+    init(mic: FakeLiveTranscriber = FakeLiveTranscriber(script: [u(1, .unknown, "おはようございます")]),
+         system: FakeLiveTranscriber = FakeLiveTranscriber(script: [u(2, .unknown, "よろしくお願いします")])) throws {
+        self.mic = mic
+        self.system = system
         let paths = AppPaths(root: try TemporaryDirectory.make())
         self.paths = paths
         (micChunks, micInput) = AsyncStream<AudioChunk>.makeStream()
         (systemChunks, systemInput) = AsyncStream<AudioChunk>.makeStream()
         let micStream = micChunks, systemStream = systemChunks
-        let mic = self.mic, system = self.system
         live = LiveTranscriptionWiring(
             audio: { $0 == .mic ? micStream : systemStream },
             makeFeed: { id in
@@ -80,6 +82,24 @@ private func first<T: Sendable>(_ stream: AsyncStream<T>, where condition: @Send
         group.addTask {
             for await value in stream where condition(value) { return value }
             return nil
+        }
+        group.addTask {
+            try? await Task.sleep(for: .seconds(2))
+            return nil
+        }
+        let result = await group.next() ?? nil
+        group.cancelAll()
+        return result
+    }
+}
+
+/// Every value of `stream` until it ends, or nil when it has not ended after 2 s.
+private func all<T: Sendable>(_ stream: AsyncStream<T>) async -> [T]? {
+    await withTaskGroup(of: [T]?.self) { group in
+        group.addTask {
+            var values: [T] = []
+            for await value in stream { values.append(value) }
+            return Task.isCancelled ? nil : values
         }
         group.addTask {
             try? await Task.sleep(for: .seconds(2))
@@ -261,6 +281,87 @@ private func first<T: Sendable>(_ stream: AsyncStream<T>, where condition: @Send
         let shown = await first(await f.live.updates()) { $0.count == 2 }
         #expect(shown?.map(\.text) == ["おはようございます", "よろしくお願いします"])
         #expect(shown?.map(\.speaker) == [.me, .other])
+
+        await f.live.handle(.stopped(m(.recorded), .manual))
+        let saved = try AutoNoteJSON.decoder().decode(Transcript.self, from: Data(contentsOf: f.paths.transcriptFile(id, .live)))
+        #expect(saved.utterances.map(\.text) == ["おはようございます", "よろしくお願いします"])
+    }
+
+    // confirmedFeeds() を先に購読 → .started(id) → 最初の feed.meetingID == id。
+    // .paused(10) の後も、内側の流れの最新は ["おはようございます", "よろしくお願いします"]（印を含まない）
+    @Test func confirmedFeedCarriesTheMeetingAndFinalsOnly() async throws {
+        let f = try LiveFixture()
+        let feeds = await f.live.confirmedFeeds()
+        await f.live.handle(.started(id))
+        let feed = try #require(await first(feeds) { _ in true })
+        #expect(feed.meetingID == id)
+        await f.live.handle(.paused(TimelineTime(seconds: 10)))
+        // The marker reached the display, so the same publish already reached the confirmed stream.
+        #expect(await first(await f.live.updates()) { $0.contains(where: LiveFeed.isMarker) } != nil)
+        let newest = await first(feed.utterances) { _ in true }
+        #expect(newest?.map(\.text) == ["おはようございます", "よろしくお願いします"])
+        #expect(newest?.contains(where: LiveFeed.isMarker) == false)
+        await f.live.handle(.stopped(m(.recorded), .manual))
+    }
+
+    // system が finish() で最後の発言を流す fixture。.stopped を handle し終えたら内側の流れは 2 秒以内に終わり、
+    // 最後の要素は ["おはようございます", "よろしくお願いします", "最後の発言"]
+    @Test func confirmedFeedEndsAfterFinishWithDrainedUtterances() async throws {
+        let f = try LiveFixture(system: FakeLiveTranscriber(script: [u(2, .unknown, "よろしくお願いします")],
+                                                             finishScript: [u(3, .unknown, "最後の発言")]))
+        let feeds = await f.live.confirmedFeeds()
+        await f.live.handle(.started(id))
+        let feed = try #require(await first(feeds) { _ in true })
+        await f.live.handle(.stopped(m(.recorded), .manual))
+        let values = try #require(await all(feed.utterances))
+        #expect(values.last?.map(\.text) == ["おはようございます", "よろしくお願いします", "最後の発言"])
+    }
+
+    // .started(id) の後に購読 → feed.meetingID == id、最初の要素が 2 件
+    @Test func lateSubscriberGetsTheRunningMeeting() async throws {
+        let f = try LiveFixture()
+        await f.live.handle(.started(id))
+        #expect(await first(await f.live.updates()) { $0.count == 2 } != nil)
+        let feed = try #require(await first(await f.live.confirmedFeeds()) { _ in true })
+        #expect(feed.meetingID == id)
+        #expect(await first(feed.utterances) { _ in true }?.count == 2)
+        await f.live.handle(.stopped(m(.recorded), .manual))
+    }
+
+    // makeFeed が 1 回目だけ throw。.started(id1) → .started(id2) → 最初に届く feed.meetingID == id2
+    @Test func failedFeedYieldsNoConfirmedFeed() async throws {
+        let paths = AppPaths(root: try TemporaryDirectory.make())
+        let mic = FakeLiveTranscriber(script: [u(1, .unknown, "二つ目の会議")])
+        let calls = EventLog()
+        let live = LiveTranscriptionWiring(audio: { _ in AsyncStream { $0.finish() } }, makeFeed: { id in
+            await calls.append(.started(id))
+            guard await calls.events.count > 1 else { throw FakeError(message: "no live engine") }
+            let feed = LiveFeed(transcribers: [.mic: mic], replacer: Replacer([]),
+                                liveJSON: paths.transcriptFile(id, .live), engineName: "Fake Live")
+            return LiveFeedStart(feed: feed, language: .ja, hints: [])
+        })
+        let id1 = MeetingID(rawValue: "20261024-1400-a1b2"), id2 = MeetingID(rawValue: "20261024-1500-c3d4")
+        let feeds = await live.confirmedFeeds()
+        await live.handle(.started(id1))
+        await live.handle(.started(id2))
+        let feed = await first(feeds) { _ in true }
+        #expect(feed?.meetingID == id2)
+        await live.handle(.stopped(m(.recorded), .manual))
+    }
+
+    // confirmedFeeds() を購読していても、updates() は今までどおり部分結果と印を含む表示用リストを流し、live.json も書かれる
+    @Test func displayUpdatesAreUnchanged() async throws {
+        let partial = Utterance(start: TimelineTime(seconds: 5), speaker: .unknown, text: "途中", isFinal: false)
+        let f = try LiveFixture(mic: FakeLiveTranscriber(script: [u(1, .unknown, "おはようございます"), partial]))
+        let feeds = await f.live.confirmedFeeds()
+        await f.live.handle(.started(id))
+        let feed = try #require(await first(feeds) { _ in true })
+        await f.live.handle(.paused(TimelineTime(seconds: 10)))
+        let shown = await first(await f.live.updates()) { $0.count == 4 }
+        #expect(shown?.map(\.text) == ["おはようございます", "よろしくお願いします", "途中", LiveFeed.pauseMarkerText])
+        #expect(shown?.map(\.speaker) == [.me, .other, .me, .unknown])
+        #expect(shown?.map(\.isFinal) == [true, true, false, true])
+        #expect(await first(feed.utterances) { _ in true }?.map(\.text) == ["おはようございます", "よろしくお願いします"])
 
         await f.live.handle(.stopped(m(.recorded), .manual))
         let saved = try AutoNoteJSON.decoder().decode(Transcript.self, from: Data(contentsOf: f.paths.transcriptFile(id, .live)))
