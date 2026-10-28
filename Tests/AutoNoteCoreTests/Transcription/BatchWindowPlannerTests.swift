@@ -51,4 +51,20 @@ private func s(_ seconds: Double) -> Int { Int(seconds * 16_000) }
         #expect(w[1].owns(midpointSeconds: 20) && !w[1].owns(midpointSeconds: 19.99))
         #expect(w[1].owns(midpointSeconds: 1_000))
     }
+
+    @Test func softCutOwnsEverySegmentOnBothSides() {
+        // 17 秒の無音の切れ目は重ならないので、窓 1 は切れ目を越えた中点も採り、窓 2 は切れ目より前の中点も採る
+        let w = plan(tone(16) + silence(2) + tone(22), small)
+        #expect(w[0].owns(midpointSeconds: 17.5))
+        #expect(w[1].owns(midpointSeconds: 16.5))
+    }
+
+    @Test func softCutAfterAHardCutKeepsOnlyTheHardLowerBound() {
+        // 20 秒は硬い切れ目、窓 2 の後ろ 35 秒付近で無音の切れ目
+        let w = plan(tone(34) + silence(2) + tone(20), small)
+        #expect(w.count == 3)
+        #expect(w[1].read.lowerBound < w[1].owned.lowerBound && w[1].read.upperBound == w[1].owned.upperBound)
+        #expect(!w[1].owns(midpointSeconds: 19.99) && w[1].owns(midpointSeconds: 20))
+        #expect(w[1].owns(midpointSeconds: 36))
+    }
 }

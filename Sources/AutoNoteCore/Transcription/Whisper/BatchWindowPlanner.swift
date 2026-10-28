@@ -19,9 +19,13 @@ public struct BatchWindow: Equatable, Sendable {
     }
 
     /// Whether a segment whose midpoint is `m` seconds from the start of the file belongs to this window.
-    /// The first window has no lower bound and the last none above; a midpoint on a cut goes to the later window.
+    /// A bound applies only on a side where the read overlaps the neighbour (a hard cut); at a silence cut, the file
+    /// start and the file end the window keeps everything, since whisper may put a segment end past the audio.
+    /// A midpoint on a hard cut goes to the later window.
     public func owns(midpointSeconds m: Double) -> Bool {
-        (index == 0 || m >= Double(owned.lowerBound) / 16_000) && (isLast || m < Double(owned.upperBound) / 16_000)
+        let hardBefore = read.lowerBound < owned.lowerBound
+        let hardAfter = read.upperBound > owned.upperBound
+        return (!hardBefore || m >= Double(owned.lowerBound) / 16_000) && (!hardAfter || m < Double(owned.upperBound) / 16_000)
     }
 }
 

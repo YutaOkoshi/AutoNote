@@ -187,6 +187,13 @@ extension WhisperBatchTranscriberTests {
         #expect(u.map(\.text) == ["一", "二", "三", "四"])
     }
 
+    @Test func silenceCutKeepsASegmentRunningPastTheCut() async throws {
+        // whisper は終了時刻を音声長で切り詰めない: 窓 1（0–17 秒）の「尾」は 15.5–19.5 秒、中点 17.5 秒は切れ目の後ろ
+        let core = FakeWhisperCore(windows: [[seg(0, 8, "一"), seg(15.5, 19.5, "尾")], [seg(0, 10, "三")]])
+        let u = try await run(core, tone(16) + silence(2) + tone(22))
+        #expect(u.map(\.text) == ["一", "尾", "三"])
+    }
+
     @Test func hardCutOverlapsAndKeepsEachSegmentOnce() async throws {
         // 窓 2 は 15 秒から読む
         let core = FakeWhisperCore(windows: [
