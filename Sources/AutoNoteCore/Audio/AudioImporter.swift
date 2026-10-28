@@ -34,21 +34,6 @@ public struct AudioImporter: Sendable {
             throw ImportError.unreadable("cannot read \(url.lastPathComponent)")
         }
 
-        let asset = AVURLAsset(url: url)
-        let track: AVAssetTrack
-        let assetSeconds: Double
-        do {
-            guard let first = try await asset.loadTracks(withMediaType: .audio).first else {
-                throw ImportError.noAudioTrack
-            }
-            track = first
-            assetSeconds = try await asset.load(.duration).seconds
-        } catch let e as ImportError {
-            throw e
-        } catch {
-            throw ImportError.unreadable(error.localizedDescription)
-        }
-
         // Manifest dates are stored at millisecond precision; truncate so the saved manifest equals the returned one.
         let resolved = startedAt ?? Self.fileDate(url)
         let start = resolved.truncatedToMilliseconds
@@ -61,22 +46,7 @@ public struct AudioImporter: Sendable {
 
         do {
             try FileManager.default.createDirectory(at: wavURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            // The decode loop blocks in `copyNextSampleBuffer`, and AVAssetReader needs a Swift-concurrency thread to
-            // make progress, so it must not run on the cooperative pool: as many concurrent imports as CPU cores
-            // would occupy every pool thread and deadlock for good. A GCD queue grows threads when they block.
-            let cancelled = Mutex(false)
-            let samples = try await withTaskCancellationHandler {
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Int, any Error>) in
-                    Self.transcodeQueue.async {
-                        continuation.resume(with: Result {
-                            try Self.transcode(asset: asset, track: track, to: wavURL, assetSeconds: assetSeconds,
-                                               isCancelled: { cancelled.withLock { $0 } }, progress: progress)
-                        })
-                    }
-                }
-            } onCancel: {
-                cancelled.withLock { $0 = true }
-            }
+            let samples = try await Self.convertToMono16kWAV(from: url, to: wavURL, progress: progress)
             let seconds = Double(samples) / AudioChunk.sampleRate
             let manifest = Manifest(
                 id: id, title: nil, startedAt: start, endedAt: start.addingTimeInterval(seconds).truncatedToMilliseconds,
@@ -92,6 +62,44 @@ public struct AudioImporter: Sendable {
             try? await manifests.delete(id)
             if error is CancellationError || error is ImportError { throw error }
             throw ImportError.unreadable(error.localizedDescription)
+        }
+    }
+
+    /// Decodes the first audio track of `source` (any format AVFoundation reads; the extension is not checked) into
+    /// a 16 kHz mono 16-bit WAV at `wavURL`; returns the number of samples written. Throws `ImportError.noAudioTrack`
+    /// when there is no audio track and `ImportError.unreadable` when the file cannot be decoded.
+    public static func convertToMono16kWAV(from source: URL, to wavURL: URL,
+                                           progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> Int {
+        let asset = AVURLAsset(url: source)
+        let track: AVAssetTrack
+        let assetSeconds: Double
+        do {
+            guard let first = try await asset.loadTracks(withMediaType: .audio).first else {
+                throw ImportError.noAudioTrack
+            }
+            track = first
+            assetSeconds = try await asset.load(.duration).seconds
+        } catch let e as ImportError {
+            throw e
+        } catch {
+            throw ImportError.unreadable(error.localizedDescription)
+        }
+
+        // The decode loop blocks in `copyNextSampleBuffer`, and AVAssetReader needs a Swift-concurrency thread to
+        // make progress, so it must not run on the cooperative pool: as many concurrent imports as CPU cores
+        // would occupy every pool thread and deadlock for good. A GCD queue grows threads when they block.
+        let cancelled = Mutex(false)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Int, any Error>) in
+                transcodeQueue.async {
+                    continuation.resume(with: Result {
+                        try transcode(asset: asset, track: track, to: wavURL, assetSeconds: assetSeconds,
+                                      isCancelled: { cancelled.withLock { $0 } }, progress: progress)
+                    })
+                }
+            }
+        } onCancel: {
+            cancelled.withLock { $0 = true }
         }
     }
 

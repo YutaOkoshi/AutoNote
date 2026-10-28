@@ -167,4 +167,31 @@ import AutoNoteTestSupport
         }
         #expect(ids.count == count)
     }
+
+    @Test func convertToMono16kWAVWritesSamplesAndHeader() async throws {
+        let dir = try TemporaryDirectory.make()
+        let src = try synthesize("wav", in: dir, seconds: 3)
+        let out = dir.appending(path: "out.wav")
+        let n = try await AudioImporter.convertToMono16kWAV(from: src, to: out)
+        let info = try WAVFile.info(out)
+        #expect(info.sampleRate == 16_000 && info.channels == 1 && info.bitsPerSample == 16)
+        #expect(abs(n - 48_000) <= 800)
+        #expect(try WAVFile.sampleCount(out) == n)
+        #expect(try WAVFile.readSamples(out, in: 0..<n).contains { abs(Int($0)) > 8000 })
+    }
+
+    @Test func convertRejectsGarbage() async throws {
+        let dir = try TemporaryDirectory.make()
+        let input = dir.appending(path: "broken.m4a")
+        try Data("this is not audio".utf8).write(to: input)
+        do {
+            _ = try await AudioImporter.convertToMono16kWAV(from: input, to: dir.appending(path: "out.wav"))
+            Issue.record("expected a failure")
+        } catch let e as ImportError {
+            switch e {
+            case .unreadable, .noAudioTrack: break
+            case .unsupportedFormat: Issue.record("wrong error \(e)")
+            }
+        }
+    }
 }

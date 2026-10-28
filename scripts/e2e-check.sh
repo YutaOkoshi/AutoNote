@@ -741,6 +741,35 @@ check_dev_transcribe_whisper_live() {
     dev_transcribe_whisper_head whisper-live
 }
 
+# 08.x 共通: 16 kHz mono 16-bit の WAV を書く（1 秒の 440 Hz（振幅 8000）+ 2 秒の無音を繰り返す）。python3 の標準ライブラリだけ
+make_tone_wav() {   # make_tone_wav <出力> <秒>
+    python3 -I -c 'import math,struct,sys,wave
+sec=int(sys.argv[2]); unit=b"".join(struct.pack("<h",int(8000*math.sin(2*math.pi*440*i/16000))) for i in range(16000))+b"\0"*64000
+w=wave.open(sys.argv[1],"wb"); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+for _ in range(sec//3): w.writeframesraw(unit)
+w.close()' "$1" "$2"
+}
+DUMMY_GGML=tools/whisper.cpp/models/for-tests-ggml-tiny.bin   # 推論は空振りするが、読み込み・変換・メルは実モデルと同じ（監査 C）
+
+check_dev_transcribe_whisper_resampled() {
+    CURRENT="08.2 dev transcribe whisper が 44.1 kHz ステレオの WAV を変換して窓で流す"
+    [[ "${QUICK}" -eq 1 ]] && { skip "--quick"; return; }
+    command -v python3 >/dev/null 2>&1 || { skip "python3 が無い"; return; }
+    command -v jq >/dev/null 2>&1 || { skip "jq が無い"; return; }
+    [[ -f "${DUMMY_GGML}" ]] || { skip "${DUMMY_GGML} が無い（scripts/setup-whisper.sh）"; return; }
+    cli_or_skip || return
+    run make_tone_wav "${WORK}/t30.wav" 30 || { fail "make_tone_wav が失敗"; return; }
+    run afconvert -f WAVE -d LEI16@44100 -c 2 "${WORK}/t30.wav" "${WORK}/t30-44k.wav" || { fail "afconvert が失敗"; return; }
+    run_timeout 120 "${AUTONOTE_CLI}" dev transcribe "${WORK}/t30-44k.wav" --engine whisper --model-path "${DUMMY_GGML}"; local code=$?
+    if [[ ${code} -eq 124 ]]; then fail "120 秒以内に終わらない"; return; fi
+    [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
+    grep -q '文字起こし 窓 1/1（' "${LAST_LOG}" || { fail "「文字起こし 窓 1/1（」の行が無い"; return; }
+    local secs; secs="$(grep '"summary"' "${LAST_LOG}" | jq -r '.summary.audio_seconds' 2>/dev/null)"
+    jq -en --argjson s "${secs:-null}" '$s >= 29.9 and $s <= 30.1' >/dev/null 2>&1 \
+        || { fail "summary.audio_seconds「${secs}」（期待 29.9〜30.1）"; return; }
+    pass "audio_seconds ${secs}"
+}
+
 # 05.1 / 05.2 共通: 架空の Transcript と MinutesOutput を ${WORK} に書く
 write_dev_summarize_inputs() {
     cat >"${WORK}/summarize-transcript.json" <<'JSON'
@@ -827,6 +856,7 @@ CHECKS=(
     check_dev_transcribe_dictation
     check_dev_transcribe_whisper
     check_dev_transcribe_whisper_live
+    check_dev_transcribe_whisper_resampled
     check_dev_summarize
     check_dev_summarize_failure
 )

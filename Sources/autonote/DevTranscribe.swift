@@ -75,11 +75,11 @@ enum DevTranscribe {
             let startedAt: ContinuousClock.Instant
             if engine == .whisper {
                 let batch = try await makeBatch(options)
-                let (samples, input) = try fileInput(options, truncatedCopy: true)
-                defer { if input != options.file { try? FileManager.default.removeItem(at: input) } }
-                audioSeconds = Double(samples.count) / PCMAudio.sampleRate
+                let input = try await batchInput(options)
+                defer { for url in input.temporary { try? FileManager.default.removeItem(at: url) } }
+                audioSeconds = Double(input.samples) / PCMAudio.sampleRate
                 startedAt = clock.now
-                let utterances = try await batch.transcribe(file: input, language: options.language, hints: options.hints) { _ in }
+                let utterances = try await batch.transcribe(file: input.file, language: options.language, hints: options.hints) { _ in }
                 let wall = seconds(clock.now - startedAt)
                 for u in utterances { emit(u, wall: wall) }
                 finals = utterances.filter(\.isFinal).map(\.text)
@@ -100,7 +100,7 @@ enum DevTranscribe {
                     if options.mic {
                         audioSeconds = try await feedMic(live, seconds: options.seconds ?? 0)
                     } else {
-                        let (samples, _) = try fileInput(options, truncatedCopy: false)
+                        let samples = try fileInput(options)
                         audioSeconds = Double(samples.count) / PCMAudio.sampleRate
                         // --realtime: chunk i is fed at liveStart + i * 0.1 s, so processing time never accumulates.
                         for (index, chunk) in PCMAudio.chunks(samples, track: .mic, chunkSeconds: 0.1, start: TimelineTime(seconds: 0)).enumerated() {
@@ -206,7 +206,10 @@ enum DevTranscribe {
 
     private static func makeBatch(_ o: Options) async throws -> any BatchTranscriber {
         let machine = whisperMachine(o)
-        if let path = try modelPath(o) { return try TranscriberFactory.whisperBatch(modelURL: path, machine: machine, gate: BatchGate()) }
+        if let path = try modelPath(o) {
+            return try TranscriberFactory.whisperBatch(modelURL: path, machine: machine, gate: BatchGate(),
+                                                       log: { DevCommands.printError($0) })
+        }
         let model = o.model ?? EngineCatalog.defaults(for: MachineKind.current()).batch.model ?? "large-v3-turbo"
         return try await factory(o, machine: machine).makeBatch(.whisper(model), gate: BatchGate())
     }
@@ -237,17 +240,57 @@ enum DevTranscribe {
 
     // MARK: - Input
 
-    /// Reads the input as 16 kHz mono, cut to `--max-seconds`. For the batch path (which takes a file) a cut input is
-    /// written to a temporary WAV; otherwise the original file is passed through.
-    private static func fileInput(_ o: Options, truncatedCopy: Bool) throws -> ([Int16], URL) {
+    /// The batch path's input as a 16 kHz mono 16-bit WAV, never held whole in memory: the original file when it is
+    /// already that format, otherwise a temporary conversion; cut to `--max-seconds` by copying ranged reads into
+    /// another temporary WAV. `temporary` lists the files the caller deletes.
+    private static func batchInput(_ o: Options) async throws -> (file: URL, samples: Int, temporary: [URL]) {
+        guard let source = o.file else { throw TranscriptionError.invalidAudio("no input file") }
+        var temporary: [URL] = []
+        do {
+            var file = source
+            var samples: Int
+            if let info = try? WAVFile.info(source), info.sampleRate == Int(PCMAudio.sampleRate), info.channels == 1,
+               info.bitsPerSample == 16 {
+                samples = try WAVFile.sampleCount(source)
+            } else {
+                file = temporaryWAV()
+                temporary.append(file)
+                samples = try await AudioImporter.convertToMono16kWAV(from: source, to: file)
+            }
+            if let max = o.maxSeconds, samples > Int(max * PCMAudio.sampleRate) {
+                let cut = Int(max * PCMAudio.sampleRate)
+                let copy = temporaryWAV()
+                temporary.append(copy)
+                try WAVFile.header(sampleRate: Int(PCMAudio.sampleRate), channels: 1, bitsPerSample: 16, dataBytes: cut * 2)
+                    .write(to: copy)
+                let handle = try FileHandle(forWritingTo: copy)
+                defer { try? handle.close() }
+                try handle.seekToEnd()
+                let step = 960_000   // 60 s
+                for lower in stride(from: 0, to: cut, by: step) {
+                    let chunk = try WAVFile.readSamples(file, in: lower..<min(lower + step, cut))
+                    try handle.write(contentsOf: chunk.withUnsafeBytes { Data($0) })
+                }
+                file = copy
+                samples = cut
+            }
+            return (file, samples, temporary)
+        } catch {
+            for url in temporary { try? FileManager.default.removeItem(at: url) }
+            throw error
+        }
+    }
+
+    private static func temporaryWAV() -> URL {
+        FileManager.default.temporaryDirectory.appending(path: "autonote-dev-transcribe-\(UUID().uuidString).wav")
+    }
+
+    /// Reads the input as 16 kHz mono, cut to `--max-seconds` (live engines only; whisper uses `batchInput`).
+    private static func fileInput(_ o: Options) throws -> [Int16] {
         guard let file = o.file else { throw TranscriptionError.invalidAudio("no input file") }
-        var samples = try PCMAudio.readMono16k(file)
-        guard let max = o.maxSeconds, samples.count > Int(max * PCMAudio.sampleRate) else { return (samples, file) }
-        samples = Array(samples.prefix(Int(max * PCMAudio.sampleRate)))
-        guard truncatedCopy else { return (samples, file) }
-        let copy = FileManager.default.temporaryDirectory.appending(path: "autonote-dev-transcribe-\(UUID().uuidString).wav")
-        try PCMAudio.writeWAV(samples, to: copy)
-        return (samples, copy)
+        let samples = try PCMAudio.readMono16k(file)
+        guard let max = o.maxSeconds, samples.count > Int(max * PCMAudio.sampleRate) else { return samples }
+        return Array(samples.prefix(Int(max * PCMAudio.sampleRate)))
     }
 
     /// Feeds the microphone for `seconds`, then returns the seconds captured.
