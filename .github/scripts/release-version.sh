@@ -11,6 +11,12 @@ if [[ ! "${version}" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
     echo "::error::CFBundleShortVersionString が x.y.z 形式でない: ${version}" >&2
     exit 1
 fi
+# アプリ内の版（AutoNoteVersion.current）が plist と揃っていなければリリースしない（E2E 5b と同じ読み方）
+swift_version="$(sed -n 's/.*static let current = "\([^"]*\)".*/\1/p' Sources/AutoNoteCore/AutoNoteVersion.swift)"
+if [[ "${swift_version}" != "${version}" ]]; then
+    echo "::error::Info.plist の版 ${version} と AutoNoteVersion.current ${swift_version} が違う" >&2
+    exit 1
+fi
 tag="v${version}"
 
 # ls-remote --exit-code は、一致が無いとき 2、通信などの失敗では別の値を返す

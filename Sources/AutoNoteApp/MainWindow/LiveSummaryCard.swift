@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The live summary (plan 09): what is being discussed now, the decisions and the to-dos, in a band like
 /// `StatusHeader`'s. Three parts (plan 10): a header with 「いま」 and the collapse toggle, a body with the
-/// decisions and to-dos that scrolls inside a capped height (a fade at its foot when more is below), and a
+/// decisions and to-dos that scrolls inside a capped height (its text fades at the foot while more is below), and a
 /// footer with the status and 「n 秒前に更新」 that stays visible even when collapsed.
 struct LiveSummaryCard: View {
     let content: LiveSummaryCardContent
@@ -11,6 +11,8 @@ struct LiveSummaryCard: View {
     @AppStorage("live_summary_card_collapsed") private var collapsed = false
     /// The body's own height, so a short summary takes only its rows and a long one stops at the cap.
     @State private var contentHeight: CGFloat = 0
+    /// Whether the body is scrolled to its end (then the fade is lifted).
+    @State private var atEnd = false
 
     private static let maxBodyHeight: CGFloat = 220
     private static let fadeHeight: CGFloat = 18
@@ -64,12 +66,19 @@ struct LiveSummaryCard: View {
         .scrollBounceBehavior(.basedOnSize)
         // The content's height, capped (a plain `maxHeight` frame would grow to the cap even for 3 rows).
         .frame(height: min(contentHeight, Self.maxBodyHeight))
-        .overlay(alignment: .bottom) {
-            if contentHeight > Self.maxBodyHeight {
-                // 「続きがある」: the band's own color rising to clear over the last rows.
-                LinearGradient(colors: [Self.bandColor.opacity(0), Self.bandColor], startPoint: .top, endPoint: .bottom)
-                    .frame(height: Self.fadeHeight)
-                    .allowsHitTesting(false)
+        .onScrollGeometryChange(for: Bool.self) { g in
+            g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 1
+        } action: { _, end in atEnd = end }
+        // 「続きがある」: the last 18 pt of text fade out while more is below; lifted at the end so the last row is clear.
+        .mask {
+            if contentHeight > Self.maxBodyHeight && !atEnd {
+                VStack(spacing: 0) {
+                    Color.black
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: Self.fadeHeight)
+                }
+            } else {
+                Color.black
             }
         }
     }
