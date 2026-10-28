@@ -21,7 +21,12 @@ public struct ClaudeCodeSummarizer: Summarizer {
 
     /// The spec command line verbatim; only `--model <name>` may be appended.
     public static func arguments(model: String?) -> [String] {
-        var args = ["-p", "--output-format", "json", "--json-schema", MinutesSchema.json, "--tools", "",
+        arguments(schema: MinutesSchema.json, model: model)
+    }
+
+    /// The spec command line with `schema` as `--json-schema`; shared by the minutes and live summarizers.
+    public static func arguments(schema: String, model: String?) -> [String] {
+        var args = ["-p", "--output-format", "json", "--json-schema", schema, "--tools", "",
                     "--strict-mcp-config", "--mcp-config", #"{"mcpServers":{}}"#,
                     "--no-session-persistence", "--max-turns", "1", "--setting-sources", "project"]
         if let model, !model.isEmpty { args += ["--model", model] }
@@ -29,14 +34,9 @@ public struct ClaudeCodeSummarizer: Summarizer {
     }
 
     public func summarize(_ input: SummaryInput) async throws -> MinutesOutput {
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: claudePath, isDirectory: &isDirectory), !isDirectory.boolValue,
-              FileManager.default.isExecutableFile(atPath: claudePath) else {
-            Self.logger.error("claude not found")
-            throw SummarizerError.claudeNotFound(path: claudePath)
-        }
+        try ClaudeProcess.checkExecutable(claudePath)
         try FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
-        try await checkLoggedIn()
+        try await ClaudeProcess.checkLoggedIn(claudePath: claudePath, runner: runner, workingDirectory: workingDirectory)
         try emptyWorkingDirectory()
 
         switch builder.plan(input) {
@@ -52,20 +52,6 @@ public struct ClaudeCodeSummarizer: Summarizer {
             }
         case .split(let parts):
             return try await runSplit(parts, instructions: input.instructions)
-        }
-    }
-
-    private var environment: [String: String] {
-        ClaudeLocator.childEnvironment(claudePath: claudePath, base: ProcessInfo.processInfo.environment)
-    }
-
-    private func checkLoggedIn() async throws {
-        let result = try await runner.run(executable: URL(fileURLWithPath: claudePath), arguments: ["auth", "status", "--json"],
-                                          stdin: Data(), workingDirectory: workingDirectory,
-                                          environment: environment, timeout: Self.authTimeout)
-        guard ClaudeResultClassifier.isLoggedIn(result) else {
-            Self.logger.error("claude auth status: not logged in (exit \(result.exitCode, privacy: .public))")
-            throw SummarizerError.notLoggedIn
         }
     }
 
@@ -86,7 +72,7 @@ public struct ClaudeCodeSummarizer: Summarizer {
     private func run(_ prompt: String) async throws -> MinutesOutput {
         let result = try await runner.run(executable: URL(fileURLWithPath: claudePath), arguments: Self.arguments(model: model),
                                           stdin: Data(prompt.utf8), workingDirectory: workingDirectory,
-                                          environment: environment, timeout: timeout)
+                                          environment: ClaudeProcess.environment(claudePath: claudePath), timeout: timeout)
         switch ClaudeResultClassifier.classify(result) {
         case .success(let output):
             Self.logger.info("claude -p succeeded (exit \(result.exitCode, privacy: .public))")

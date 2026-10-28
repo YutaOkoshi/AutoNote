@@ -30,8 +30,8 @@ public enum ClaudeResultClassifier {
         var result: String?
     }
 
-    private struct Structured: Decodable {
-        var structuredOutput: MinutesOutput
+    private struct Structured<Output: Decodable>: Decodable {
+        var structuredOutput: Output
     }
 
     private struct AuthStatus: Decodable {
@@ -42,6 +42,11 @@ public enum ClaudeResultClassifier {
     /// it is never pattern-matched nor quoted, only the coding path of what failed to decode is reported.
     /// Failure patterns run over the `result` of an `is_error == true` envelope plus stderr.
     public static func classify(_ result: ProcessResult) -> Result<MinutesOutput, SummarizerError> {
+        classify(result, as: MinutesOutput.self)
+    }
+
+    /// `classify(_:)` for any `structured_output` shape (minutes, live summary, …).
+    public static func classify<Output: Decodable & Sendable>(_ result: ProcessResult, as _: Output.Type) -> Result<Output, SummarizerError> {
         if result.timedOut { return .failure(.timedOut) }
         let decoder = AutoNoteJSON.decoder()
         let isObject = (try? JSONSerialization.jsonObject(with: result.stdout)) is [String: Any]
@@ -50,7 +55,7 @@ public enum ClaudeResultClassifier {
             var reason = "no structured_output"
             if envelope.subtype == "success" {
                 do {
-                    return .success(try decoder.decode(Structured.self, from: result.stdout).structuredOutput)
+                    return .success(try decoder.decode(Structured<Output>.self, from: result.stdout).structuredOutput)
                 } catch {
                     reason = describe(error)
                 }
