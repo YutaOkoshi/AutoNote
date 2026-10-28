@@ -477,6 +477,33 @@
 - 追加の成果物: 利用者向け手順書 `docs/guide/getting-started.md`（画像 13 枚）、長時間録音のメモリ調査 `docs/superpowers/research/2026-10-27-memory-audit-long-recordings.md`（停止後の whisper 一括処理が約 14 MB/分で 2〜3 時間だと 1.6〜2.7 GB。窓分割は利用者判断）、GitHub Actions（`.github/workflows/ci.yml` は main/PR/手動、`release.yml` はバージョン変更で universal zip の Release。Free の実機枠 約 200 分/月）。
 - 修正波 3（被験者再テストの所見、e7883b7 → 45efb92、3 件）: (1) 停止直後の緑の帯は、同じ会議に短い録音の帯か失敗の帯が出るときは出さない（「作る」がずれる誤操作の原因）。(2) 完成した会議の議事録パスとタイトルを `Manifest` の `note_path`・`note_title` に記録し、保存先を変えても一覧・「Finder で表示」・「最新の議事録を開く」が消えない（既存ファイルは移動しない。残課題: 変更後の保存・再生成は新しい保存先に書く、削除は古いフォルダのファイルを消さない、修正前の会議は次に書き直すまで旧挙動）。(3) AX ツリーが空になる現象はアプリではなく scratchpad の axtool の不具合（画面外の Lazy 要素の AXPosition が (inf, inf) で `Int(inf)` が trap → exit 132）。スクロールして見える位置にある文字起こしは行ごとに AXStaticText で読めるので VoiceOver は問題なし。ツール側を修正、リポジトリの変更なし。(4) 「開発」メニューは `AUTONOTE_DATA_DIR` 上書き起動か DEBUG ビルドのときだけ（`AppIdentity.showsDevMenu`）。手元の `scripts/build-app.sh`（既定 debug）と被験者テスト（上書き起動）では引き続き出るが、配布物（release）では出ない。再レビュー（opus）: 3/3 Addressed、Critical/Important なし。保留した Minor: `.failed` の判定は停止時点では効かない（後から失敗が届いたときは帯がずれ得る）、修正前の会議の `note_path` のバックフィル、`tcc-check.sh` の一時フォルダを消さない。Lead 検証（アイドル）: `swift test` 904/904、`scripts/build-app.sh` OK、E2E 38/0。
 
+### 計画 08（台帳から転記、2026-10-28）
+
+仕様 `docs/superpowers/specs/2026-10-28-windowed-batch-transcription-design.md`（builder check の 7 問に裁定済み）、計画 `docs/superpowers/plans/2026-10-28-autonote-08-windowed-batch-transcription.md`（opus が作成）。ブランチ plan-08（main ebb228a から）。利用者の決定（2026-10-28）: 窓分割（メモリ対策）だけを実装し、録音中の先行処理（窓のパイプライン）は計画も立てない。
+
+#### タスクと担当モデル・コミット
+- Task 1 `WAVFile` の範囲読み・サンプル数（sonnet、e58a1eb）。レビュー sonnet: ✅ / Approved。
+- Task 2 `BatchWindowPlanner` と `SilenceDetector.longestSilence`（opus、548e36a）。レビュー opus: ✅ / Approved。
+- Task 3 `WhisperBatchTranscriber` の窓処理・`FakeWhisperCore(windows:)`（opus、9688d4c）。レビュー opus: ✅ / Approved。
+- Task 4 CLI `dev transcribe --engine whisper` の変換と窓経路、E2E 08.2（opus、ada4e90）。レビュー sonnet: ✅ / Approved。
+- Task 5 E2E 08.1（メモリ）と概要 §8j（sonnet、16d3895）。NEEDS_CONTEXT → 裁定（下記）→ DONE。レビュー sonnet: ✅ / Approved。
+
+#### 裁定
+- 08.1 の判定: 実測で max RSS は 10 分 416〜441 MB → 60 分 509〜565 MB（差 104〜131 MB）で 100 MiB を越えたが、jetsam が見る peak footprint は 327〜345 MB → 334〜356 MB（差 12〜20 MB）。footprint の差 50 MiB 以内を本命、max RSS の差 250 MiB 以内を退行防止（窓分割前は 739 MB 差）に変更し、仕様の決定 7 を直した（6fd11c7）。RSS の約 100 MB の増加はアロケータの保持とみて未調査。
+- 時間頼みのテストの扱い: Lead 検証では `swift test` の並列実行で ProcessRunnerTests / ProcessTapSourceTests / MicrophoneSourceTests / SourceDrainTests の wall-clock テストが負荷（load avg 4〜6、mds の索引、ProcessRunnerTests が残す `trap '' TERM; sleep` の孫プロセス）で落ちる。`--no-parallel` では 946/946。E2E 項目 1 もこの影響を受けるので、計画 09 の E2E タスクで CI と同じ再試行（`.github/scripts/swift-test-retry.sh`）を使うようにする。
+
+#### 最終レビュー（opus、6fd11c7）と修正波
+Approve with fixes（Critical 0 / Important 3 / Minor 8）。修正波（opus、6fd11c7 → 9be5f92）: I1 無音の切れ目でセグメントを落とさない（帰属の境界は重なる側だけ、2247242）、I2 `SegmentMerger` が取り込み音声を 60 秒ずつ範囲読みで写す（f55c501）、I3 1 MiB 境界をまたぐ読みのテスト + M1 `Config` の precondition（2ed2efa）、M8 §8j に注意 3 行（9be5f92）。再レビュー（opus）: 5/5 Addressed、新規なし。
+
+#### 繰り越した Minor（未対応。次の計画の該当箇所を触るときに拾う）
+- planner のテスト不足（無音がバッファ末尾まで続く、中間の窓の帰属、無音の切れ目の後に硬い切れ目、硬い切れ目の後の無音の逆順）。窓の先頭でのゲート待ち・取り消しのテストは再開ループ内の判定でしか通っていない。
+- `--max-seconds` の範囲コピーの単体テストなし（E2E 04.3 が実モデルで通す）。長い取り込み音声（m4a 60 分）のメモリ E2E なし。
+- `importFile` は読めない入力でもいったん会議ディレクトリを作ってから消す。`tcc`/E2E の `local detail` 未宣言、MB/MiB の表記。ProcessRunnerTests のタイムアウト時の孫プロセスのリーク（既存）。
+- max RSS が 50 分で約 100 MB 増える（footprint は横ばい。未調査）。
+
+#### Lead 検証
+`swift test --no-parallel` 946/946（88 スイート）。`scripts/build-app.sh` OK。E2E 40 項目のうち 39 PASS、項目 1（並列 `swift test`）だけが上記の wall-clock クラスで FAIL（3 回とも負荷あり）。08.1 PASS（RSS 420→509〜537 MB、footprint 327→334〜341 MB、窓 6 個）、08.2 PASS。被験者テストは画面の変更がないため実施しない（計画 09 でまとめて行う）。
+
 ## 利用者への依頼（後回しにした 👤 手順）
 
 ### 計画 02 Task 1（TCC まとめ確認）— 2026-10-26
