@@ -304,6 +304,19 @@ protocol QueueStage: Sendable {
   - `scripts/build-app.sh` は `AUTONOTE_CODESIGN_IDENTITY`（既定は config.sh の「AutoNote Dev」、CI は `-`）と `AUTONOTE_BUILD_ARCHS`（例 `"arm64 x86_64"`。指定時はバイナリが `.build/apple/Products/<Config>` に出る）を読む。GitHub Actions: `.github/workflows/ci.yml`（main への push / PR / 手動、docs は無視）と `release.yml`（main で `scripts/release-version.sh` の版が変わったら universal zip を `gh release create v<version>`）。Free プランの macOS 枠は実時間で約 200 分/月。
   - AX 検証ツール: System Events の `entire contents` は SwiftUI ウィンドウで空を返す。scratchpad の `axtool` は画面外の Lazy 要素の AXPosition が (inf, inf) になる点に注意（座標を `Int` にすると trap する）。
 
+## 8j. 計画 08 の実装で確定した変更（2026-10-28。以後の作業はこれに従う）
+
+- WAV の範囲読み: `WAVFile.sampleCount` / `readSamples(_:in:)`（ヘッダの data サイズは実ファイル長で頭打ち）。`readSamples(_:)` も全量の `Data` を作らない。
+- 窓の計画: `BatchWindowPlanner`（`Config` 既定は nominal 600・lookback 60・overlap 5・tailMerge 120 秒）。切れ目は lookback 内の `SilenceDetector`（0.01 / 0.8 秒）の無音のうち最長（同点は後ろ）の中央で、重ねない。無音が無ければ名目の位置で切り、前後 5 秒ずつ重ねて読む。中点 == 切れ目の発話は後の窓。残りが nominal + tailMerge 以下なら最後の窓にまとめる。
+- `BatchWindow{index, read, owned, isLast}`。
+- `WhisperBatchTranscriber(core:gate:windows:log:)`: 16 kHz mono 16-bit 以外は `invalidAudio`。窓ごとに `BatchGate` と取り消しを見る。再開ループは窓の中。無音判定は窓の PCM で行い、無音の窓も whisper に掛ける。`no_speech` は出さない。`RepetitionFilter` は全窓に 1 回。ログ「文字起こし 窓 i/n（a 分 / b 分）」は既定で os Logger、CLI は stderr。GUI の見出しに割合は出さない。
+- `FakeWhisperCore(windows:delay:)`: offset 0 の呼び出しを新しい窓と数える。
+- `AudioImporter.convertToMono16kWAV(from:to:progress:)`。`dev transcribe --engine whisper` は 16 kHz 以外を一時 WAV に変換し、`fileInput` は live 専用。
+- E2E は 40 項目。08.1 は 10 分と 60 分の合成 WAV で `/usr/bin/time -l` を測り、peak memory footprint の差 <= 50 MiB（本命。OOM/jetsam が見る値）と max RSS の差 <= 250 MiB（線形増加に戻ったことを拾う緩い番人）を見る。08.2 は 44.1 kHz ステレオ入力。どちらもダミー ggml を使い `--quick` で skip。
+- 実測（10 分 → 60 分）: max RSS 416–441 MB → 517–565 MB、peak footprint 337–345 MB → 355–356 MB。窓分割前は max RSS 443 MB → 1,182 MB。
+- 未解決の観察: max RSS は 50 分分で今も約 100 MB 増える（アロケータが解放済みページを返さないためと見るが、計画 08 では調べていない）。
+- 残課題: 録音中の逐次処理（窓のパイプライン）は未着手（利用者の決定待ち）。監査 P2・P3 は別計画。実モデルの golden は作らない（固定は `FakeWhisperCore`）。
+
 ## 9. Global Constraints（各計画の同名節にそのまま写す）
 
 - 最低 OS: macOS 26.0。`Package.swift` の platforms は `.macOS("26.0")`、`swift-tools-version: 6.2`、`swiftLanguageModes: [.v6]`。ツールチェーンは Swift 6.3（計画 00 と同じ）

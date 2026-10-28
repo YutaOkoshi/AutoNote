@@ -2,7 +2,7 @@
 # AutoNote の E2E 動作確認。リポジトリの成果物が「実際に動く」ことを人の手なしで確かめる。
 #
 # 使い方: scripts/e2e-check.sh [--quick] [--verbose]
-#   --quick     時間のかかる項目（swift test / build-app / 04.3・04.4 の whisper）を飛ばす（SKIP と表示）
+#   --quick     時間のかかる項目（swift test / build-app / 04.3・04.4・08.1・08.2 の whisper）を飛ばす（SKIP と表示）
 #   --verbose   各コマンドの出力をそのまま見せる（既定は FAIL のときだけ末尾 20 行）
 # 環境変数（FAIL 検出の確認用。副作用なしで期待値だけを変える）:
 #   E2E_EXPECT_VERSION   autonote --version の期待値（既定: Sources/AutoNoteCore/AutoNoteVersion.swift の値）
@@ -770,6 +770,39 @@ check_dev_transcribe_whisper_resampled() {
     pass "audio_seconds ${secs}"
 }
 
+check_batch_memory_flat() {
+    CURRENT="08.1 dev transcribe whisper の peak footprint が 10 分と 60 分で 50 MB 以内（max RSS は 250 MB 以内）"
+    [[ "${QUICK}" -eq 1 ]] && { skip "--quick"; return; }
+    command -v python3 >/dev/null 2>&1 || { skip "python3 が無い"; return; }
+    [[ -f "${DUMMY_GGML}" ]] || { skip "${DUMMY_GGML} が無い（scripts/setup-whisper.sh）"; return; }
+    cli_or_skip || return
+    local rss10 rss60 fp10 fp60 min
+    for min in 10 60; do
+        run make_tone_wav "${WORK}/m${min}.wav" $((min * 60)) || { fail "make_tone_wav が失敗（${min} 分）"; rm -f "${WORK}"/m10.wav "${WORK}"/m60.wav; return; }
+    done
+    run_timeout 600 /usr/bin/time -l "${AUTONOTE_CLI}" dev transcribe "${WORK}/m10.wav" --engine whisper --model-path "${DUMMY_GGML}"; local code=$?
+    rm -f "${WORK}/m10.wav"
+    if [[ ${code} -eq 124 ]]; then fail "10 分の WAV が 600 秒以内に終わらない"; rm -f "${WORK}/m60.wav"; return; fi
+    [[ ${code} -eq 0 ]] || { fail "10 分: exit ${code}（期待 0）"; rm -f "${WORK}/m60.wav"; return; }
+    grep -q '文字起こし 窓 1/1（' "${LAST_LOG}" || { fail "10 分: 「文字起こし 窓 1/1（」の行が無い"; rm -f "${WORK}/m60.wav"; return; }
+    rss10="$(awk '/maximum resident set size/ {print $1}' "${LAST_LOG}")"
+    fp10="$(awk '/peak memory footprint/ {print $1}' "${LAST_LOG}")"
+    run_timeout 600 /usr/bin/time -l "${AUTONOTE_CLI}" dev transcribe "${WORK}/m60.wav" --engine whisper --model-path "${DUMMY_GGML}"; code=$?
+    rm -f "${WORK}/m60.wav"
+    if [[ ${code} -eq 124 ]]; then fail "60 分の WAV が 600 秒以内に終わらない"; return; fi
+    [[ ${code} -eq 0 ]] || { fail "60 分: exit ${code}（期待 0）"; return; }
+    rss60="$(awk '/maximum resident set size/ {print $1}' "${LAST_LOG}")"
+    fp60="$(awk '/peak memory footprint/ {print $1}' "${LAST_LOG}")"
+    local last; last="$(grep -o '文字起こし 窓 [0-9]*/[0-9]*（' "${LAST_LOG}" | tail -n 1 | sed -E 's/.*窓 ([0-9]+)\/([0-9]+)（/\1 \2/')"
+    local wi="${last% *}" wn="${last#* }"
+    if [[ -z "${last}" || "${wi}" != "${wn}" || "${wn}" -lt 5 ]]; then fail "60 分: 最後の窓の行が「窓 N/N」（N >= 5）でない（「${last}」）"; return; fi
+    if [[ -z "${rss10}" || -z "${rss60}" || -z "${fp10}" || -z "${fp60}" ]]; then fail "max RSS / peak footprint を読めない（RSS ${rss10}/${rss60}, footprint ${fp10}/${fp60}）"; return; fi
+    detail="RSS $((rss10 / 1048576))→$((rss60 / 1048576)) MB, footprint $((fp10 / 1048576))→$((fp60 / 1048576)) MB（窓 ${wn} 個）"
+    if (( fp60 - fp10 > 52428800 )); then fail "peak footprint の差が 50 MiB を超えた: ${detail}"
+    elif (( rss60 - rss10 > 262144000 )); then fail "max RSS の差が 250 MiB を超えた: ${detail}"
+    else pass "${detail}"; fi
+}
+
 # 05.1 / 05.2 共通: 架空の Transcript と MinutesOutput を ${WORK} に書く
 write_dev_summarize_inputs() {
     cat >"${WORK}/summarize-transcript.json" <<'JSON'
@@ -857,6 +890,7 @@ CHECKS=(
     check_dev_transcribe_whisper
     check_dev_transcribe_whisper_live
     check_dev_transcribe_whisper_resampled
+    check_batch_memory_flat
     check_dev_summarize
     check_dev_summarize_failure
 )
