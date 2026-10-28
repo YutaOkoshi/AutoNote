@@ -58,6 +58,7 @@
 - 引数の組み立てと結果判定は既存の `ClaudeCodeSummarizer` / `ClaudeResultClassifier` と共有する。
 - 保存先は `transcripts/<id>/live-summary.json`。`MinutesMissingView` にもカードを出す。
 - CLI は `--claude` で本物、既定は偽（`dev summarize` と同じ向き）。
+- 停止後のカード（処理中・議事録なし）は『n 秒前に更新』を出さない（計画 09 Task 7 の裁定）
 
 ## 作り手に任せること
 

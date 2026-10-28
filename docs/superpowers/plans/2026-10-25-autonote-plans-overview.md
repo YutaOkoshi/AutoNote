@@ -322,6 +322,25 @@ protocol QueueStage: Sendable {
 - 未解決の観察: max RSS は 50 分分で今も約 100 MB 増える（アロケータが解放済みページを返さないためと見るが、計画 08 では調べていない）。
 - 残課題: 録音中の逐次処理（窓のパイプライン）は未着手（利用者の決定待ち）。監査 P2・P3 は別計画。実モデルの golden は作らない（固定は `FakeWhisperCore`）。
 
+## 8k. 計画 09 の実装で確定した変更（2026-10-28。以後の作業はこれに従う）
+
+- 設定 3 キー: `live_summary_enabled`（既定 false）、`live_summary_interval_seconds`（既定 20、`Settings.liveSummaryIntervalRange` 10〜120 に丸める）、`live_summary_model`（既定 `Settings.defaultLiveSummaryModel` = "haiku"、空なら既定に戻す）。一般タブの「Claude Code」の下に「リアルタイム要約」節。`PrivacyCopy.externalNotice` に「リアルタイム要約をオンにすると、録音中も確定した発話のテキストを Claude Code へ送ります。」を足した。
+- `LiveSummaryState{now, decisions, todos, consumedThrough, updatedAt}`（JSON は snake_case: `now`・`decisions`・`todos`・`consumed_through`・`updated_at`。`LiveSummaryTodo{text, owner}`）。`applying(_:consumedThrough:at:)` で trim・空と重複の除去・各リスト `listLimit` 50 件（新しい方）・`now` は `nowLimit` 60 文字、`consumedThrough` は戻さない。保存は `LiveSummaryStore` が `transcripts/<id>/live-summary.json`（`AppPaths.liveSummaryFile(_:)`）に atomic で書く。
+- `LiveSummaryInputBuilder`: `consumedThrough` より後の確定発話（印・空文字を除く）＋少なくとも直近 `contextSeconds` 120 秒。新しい発話が無ければ nil。`characterLimit` 8,000 文字を超えたら古い行から落として先頭に `omittedMarker`「[前略]」（1 行だけで超えるならその行の末尾を残す）。プロンプトは指示 → データの注意 → 「## 前回の状態」（compact JSON）→「## 発話」。
+- `LiveSummarizer`（`checkReady()`・`summarize(_:)`）/ `ClaudeLiveSummarizer`: 引数は `ClaudeCodeSummarizer.arguments(schema:model:)` を `LiveSummarySchema.json` で共有、`defaultTimeout` 60 秒、作業ディレクトリは `paths.liveSummaryWorkingDirectory`（`live-summary-cwd`）、結果判定は `ClaudeResultClassifier.classify(_:as:)`。パス解決・実行確認・ログイン確認・環境変数は `ClaudeProcess` に切り出して議事録と共有。生成は `LiveSummarizerFactory.make(settings:paths:)`。
+- `LiveTranscriptionWiring.confirmedFeeds()`: 会議ごとに 1 本の `LiveConfirmedFeed{meetingID, utterances}`（確定・印以外、辞書の置き換え済み）。ライブの流れが終わった後に閉じる。
+- `LiveSummaryScheduler`（`LiveSummaryPort`）: 周期ごとに設定を読み直し、オン・一時停止でない・バックオフ中でない・待ち行列が利用制限の待ちでない（なら `.pausedForRateLimit`）・要約器が使える・新しい発話がある、のときだけ 1 本呼ぶ（同時は常に 1 本）。利用制限は待ちを ×2（上限 `maxBackoffSeconds` 300 秒）、claude 未検出・未ログインはその録音では止める、その他の失敗が `failureThreshold` 3 回続くと `.failing`。停止時の最後の 1 回は `finalCallTimeoutSeconds` 60 秒で打ち切る。ログは 4 種（`live summary: off` / `unavailable (…)` / `rate limited, next in Ns` / `failed (…)`）。
+- `AppPorts.liveSummary`（`LiveSummaryPort`）・`MeetingsPort.liveSummary(_:)`（保存済みの状態を読む）・`AppModel.liveSummary(for:)`（この起動中に受けた最新の `LiveSummaryUpdate`）・`AppModel.liveSummaryUpdatedText`（「n 秒前に更新」、録音中の 1 秒ティックで進む）。`AppModel.streamCount = 7`。カードの文言は `LiveSummaryPresentation`（「いま」「決定事項」「宿題」「（なし）」「要約を休止中（Claude の利用制限）」「要約を更新できません」）。カードは録音中・処理中・議事録なし（`MinutesMissingView`）の画面に出し、完了後には出さない。
+- CLI: `autonote dev live-summary`（既定は `FakeLiveSummarizer`、`--claude` で本物）。E2E は 43 項目（09.1 状態の JSON 1 行、09.2 2 回目がリストと `consumed_through` を引き継ぐ、09.3 既定オフ）。`swift test` は 1020 件（95 スイート、`swift test --no-parallel` の実測）。
+- 前提の相違の決定（計画 09 の同名節）:
+  - 2: 出力の言語は発話に合わせる（議事録の言語の設定は無い）。プロンプトに「発話と同じ言語で書く」。
+  - 3: オン/オフも周期ごとに読み直す。`claude auth status` と要約器の生成は、その録音で初めてオンだったときに 1 回。モデルの変更は次の録音から。
+  - 4: 「n 秒前に更新」は録音中のカードだけ。停止後・`MinutesMissingView` の読み取り専用カードには出さない。
+  - 5: 最初の結果が来るまでカードは出さない。休止中・更新できませんの 1 行もカードの中だけ。
+  - 6: 停止後のカードは `AppModel.liveSummary(for:)` を優先し、無ければ `live-summary.json` を読む。
+  - 7: 待ち行列の利用制限の待ちは `QueueStatus.isInRateLimitWait`（`waiting`・`notBefore` あり・`summaryFailure == "rate_limited"` が 1 件でもある）。上書き確認待ちと通常の再試行待ちは含めない。
+  - 8: 最後の 1 回は 60 秒で打ち切り、後から来た結果は捨てる。バックオフ中・待ち行列が利用制限の待ちのときは最後の 1 回もしない。
+
 ## 9. Global Constraints（各計画の同名節にそのまま写す）
 
 - 最低 OS: macOS 26.0。`Package.swift` の platforms は `.macOS("26.0")`、`swift-tools-version: 6.2`、`swiftLanguageModes: [.v6]`。ツールチェーンは Swift 6.3（計画 00 と同じ）
