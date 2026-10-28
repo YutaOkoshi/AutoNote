@@ -42,6 +42,17 @@ public struct Settings: Codable, Equatable, Sendable {
     public var shortcuts: Shortcuts = Shortcuts()
     /// True once the first launch has run (output folder default, main window opened). JSON `first_run_completed`.
     public var firstRunCompleted: Bool = false
+    /// Live summary during recording (off by default: it sends confirmed live text to Claude Code). JSON `live_summary_enabled`.
+    public var liveSummaryEnabled: Bool = false
+    /// Seconds between live summary updates, kept inside `liveSummaryIntervalRange`. JSON `live_summary_interval_seconds`.
+    public var liveSummaryIntervalSeconds: Int = 20 {
+        didSet { liveSummaryIntervalSeconds = Self.clamp(liveSummaryIntervalSeconds, Self.liveSummaryIntervalRange.lowerBound, Self.liveSummaryIntervalRange.upperBound) }
+    }
+    /// Model for the live summary; never empty. JSON `live_summary_model`.
+    public var liveSummaryModel: String = Settings.defaultLiveSummaryModel
+
+    public static let liveSummaryIntervalRange: ClosedRange<Int> = 10...120
+    public static let defaultLiveSummaryModel = "haiku"
 
     public init() {}
 
@@ -69,6 +80,12 @@ public struct Settings: Codable, Equatable, Sendable {
         startOnModelMatch = try c.decodeIfPresent(Bool.self, forKey: .startOnModelMatch) ?? startOnModelMatch
         audioRetentionDays = try c.decodeIfPresent(Int.self, forKey: .audioRetentionDays) ?? audioRetentionDays
         shortcuts = try c.decodeIfPresent(Shortcuts.self, forKey: .shortcuts) ?? shortcuts
+        liveSummaryEnabled = try c.decodeIfPresent(Bool.self, forKey: .liveSummaryEnabled) ?? liveSummaryEnabled
+        liveSummaryIntervalSeconds = Self.clamp(
+            try c.decodeIfPresent(Int.self, forKey: .liveSummaryIntervalSeconds) ?? liveSummaryIntervalSeconds,
+            Self.liveSummaryIntervalRange.lowerBound, Self.liveSummaryIntervalRange.upperBound)
+        let model = (try c.decodeIfPresent(String.self, forKey: .liveSummaryModel) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        liveSummaryModel = model.isEmpty ? Self.defaultLiveSummaryModel : model
         // Backward compatibility: settings written while the consent notice existed carry `consent_notice_shown`.
         // Either key being true means the first run is done; only `first_run_completed` is written.
         let legacy = try decoder.container(keyedBy: LegacyKeys.self)

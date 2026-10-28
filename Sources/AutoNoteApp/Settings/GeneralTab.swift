@@ -12,6 +12,9 @@ struct GeneralTab: View {
     @State private var claudePath = ""
     @State private var claudeModel = ""
     @State private var summarizerKind: SummarizerKind = .claudeCode
+    @State private var liveSummaryEnabled = false
+    @State private var liveSummaryInterval = 20
+    @State private var liveSummaryModel = ""
     @State private var loaded = false
     /// `launchAtLogin` as last loaded or saved, to tell whether a save changed the toggle.
     @State private var savedLaunchAtLogin = true
@@ -21,8 +24,6 @@ struct GeneralTab: View {
     @State private var searchingClaude = false
     @State private var claudeSearchMessage: String?
     @State private var copied = false
-
-    static let externalNotice = "音声・文字起こし・議事録はこの Mac に保存します。外部へ送るのは、議事録を作るときに Claude Code へ渡す文字起こしテキスト（全文、辞書の用語、ブックマーク）だけで、音声は送りません。"
 
     private var cliCommand: String {
         let cli = Bundle.main.bundleURL.appending(path: "Contents/MacOS/autonote").path(percentEncoded: false)
@@ -72,6 +73,15 @@ struct GeneralTab: View {
                         Text("Claude Code").tag(SummarizerKind.claudeCode)
                     }
                 }
+                Section("リアルタイム要約") {
+                    Toggle("録音中に要約を表示する", isOn: $liveSummaryEnabled)
+                    Stepper(value: $liveSummaryInterval, in: Settings.liveSummaryIntervalRange, step: 5) {
+                        LabeledContent("更新間隔", value: "\(liveSummaryInterval) 秒")
+                    }
+                    TextField("モデル", text: $liveSummaryModel, prompt: Text(Settings.defaultLiveSummaryModel))
+                    Text("オンにすると、録音中に確定した発話のテキストを更新間隔ごとに Claude Code へ送り、いまの話題・決定事項・宿題を録音画面に出します。議事録の作成と同じ Claude の利用枠を使います。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Section("コマンドライン（autonote）") {
                     Text(cliCommand)
                         .font(.system(.caption, design: .monospaced))
@@ -84,7 +94,7 @@ struct GeneralTab: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("外部送信") {
-                    Text(Self.externalNotice).font(.callout).fixedSize(horizontal: false, vertical: true)
+                    Text(PrivacyCopy.externalNotice).font(.callout).fixedSize(horizontal: false, vertical: true)
                 }
             }
             .formStyle(.grouped)
@@ -103,6 +113,9 @@ struct GeneralTab: View {
         claudePath = s.claudePath ?? ""
         claudeModel = s.claudeModel ?? ""
         summarizerKind = s.summarizerKind
+        liveSummaryEnabled = s.liveSummaryEnabled
+        liveSummaryInterval = s.liveSummaryIntervalSeconds
+        liveSummaryModel = s.liveSummaryModel
         savedLaunchAtLogin = s.launchAtLogin
         loaded = true
         showLoginItemStatus()
@@ -126,6 +139,8 @@ struct GeneralTab: View {
             forInput: outputFolder, paths: env.paths, isDataDirectoryOverridden: env.isDataDirectoryOverridden)
         let path = Self.nilIfBlank(claudePath), model = Self.nilIfBlank(claudeModel)
         let login = launchAtLogin, kind = summarizerKind
+        let liveOn = liveSummaryEnabled, liveInterval = liveSummaryInterval
+        let liveModel = Self.nilIfBlank(liveSummaryModel) ?? Settings.defaultLiveSummaryModel
         do {
             try FileManager.default.createDirectory(
                 at: URL(filePath: folder, directoryHint: .isDirectory), withIntermediateDirectories: true)
@@ -141,8 +156,12 @@ struct GeneralTab: View {
                     $0.claudePath = path
                     $0.claudeModel = model
                     $0.summarizerKind = kind
+                    $0.liveSummaryEnabled = liveOn
+                    $0.liveSummaryIntervalSeconds = liveInterval
+                    $0.liveSummaryModel = liveModel
                 }
                 outputFolder = saved.outputFolder ?? ""
+                liveSummaryModel = saved.liveSummaryModel
                 saveState = .saved
                 let toggledOn = login && !savedLaunchAtLogin
                 savedLaunchAtLogin = saved.launchAtLogin

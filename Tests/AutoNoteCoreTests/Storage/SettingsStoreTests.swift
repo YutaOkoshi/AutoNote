@@ -55,3 +55,45 @@ import AutoNoteTestSupport
     #expect(!written.contains("consent_notice_shown"))
     #expect(try await store.load().firstRunCompleted)
 }
+
+@Test func liveSummaryDefaultsOff() throws {
+    let s = Settings()
+    #expect(!s.liveSummaryEnabled && s.liveSummaryIntervalSeconds == 20 && s.liveSummaryModel == "haiku")
+    let json = try JSONSerialization.jsonObject(with: AutoNoteJSON.encoder().encode(s)) as? [String: Any]
+    #expect(json?["live_summary_enabled"] as? Bool == false)
+    #expect(json?["live_summary_interval_seconds"] as? Int == 20)
+    #expect(json?["live_summary_model"] as? String == "haiku")
+}
+
+@Test func liveSummaryKeysAreReadAndClamped() async throws {
+    let p = AppPaths(root: try TemporaryDirectory.make()); try p.createBaseDirectories()
+    let store = SettingsStore(paths: p)
+    func load(_ json: String) async throws -> Settings {
+        try Data(json.utf8).write(to: p.settingsFile)
+        return try await store.load()
+    }
+    var s = try await load(#"{"live_summary_enabled":true,"live_summary_interval_seconds":5,"live_summary_model":"sonnet"}"#)
+    #expect(s.liveSummaryEnabled == true); #expect(s.liveSummaryIntervalSeconds == 10); #expect(s.liveSummaryModel == "sonnet")
+    s = try await load(#"{"live_summary_interval_seconds":500,"live_summary_model":"  "}"#)
+    #expect(s.liveSummaryIntervalSeconds == 120); #expect(s.liveSummaryModel == "haiku")
+    s = try await load(#"{"live_summary_model":"  opus \n"}"#)
+    #expect(s.liveSummaryModel == "opus")
+    s = try await load(#"{"output_folder":"/v/Meetings"}"#)
+    #expect(!s.liveSummaryEnabled); #expect(s.liveSummaryIntervalSeconds == 20); #expect(s.liveSummaryModel == "haiku")
+    // Round trip through the store writes the snake_case keys.
+    _ = try await store.update { $0.liveSummaryEnabled = true; $0.liveSummaryIntervalSeconds = 45; $0.liveSummaryModel = "sonnet" }
+    let written = try String(contentsOf: p.settingsFile, encoding: .utf8)
+    #expect(written.contains("\"live_summary_enabled\""))
+    #expect(written.contains("\"live_summary_interval_seconds\""))
+    #expect(written.contains("\"live_summary_model\""))
+    let back = try await store.load()
+    #expect(back.liveSummaryEnabled && back.liveSummaryIntervalSeconds == 45 && back.liveSummaryModel == "sonnet")
+}
+
+@Test func liveSummaryIntervalSetterClamps() {
+    var s = Settings()
+    s.liveSummaryIntervalSeconds = 9; #expect(s.liveSummaryIntervalSeconds == 10)
+    s.liveSummaryIntervalSeconds = 121; #expect(s.liveSummaryIntervalSeconds == 120)
+    s.liveSummaryIntervalSeconds = 30; #expect(s.liveSummaryIntervalSeconds == 30)
+    #expect(Settings.liveSummaryIntervalRange == 10...120)
+}
