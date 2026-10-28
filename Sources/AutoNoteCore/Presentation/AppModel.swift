@@ -50,6 +50,11 @@ public enum UserAction: Equatable, Sendable {
     public private(set) var recordedThisSession: Set<MeetingID> = []
     public private(set) var stoppedBand: StoppedBand?
     public private(set) var justSaved: JustSaved?
+    /// 「n 秒前に更新」 of the recording meeting's live summary, rebuilt on the 1-second tick; nil unless recording
+    /// (or paused / in the grace period) with a result for that meeting.
+    public private(set) var liveSummaryUpdatedText: String?
+    /// The newest live summary update per meeting received in this launch.
+    private var liveSummaries: [MeetingID: LiveSummaryUpdate] = [:]
     /// Withdraws the system notification of a prompt answered or resolved elsewhere (the app points it at
     /// `UserNotifier.withdraw(id:)`), so Notification Center keeps no stale buttons.
     /// True while the window's minutes editor holds unsaved edits (the app wires it to the editor). A stop does not
@@ -67,7 +72,7 @@ public enum UserAction: Equatable, Sendable {
     @ObservationIgnored private var levelTracker = InputLevelTracker()
     @ObservationIgnored private let bandDuration: Duration
 
-    private static let streamCount = 6
+    private static let streamCount = 7
     private static let refreshInterval: Duration = .seconds(30)
     private static let tickInterval: Duration = .seconds(1)
 
@@ -98,6 +103,7 @@ public enum UserAction: Equatable, Sendable {
             group.addTask { await self.consume(await ports.live.updates()) { await self.applyLive($0) } }
             group.addTask { await self.consume(await ports.automations.records()) { await self.apply($0) } }
             group.addTask { await self.consume(await ports.readiness.updates()) { await self.applyModel($0) } }
+            group.addTask { await self.consume(await ports.liveSummary.updates()) { await self.applyLiveSummary($0) } }
             group.addTask { await self.every(Self.refreshInterval) { await self.refresh() } }
             group.addTask { await self.every(Self.tickInterval) { await self.updateElapsed() } }
         }
@@ -177,6 +183,9 @@ public enum UserAction: Equatable, Sendable {
     }
 
     public func noticeWithdrawn(id: String) { prompts.removeAll { $0.id == id } }
+
+    /// The newest live summary update of `id` received in this launch (the post-stop views fall back to the file).
+    public func liveSummary(for id: MeetingID) -> LiveSummaryUpdate? { liveSummaries[id] }
 
     public func quitDecision(reason: QuitReason) -> QuitDecision { QuitPolicy.decide(recorder.state, reason: reason) }
 
@@ -344,11 +353,13 @@ public enum UserAction: Equatable, Sendable {
 
     private func updateElapsed() async {
         let s = recorder
-        guard [.recording, .paused, .grace].contains(s.state), s.meetingID != nil else {
+        guard [.recording, .paused, .grace].contains(s.state), let meetingID = s.meetingID else {
             elapsedSeconds = nil
             inputLevel = nil
+            liveSummaryUpdatedText = nil
             return
         }
+        updateLiveSummaryAge(meetingID)
         let levels = await ports.recorder.levels()
         inputLevel = levelTracker.observe(levels, recording: recorder.state == .recording)
         if let t = await ports.recorder.elapsed() {
@@ -408,6 +419,23 @@ public enum UserAction: Equatable, Sendable {
     }
 
     private func applyLive(_ snapshot: [Utterance]) { live.update(snapshot) }
+
+    /// Kept per meeting: a late update of an earlier meeting never reaches the recording one's age line.
+    private func applyLiveSummary(_ u: LiveSummaryUpdate) {
+        liveSummaries[u.meetingID] = u
+        let s = recorder
+        guard [.recording, .paused, .grace].contains(s.state), let id = s.meetingID else {
+            liveSummaryUpdatedText = nil
+            return
+        }
+        updateLiveSummaryAge(id)
+    }
+
+    private func updateLiveSummaryAge(_ id: MeetingID) {
+        liveSummaryUpdatedText = liveSummaries[id]?.state?.updatedAt.map {
+            LiveSummaryPresentation.updatedText(updatedAt: $0, now: now())
+        }
+    }
 
     /// A failed run is kept (one per name and meeting) until the same automation succeeds for that meeting.
     /// Skips (`already_ran`) change nothing.

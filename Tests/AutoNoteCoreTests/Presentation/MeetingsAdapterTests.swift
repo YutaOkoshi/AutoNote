@@ -123,4 +123,16 @@ import AutoNoteTestSupport
             try await f.adapter.saveMinutes(f.id, f.minutes(title: "x"), renameFile: false, overwrite: false)
         }
     }
+
+    @Test func liveSummaryReadsStoredFile() async throws {
+        // LiveSummaryStore で保存 → adapter.liveSummary(id) == 同じ値。ファイルが無い会議 → nil
+        let f = try await Fixture()
+        #expect(try await f.adapter.liveSummary(f.id) == nil)
+        let s = LiveSummaryState(now: "見積もりの確認", decisions: ["リリースは来週"],
+                                 todos: [LiveSummaryTodo(text: "資料を送る", owner: "佐藤")], consumedThrough: 85,
+                                 updatedAt: Samples.start)
+        try LiveSummaryStore(paths: f.paths).save(s, for: f.id)
+        #expect(try await f.adapter.liveSummary(f.id) == s)
+        #expect(try await f.adapter.liveSummary(MeetingID(rawValue: "20261024-1500-c3d4")) == nil)
+    }
 }

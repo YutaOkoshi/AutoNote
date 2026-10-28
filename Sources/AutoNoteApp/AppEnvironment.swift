@@ -22,6 +22,8 @@ final class AppEnvironment {
     let queue: QueueHolder
     let wiring: AppWiring
     let live: LiveTranscriptionWiring
+    /// Plan 09: the live summary of each recording, fed by `live.confirmedFeeds()` (`runLiveSummary()`).
+    let liveSummary: LiveSummaryScheduler
     let crashRecovery: CrashRecovery
     let catalog: EngineCatalog
     let models: ModelManager
@@ -55,7 +57,8 @@ final class AppEnvironment {
     private init(environment: [String: String], paths: AppPaths, settings: SettingsStore, manifests: ManifestStore,
                  output: OutputFolderServices, session: RecordingSession, coordinator: AutoRecordCoordinator,
                  registry: DeviceRegistry, monitor: DeviceMonitor, queue: QueueHolder, wiring: AppWiring,
-                 live: LiveTranscriptionWiring, crashRecovery: CrashRecovery, catalog: EngineCatalog, models: ModelManager,
+                 live: LiveTranscriptionWiring, liveSummary: LiveSummaryScheduler, crashRecovery: CrashRecovery,
+                 catalog: EngineCatalog, models: ModelManager,
                  automationsFile: AutomationsFile, retention: Retention, retentionScheduler: RetentionScheduler,
                  ports: AppPorts, readiness: LiveReadinessPort, model: AppModel, notifier: SystemUserNotifier,
                  server: SocketServer, routing: NoticeRouting) {
@@ -71,6 +74,7 @@ final class AppEnvironment {
         self.queue = queue
         self.wiring = wiring
         self.live = live
+        self.liveSummary = liveSummary
         self.crashRecovery = crashRecovery
         self.catalog = catalog
         self.models = models
@@ -154,12 +158,31 @@ final class AppEnvironment {
             timer: TaskTimerScheduler(),
             config: { AutoRecordCoordinator.config(from: (try? await settings.load()) ?? AutoNoteCore.Settings()) })
 
+        // 8b. Live summary (plan 09). Off unless the setting is on; the scheduler reads the settings on every tick.
+        let queuePort = QueueAdapter(holder: queue)
+        let liveSummaryStore = LiveSummaryStore(paths: paths)
+        let liveSummary = LiveSummaryScheduler(.init(
+            settings: { (try? await settings.load()) ?? AutoNoteCore.Settings() },
+            makeSummarizer: { try await LiveSummarizerFactory.make(settings: $0, paths: paths) },
+            queueInRateLimitWait: { await queuePort.status().isInRateLimitWait },
+            save: { id, state in
+                do {
+                    try liveSummaryStore.save(state, for: id)
+                } catch {
+                    let kind = String(describing: type(of: error))
+                    logger.error("live summary save failed for \(id.rawValue, privacy: .public) (\(kind, privacy: .public))")
+                }
+            },
+            log: { NSLog("AutoNote: %@", $0) },
+            clock: SystemQueueClock()))
+
         // 9. Cross-plan wiring. A queue-input change re-registers the stages on the same queue (ruling X19).
         let trigger = RecordingAutomationTrigger(dispatcher: dispatcher, manifests: manifests)
         let wiring = AppWiring(
             events: { await session.events() }, enqueuer: QueueEnqueuer(queue), notifier: notifier,
             listeners: [
                 { await live.handle($0) },
+                { await liveSummary.handle($0) },
                 { await trigger.handle($0) },
                 { e in for n in NoticeRelay.notices(for: e) { await notifier.post(n) } },
             ],
@@ -170,7 +193,6 @@ final class AppEnvironment {
         // 10. Adapters, the model and the socket server.
         let crashRecovery = CrashRecovery(paths: paths, manifests: manifests)
         let importer = AudioImporter(paths: paths, manifests: manifests)
-        let queuePort = QueueAdapter(holder: queue)
         let readiness = LiveReadinessPort(settings: settings, outputFolder: PortableOutputFolderPort(output: output),
                                           models: models, catalog: catalog, opener: WorkspaceOpener())
         let ports = AppPorts(
@@ -187,7 +209,8 @@ final class AppEnvironment {
             live: live,
             outputFolder: PortableOutputFolderPort(output: output),
             opener: WorkspaceOpener(),
-            readiness: readiness)
+            readiness: readiness,
+            liveSummary: liveSummary)
         let model = AppModel(ports: ports)
         model.withdrawNotice = { [notifier] id in await notifier.withdraw(id: id) }
         routing.model = model
@@ -200,7 +223,8 @@ final class AppEnvironment {
         return AppEnvironment(
             environment: environment, paths: paths, settings: settings, manifests: manifests, output: output,
             session: session, coordinator: coordinator, registry: registry, monitor: monitor, queue: queue,
-            wiring: wiring, live: live, crashRecovery: crashRecovery, catalog: catalog, models: models,
+            wiring: wiring, live: live, liveSummary: liveSummary, crashRecovery: crashRecovery, catalog: catalog,
+            models: models,
             automationsFile: automationsFile, retention: retention, retentionScheduler: retentionScheduler,
             ports: ports, readiness: readiness, model: model, notifier: notifier, server: server, routing: routing)
     }
@@ -235,6 +259,11 @@ final class AppEnvironment {
             return .leftAlone
         }
         return LoginItem.reconcile(launchAtLogin: launchAtLogin)
+    }
+
+    /// Launch item 2: one live summary session per recording, until the app quits (AppDelegate cancels it).
+    func runLiveSummary() async {
+        await liveSummary.run(feeds: await live.confirmedFeeds())
     }
 
     // MARK: - Notice loops (launch item 2)

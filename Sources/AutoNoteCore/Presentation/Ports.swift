@@ -101,6 +101,8 @@ public protocol MeetingsPort: Sendable {
     func importAudio(_ file: URL, startedAt: Date?) async throws -> MeetingID
     func recover(_ id: MeetingID) async throws
     func discard(_ id: MeetingID) async throws
+    /// `transcripts/<id>/live-summary.json`; nil when the meeting has none.
+    func liveSummary(_ id: MeetingID) async throws -> LiveSummaryState?
 }
 
 public protocol AutomationsPort: Sendable {
@@ -153,10 +155,11 @@ public struct AppPorts: Sendable {
     public var outputFolder: any OutputFolderPort
     public var opener: any FileOpener
     public var readiness: any ReadinessPort
+    public var liveSummary: any LiveSummaryPort
 
     public init(recorder: any RecorderPort, events: any RecordingEventsPort, queue: any QueuePort, meetings: any MeetingsPort,
                 automations: any AutomationsPort, live: any LiveTranscriptPort, outputFolder: any OutputFolderPort,
-                opener: any FileOpener, readiness: any ReadinessPort) {
+                opener: any FileOpener, readiness: any ReadinessPort, liveSummary: any LiveSummaryPort) {
         self.recorder = recorder
         self.events = events
         self.queue = queue
@@ -166,5 +169,6 @@ public struct AppPorts: Sendable {
         self.outputFolder = outputFolder
         self.opener = opener
         self.readiness = readiness
+        self.liveSummary = liveSummary
     }
 }

@@ -23,6 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sigtermSource: (any DispatchSourceSignal)?
     private var observers: [any NSObjectProtocol] = []
     private var tasks: [Task<Void, Never>] = []
+    /// The live summary scheduler's `run` (also in `tasks`); cancelled on quit so no new claude call starts.
+    private var liveSummaryTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installTerminationSignals()
@@ -78,6 +80,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 2. Subscriptions start right away: the socket already accepts commands (ruling X48).
         let wiring = env.wiring, queue = env.queue, model = env.model
+        // The live summary subscribes to the confirmed feeds before the first `.started` (a later subscriber still
+        // gets the running meeting's feed).
+        let liveSummaryTask = Task { await env.runLiveSummary() }
+        self.liveSummaryTask = liveSummaryTask
+        tasks.append(liveSummaryTask)
         tasks.append(Task { await wiring.run() })
         // After the saved jobs are loaded, a `.recorded` meeting with no job (the app quit between a stop and its
         // `route`) is enqueued again (I2).
@@ -278,6 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func resetQuitReason() { quitReason = .user }
 
     func applicationWillTerminate(_ notification: Notification) {
+        liveSummaryTask?.cancel()
         guard let server = env?.server else { return }
         // The socket file must be gone when the process exits (E2E 06.6); wait briefly for the actor.
         let done = DispatchSemaphore(value: 0)

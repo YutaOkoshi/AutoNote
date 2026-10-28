@@ -586,6 +586,85 @@ import AutoNoteTestSupport
         await model.perform(.installGuide)
         #expect(await fakes.readiness.calls.suffix(2) == ["retryModelDownload", "installGuide"])
     }
+
+    // MARK: - Live summary (plan 09 Task 6)
+
+    private func summary(_ id: MeetingID, decisions: [String], updatedAt: Date?,
+                         status: LiveSummaryStatus = .active) -> LiveSummaryUpdate {
+        LiveSummaryUpdate(meetingID: id, state: LiveSummaryState(now: "話題", decisions: decisions, todos: [],
+                                                                 consumedThrough: 30, updatedAt: updatedAt),
+                          status: status)
+    }
+
+    @Test func liveSummaryUpdatesAreKeptPerMeeting() async {
+        // send(A の update) → liveSummary(for: A)?.state?.decisions == […]、liveSummary(for: B) == nil
+        let a = m1, b = MeetingID(rawValue: "20261024-1500-c3d4")
+        let fakes = FakePorts()
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        #expect(model.liveSummary(for: a) == nil)
+        await fakes.liveSummary.send(summary(a, decisions: ["リリースは来週"], updatedAt: now))
+        await model.settle()
+        #expect(model.liveSummary(for: a)?.state?.decisions == ["リリースは来週"])
+        #expect(model.liveSummary(for: b) == nil)
+
+        // B's own update sits beside A's; a newer A update replaces only A's.
+        await fakes.liveSummary.send(summary(b, decisions: ["B の決定"], updatedAt: now))
+        await fakes.liveSummary.send(summary(a, decisions: ["リリースは来週", "予算は据え置き"], updatedAt: now, status: .failing))
+        await model.settle()
+        #expect(model.liveSummary(for: a) == summary(a, decisions: ["リリースは来週", "予算は据え置き"], updatedAt: now, status: .failing))
+        #expect(model.liveSummary(for: b) == summary(b, decisions: ["B の決定"], updatedAt: now))
+    }
+
+    @Test func liveSummaryAgeFollowsTheTick() async {
+        // recorder を recording(A)、update(updatedAt: now − 5) → liveSummaryUpdatedText == "5 秒前に更新"。.idle にすると nil
+        let fakes = FakePorts()
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        await fakes.recorder.send(recording(m1))
+        await model.settle()
+        #expect(model.liveSummaryUpdatedText == nil)   // no result yet
+        await fakes.liveSummary.send(summary(m1, decisions: [], updatedAt: now - 5))
+        await waitUntil { model.liveSummaryUpdatedText == "5 秒前に更新" }
+        #expect(model.liveSummaryUpdatedText == "5 秒前に更新")
+        await fakes.recorder.send(.idle(language: .ja))
+        await waitUntil { model.liveSummaryUpdatedText == nil }
+        #expect(model.liveSummaryUpdatedText == nil)
+        #expect(model.liveSummary(for: m1) != nil)   // the update itself stays for the post-stop views
+    }
+
+    @Test func lateUpdateForPreviousMeetingStaysOffNewRecording() async {
+        // Review Focus 3: recording(B) の間に A の update が届く → liveSummary(for: B) == nil、liveSummaryUpdatedText == nil、
+        // liveSummary(for: A) は届いたもの。B が自分の update を受けた後も、A の遅れた update は B に触れない
+        let a = m1, b = MeetingID(rawValue: "20261024-1500-c3d4")
+        let fakes = FakePorts()
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        await fakes.recorder.send(recording(b))
+        await model.settle()
+        let late = summary(a, decisions: ["A の最後の決定"], updatedAt: now - 2)
+        await fakes.liveSummary.send(late)
+        await model.settle()
+        #expect(model.liveSummary(for: b) == nil)
+        #expect(model.liveSummaryUpdatedText == nil)
+        #expect(model.liveSummary(for: a) == late)
+
+        // B gets its own result: B's card shows it, with B's age.
+        let own = summary(b, decisions: ["B の決定"], updatedAt: now - 7)
+        await fakes.liveSummary.send(own)
+        await model.settle()
+        #expect(model.liveSummary(for: b) == own)
+        #expect(model.liveSummaryUpdatedText == "7 秒前に更新")
+
+        // A's even later update (the final call ending) changes A only.
+        let later = summary(a, decisions: ["A の最後の決定", "A の追加"], updatedAt: now - 1)
+        await fakes.liveSummary.send(later)
+        await model.settle()
+        #expect(model.liveSummary(for: b) == own)
+        #expect(model.liveSummaryUpdatedText == "7 秒前に更新")
+        #expect(model.liveSummary(for: a) == later)
+    }
+
 }
 
 private actor WithdrawLog {

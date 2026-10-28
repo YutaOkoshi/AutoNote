@@ -169,6 +169,7 @@ public actor FakeMeetingsPort: MeetingsPort {
     public var transcripts: [String: Transcript] = [:]
     public var saveOutcome: SaveMinutesOutcome?
     public var importedID = MeetingID(rawValue: "20261024-1400-0000")
+    public var liveSummaries: [MeetingID: LiveSummaryState] = [:]
 
     public init(rows: [MeetingRow] = []) { meetingRows = rows }
 
@@ -181,6 +182,7 @@ public actor FakeMeetingsPort: MeetingsPort {
     public func setTranscript(_ t: Transcript, for id: MeetingID, kind: TranscriptKind) { transcripts["\(id.rawValue)/\(kind.rawValue)"] = t }
     public func setSaveOutcome(_ o: SaveMinutesOutcome?) { saveOutcome = o }
     public func setImportedID(_ id: MeetingID) { importedID = id }
+    public func setLiveSummary(_ s: LiveSummaryState?, for id: MeetingID) { liveSummaries[id] = s }
 
     public func rows() throws -> [MeetingRow] {
         try record("rows")
@@ -221,6 +223,11 @@ public actor FakeMeetingsPort: MeetingsPort {
 
     public func recover(_ id: MeetingID) throws { try record("recover(\(id.rawValue))") }
     public func discard(_ id: MeetingID) throws { try record("discard(\(id.rawValue))") }
+
+    public func liveSummary(_ id: MeetingID) throws -> LiveSummaryState? {
+        try record("liveSummary(\(id.rawValue))")
+        return liveSummaries[id]
+    }
 
     private func record(_ call: String) throws(AppCommandError) {
         calls.append(call)
@@ -296,6 +303,23 @@ public actor FakeLiveTranscriptPort: LiveTranscriptPort {
     public func send(_ lines: [Utterance]) { subscribers.yield(lines) }
 
     public func updates() -> AsyncStream<[Utterance]> {
+        calls.append("updates")
+        return subscribers.stream { [weak self] id in Task { await self?.unsubscribe(id) } }
+    }
+
+    private func unsubscribe(_ id: UUID) { subscribers.remove(id) }
+}
+
+/// Pushes `LiveSummaryUpdate`s to every open `updates()` stream (no replay of earlier ones).
+public actor FakeLiveSummaryPort: LiveSummaryPort {
+    public private(set) var calls: [String] = []
+    private var subscribers = Subscribers<LiveSummaryUpdate>()
+
+    public init() {}
+
+    public func send(_ u: LiveSummaryUpdate) { subscribers.yield(u) }
+
+    public func updates() -> AsyncStream<LiveSummaryUpdate> {
         calls.append("updates")
         return subscribers.stream { [weak self] id in Task { await self?.unsubscribe(id) } }
     }
@@ -391,13 +415,15 @@ public struct FakePorts: Sendable {
     public let outputFolder: FakeOutputFolderPort
     public let opener: FakeFileOpener
     public let readiness: FakeReadinessPort
+    public let liveSummary: FakeLiveSummaryPort
     public var ports: AppPorts
 
     public init(recorder: FakeRecorderPort = FakeRecorderPort(), events: FakeRecordingEventsPort = FakeRecordingEventsPort(),
                 queue: FakeQueuePort = FakeQueuePort(), meetings: FakeMeetingsPort = FakeMeetingsPort(),
                 automations: FakeAutomationsPort = FakeAutomationsPort(), live: FakeLiveTranscriptPort = FakeLiveTranscriptPort(),
                 outputFolder: FakeOutputFolderPort = FakeOutputFolderPort(), opener: FakeFileOpener = FakeFileOpener(),
-                readiness: FakeReadinessPort = FakeReadinessPort()) {
+                readiness: FakeReadinessPort = FakeReadinessPort(),
+                liveSummary: FakeLiveSummaryPort = FakeLiveSummaryPort()) {
         self.recorder = recorder
         self.events = events
         self.queue = queue
@@ -407,7 +433,9 @@ public struct FakePorts: Sendable {
         self.outputFolder = outputFolder
         self.opener = opener
         self.readiness = readiness
+        self.liveSummary = liveSummary
         ports = AppPorts(recorder: recorder, events: events, queue: queue, meetings: meetings, automations: automations,
-                         live: live, outputFolder: outputFolder, opener: opener, readiness: readiness)
+                         live: live, outputFolder: outputFolder, opener: opener, readiness: readiness,
+                         liveSummary: liveSummary)
     }
 }

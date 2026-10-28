@@ -284,6 +284,10 @@ public struct MeetingsAdapter: MeetingsPort {
         try read(Transcript.self, at: paths.transcriptFile(id, kind))
     }
 
+    public func liveSummary(_ id: MeetingID) async throws -> LiveSummaryState? {
+        try wrappingSync { try LiveSummaryStore(paths: paths).load(id) }
+    }
+
     /// `minutes.json` → manifest title → Vault file (overview order). When the Vault file was edited outside,
     /// `minutes.json` keeps the new minutes and the Vault is left alone until the next save or regeneration.
     public func saveMinutes(_ id: MeetingID, _ m: MinutesOutput, renameFile: Bool, overwrite: Bool) async throws -> SaveMinutesOutcome {
