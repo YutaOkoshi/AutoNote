@@ -64,6 +64,32 @@ public struct SilenceDetector: Sendable {
         return false
     }
 
+    /// The longest run of silent 20 ms frames on the 0-based grid of `samples`, as a sample range aligned to
+    /// frame boundaries, or nil when it is shorter than `minSilence`. On a tie the later run wins. A trailing
+    /// partial frame is not counted.
+    public func longestSilence(in samples: [Int16]) -> Range<Int>? {
+        let frames = samples.count / Self.frameSamples
+        var best: Range<Int>?
+        var runStart: Int?
+        for frame in 0...frames {
+            let isSilent: Bool
+            if frame < frames {
+                let lower = frame * Self.frameSamples
+                isSilent = !isSpeechFrame(samples[lower..<(lower + Self.frameSamples)])
+            } else {
+                isSilent = false
+            }
+            if isSilent {
+                if runStart == nil { runStart = frame }
+            } else if let start = runStart {
+                if frame - start >= minSilenceFrames, frame - start >= (best?.count ?? 0) { best = start..<frame }
+                runStart = nil
+            }
+        }
+        guard let best else { return nil }
+        return (best.lowerBound * Self.frameSamples)..<(best.upperBound * Self.frameSamples)
+    }
+
     /// RMS of the frame (Int16 normalised to ±1) at or above the threshold.
     private func isSpeechFrame(_ frame: ArraySlice<Int16>) -> Bool {
         var sum = 0.0

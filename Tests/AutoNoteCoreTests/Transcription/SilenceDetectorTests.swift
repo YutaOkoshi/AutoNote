@@ -37,4 +37,16 @@ import Testing
         #expect(b.count == 2)
         #expect(abs(b[1] - 3.0) < 0.021)
     }
+
+    @Test func longestSilenceFindsTheLongestRun() {
+        #expect(SilenceDetector().longestSilence(in: tone(1) + silence(1) + tone(1) + silence(2) + tone(1)) == 48_000..<80_000)
+    }
+
+    @Test func longestSilenceIgnoresShortRuns() {
+        #expect(SilenceDetector().longestSilence(in: tone(1) + silence(0.78) + tone(1)) == nil)
+    }
+
+    @Test func longestSilencePrefersTheLaterOnTie() {
+        #expect(SilenceDetector().longestSilence(in: tone(1) + silence(1) + tone(1) + silence(1) + tone(1)) == 48_000..<64_000)
+    }
 }
