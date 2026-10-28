@@ -125,4 +125,22 @@ import AutoNoteTestSupport
         #expect(await adapter.status().items.first?.state == "pending")
         await #expect(throws: AppCommandError.invalid("処理中です: \(f.id.rawValue)")) { try await adapter.retry(f.id) }
     }
+
+    /// Plan 09 premise 7: only a waiting job held back by the rate-limit round counts.
+    @Test func isInRateLimitWaitOnlyForRateLimitedWaits() {
+        let later = Samples.start.addingTimeInterval(3600)
+        func status(_ state: String, notBefore: Date?, failure: String?) -> QueueStatus {
+            QueueStatus(items: [QueueItemDTO(meetingID: "20261028-1000-aaaa", state: state, summaryFailure: failure, notBefore: notBefore)])
+        }
+        #expect(status("waiting", notBefore: later, failure: "rate_limited").isInRateLimitWait)
+        #expect(!status("waiting", notBefore: nil, failure: "rate_limited").isInRateLimitWait)
+        #expect(!status("waiting", notBefore: later, failure: nil).isInRateLimitWait)
+        #expect(!status("done", notBefore: nil, failure: "rate_limited").isInRateLimitWait)
+        #expect(!status("done", notBefore: later, failure: "rate_limited").isInRateLimitWait)
+        #expect(!QueueStatus.empty.isInRateLimitWait)
+        // One matching job among others is enough.
+        let mixed = QueueStatus(items: [QueueItemDTO(meetingID: "a", state: "running"),
+                                        QueueItemDTO(meetingID: "b", state: "waiting", summaryFailure: "rate_limited", notBefore: later)])
+        #expect(mixed.isInRateLimitWait)
+    }
 }

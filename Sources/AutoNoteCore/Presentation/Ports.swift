@@ -65,6 +65,13 @@ public struct QueueStatus: Equatable, Sendable {
     }
 
     public static let empty = QueueStatus()
+
+    /// A job is held back by the rate-limit round (`PostProcessingQueue.finish`): waiting with a `notBefore` and a
+    /// `rate_limited` summary failure. Overwrite confirmations and ordinary retries do not count.
+    public var isInRateLimitWait: Bool {
+        items.contains { $0.state == JobState.waiting.rawValue && $0.notBefore != nil
+            && $0.summaryFailure == SummaryFailureKind.rateLimited.rawValue }
+    }
 }
 
 public protocol QueuePort: Sendable {
@@ -106,6 +113,26 @@ public protocol AutomationsPort: Sendable {
 /// Implemented by Task 13's `LiveTranscriptionWiring`.
 public protocol LiveTranscriptPort: Sendable {
     func updates() async -> AsyncStream<[Utterance]>
+}
+
+public enum LiveSummaryStatus: Equatable, Sendable { case active, pausedForRateLimit, failing }
+
+/// One meeting's live summary as the card shows it; `state` is nil until the first result.
+public struct LiveSummaryUpdate: Equatable, Sendable {
+    public var meetingID: MeetingID
+    public var state: LiveSummaryState?
+    public var status: LiveSummaryStatus
+
+    public init(meetingID: MeetingID, state: LiveSummaryState?, status: LiveSummaryStatus) {
+        self.meetingID = meetingID
+        self.state = state
+        self.status = status
+    }
+}
+
+/// Implemented by `LiveSummaryScheduler`.
+public protocol LiveSummaryPort: Sendable {
+    func updates() async -> AsyncStream<LiveSummaryUpdate>
 }
 
 public protocol OutputFolderPort: Sendable {
