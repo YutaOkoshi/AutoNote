@@ -14,6 +14,7 @@ import AutoNoteTestSupport
     @Test func cardIsNilWithoutState() {
         #expect(LiveSummaryPresentation.card(state: nil, status: .failing, updated: nil) == nil)
         #expect(LiveSummaryPresentation.card(state: nil, status: .active, updated: "1 秒前に更新") == nil)
+        #expect(LiveSummaryPresentation.card(state: nil, status: .pausedForRateLimit, updated: nil) == nil)
     }
 
     @Test func cardShowsOwnerAndStatus() {

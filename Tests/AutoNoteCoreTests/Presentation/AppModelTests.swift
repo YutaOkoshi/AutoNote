@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import AutoNoteCore
 import AutoNoteTestSupport
@@ -617,16 +618,23 @@ import AutoNoteTestSupport
     }
 
     @Test func liveSummaryAgeFollowsTheTick() async {
-        // recorder を recording(A)、update(updatedAt: now − 5) → liveSummaryUpdatedText == "5 秒前に更新"。.idle にすると nil
+        // recorder を recording(A)、update(updatedAt: now − 5) → "5 秒前に更新"。時計を 3 秒進めると update なしで 1 秒ティックが
+        // "8 秒前に更新" に作り直す。.idle にすると nil
         let fakes = FakePorts()
-        let (model, task) = await start(fakes)
+        let clock = MovableClock(now)
+        let model = AppModel(ports: fakes.ports, now: { clock.now }, timeZone: Samples.tokyo)
+        let task = Task { await model.run() }
         defer { task.cancel() }
+        await model.settle()
         await fakes.recorder.send(recording(m1))
         await model.settle()
         #expect(model.liveSummaryUpdatedText == nil)   // no result yet
         await fakes.liveSummary.send(summary(m1, decisions: [], updatedAt: now - 5))
         await waitUntil { model.liveSummaryUpdatedText == "5 秒前に更新" }
         #expect(model.liveSummaryUpdatedText == "5 秒前に更新")
+        clock.advance(3)   // no update and no snapshot: only the 1-second tick can move the line
+        await waitUntil(timeout: .seconds(4)) { model.liveSummaryUpdatedText == "8 秒前に更新" }
+        #expect(model.liveSummaryUpdatedText == "8 秒前に更新")
         await fakes.recorder.send(.idle(language: .ja))
         await waitUntil { model.liveSummaryUpdatedText == nil }
         #expect(model.liveSummaryUpdatedText == nil)
@@ -665,6 +673,14 @@ import AutoNoteTestSupport
         #expect(model.liveSummary(for: a) == later)
     }
 
+}
+
+/// A wall clock the test moves forward by hand.
+private final class MovableClock: Sendable {
+    private let value: Mutex<Date>
+    init(_ start: Date) { value = Mutex(start) }
+    var now: Date { value.withLock { $0 } }
+    func advance(_ seconds: TimeInterval) { value.withLock { $0 += seconds } }
 }
 
 private actor WithdrawLog {
