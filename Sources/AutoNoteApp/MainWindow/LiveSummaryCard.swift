@@ -69,6 +69,8 @@ struct LiveSummaryCard: View {
         .onScrollGeometryChange(for: Bool.self) { g in
             g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 1
         } action: { _, end in atEnd = end }
+        // A body shown again (expanded, or re-created by a meeting switch) starts at the top: not at the end.
+        .onAppear { atEnd = false }
         // 「続きがある」: the last 18 pt of text fade out while more is below; lifted at the end so the last row is clear.
         .mask {
             if contentHeight > Self.maxBodyHeight && !atEnd {
@@ -99,6 +101,7 @@ struct LiveSummaryCard: View {
     }
 
     private func toggle() {
+        atEnd = false
         withAnimation(.easeInOut(duration: 0.15)) { collapsed.toggle() }
     }
 
