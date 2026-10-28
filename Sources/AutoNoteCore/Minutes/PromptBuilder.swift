@@ -37,7 +37,8 @@ public struct PromptBuilder: Sendable {
         return blocks.joined(separator: "\n\n")
     }
 
-    private static func line(_ u: Utterance) -> String {
+    /// `[HH:MM:SS] 話者: 本文` with newlines flattened (shared with the live summary input).
+    static func line(_ u: Utterance) -> String {
         "[\(u.start.hhmmss)] \(u.speaker.displayName): \(flatten(u.text))"
     }
 

@@ -47,6 +47,7 @@ public struct AppPaths: Sendable, Equatable {
         transcriptsDirectory(id).appending(path: "\(kind.rawValue).json")
     }
     public func minutesFile(_ id: MeetingID) -> URL { transcriptsDirectory(id).appending(path: "minutes.json") }
+    public func liveSummaryFile(_ id: MeetingID) -> URL { transcriptsDirectory(id).appending(path: "live-summary.json") }
     public func vaultStateFile(_ id: MeetingID) -> URL { vaultStateDirectory.appending(path: "\(id.rawValue).json") }
 
     public func createBaseDirectories() throws {
