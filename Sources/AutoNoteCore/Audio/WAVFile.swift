@@ -39,18 +39,55 @@ public enum WAVFile {
     }
 
     public static func readSamples(_ url: URL) throws -> [Int16] {
-        let data = try Data(contentsOf: url)
-        guard data.count >= headerSize else { throw WAVFileError.invalidHeader }
-        let h = try parse(data.prefix(headerSize))
-        let available = data.count - headerSize
-        let bytes = (h.dataBytes > 0 ? min(h.dataBytes, available) : available) & ~1
-        var out = [Int16](repeating: 0, count: bytes / 2)
-        out.withUnsafeMutableBytes { dst in
-            data.withUnsafeBytes { src in
-                dst.copyMemory(from: UnsafeRawBufferPointer(rebasing: src[headerSize..<(headerSize + bytes)]))
+        try readSamples(url, in: 0..<sampleCount(url))
+    }
+
+    /// Number of 16-bit samples in the data chunk (header size, clamped to the file length).
+    public static func sampleCount(_ url: URL) throws -> Int {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        return try sampleCount(handle)
+    }
+
+    /// Reads `range` (clamped to `0..<sampleCount`) with a file handle, never holding the whole file.
+    public static func readSamples(_ url: URL, in range: Range<Int>) throws -> [Int16] {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let total = try sampleCount(handle)
+        let lower = min(max(range.lowerBound, 0), total)
+        let upper = min(max(range.upperBound, lower), total)
+        let count = upper - lower
+        guard count > 0 else { return [] }
+        var out = [Int16](repeating: 0, count: count)
+        try handle.seek(toOffset: UInt64(headerSize + 2 * lower))
+        let chunkBytes = 1 << 20
+        var written = 0 // bytes
+        let totalBytes = count * 2
+        try out.withUnsafeMutableBytes { dst in
+            while written < totalBytes {
+                guard let chunk = try handle.read(upToCount: min(chunkBytes, totalBytes - written)),
+                      !chunk.isEmpty else { break }
+                chunk.withUnsafeBytes { src in
+                    dst.baseAddress!.advanced(by: written).copyMemory(from: src.baseAddress!, byteCount: chunk.count)
+                }
+                written += chunk.count
             }
         }
+        if written < totalBytes { out.removeLast(count - written / 2) }
         return out
+    }
+
+    private static func sampleCount(_ handle: FileHandle) throws -> Int {
+        let length = Int(try handle.seekToEnd())
+        guard length >= headerSize else { throw WAVFileError.invalidHeader }
+        try handle.seek(toOffset: 0)
+        guard let head = try handle.read(upToCount: headerSize), head.count == headerSize else {
+            throw WAVFileError.invalidHeader
+        }
+        let h = try parse(head)
+        let available = length - headerSize
+        let bytes = (h.dataBytes > 0 ? min(h.dataBytes, available) : available) & ~1
+        return bytes / 2
     }
 
     /// Rewrites the RIFF/data size fields from the actual file length. Nil for files shorter than a header.
