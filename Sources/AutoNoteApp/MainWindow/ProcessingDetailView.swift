@@ -67,7 +67,11 @@ struct ProcessingDetailView: View {
 
     private func load() async {
         let id = MeetingID(rawValue: row.id)
-        stored = try? await env.ports.meetings.liveSummary(id)
+        // Clear the previous row's card first; a slow read for that row must not land after a switch.
+        stored = nil
+        let summary = try? await env.ports.meetings.liveSummary(id)
+        guard !Task.isCancelled else { return }
+        stored = summary
         do {
             let transcript = try await env.ports.meetings.transcript(id, kind: .live)
             let replacer = Replacer(await Self.dictionary(env).replacements)

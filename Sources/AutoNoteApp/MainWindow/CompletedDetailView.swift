@@ -255,7 +255,11 @@ struct MinutesMissingView: View {
         }
         .task(id: row.id) {
             let id = MeetingID(rawValue: row.id)
-            stored = try? await env.ports.meetings.liveSummary(id)
+            // Clear the previous row's card first; a slow read for that row must not land after a switch.
+            stored = nil
+            let summary = try? await env.ports.meetings.liveSummary(id)
+            guard !Task.isCancelled else { return }
+            stored = summary
             let t = try? await env.ports.meetings.transcript(id, kind: .final)
             transcript = LiveTranscriptView.lines(t?.utterances ?? [])
         }

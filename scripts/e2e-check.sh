@@ -440,6 +440,8 @@ check_live_summary_default_off() {
     app_or_skip || return
     cli_or_skip || return
     # 項目 7 の settings.json は live_summary_enabled を書かない（既定 false）。マイク許可が無い環境では start が失敗するので skip
+    # 同じ app.log には 06.7 の録音の off 行もあるので、start 前の件数から 1 件以上増えることを見る
+    local offs_before; offs_before="$(grep -c "live summary: off (" "${WORK}/app.log" 2>/dev/null)"; offs_before="${offs_before:-0}"
     if ! AUTONOTE_DATA_DIR="${DATA}" run_timeout 10 "${AUTONOTE_CLI}" start; then skip "autonote start が失敗（マイク許可が無い環境か）"; return; fi
     sleep 3
     AUTONOTE_DATA_DIR="${DATA}" run_timeout 20 "${AUTONOTE_CLI}" stop || { fail "autonote stop が失敗"; return; }
@@ -451,11 +453,12 @@ check_live_summary_default_off() {
         sleep 0.5
     done
     [[ "${state}" == "idle" ]] || { LAST_LOG="${out}"; fail "stop から 10 秒で recorder.state が idle にならない（「${state}」）"; return; }
-    grep -q "live summary: off (" "${WORK}/app.log" \
-        || { LAST_LOG="${WORK}/app.log"; fail "app.log に「live summary: off (」が無い"; return; }
+    local offs_after; offs_after="$(grep -c "live summary: off (" "${WORK}/app.log" 2>/dev/null)"; offs_after="${offs_after:-0}"
+    [[ "${offs_after}" -gt "${offs_before}" ]] \
+        || { LAST_LOG="${WORK}/app.log"; fail "app.log の「live summary: off (」が start 前 ${offs_before} 件から増えていない（${offs_after} 件）"; return; }
     local files; files="$(find "${DATA}/transcripts" -name live-summary.json 2>/dev/null | wc -l | tr -d ' ')"
     [[ "${files}" -eq 0 ]] || { LAST_LOG=""; fail "live-summary.json が ${files} 個（期待 0）"; return; }
-    pass "idle、app.log に live summary: off、live-summary.json なし"
+    pass "idle、app.log の live summary: off が ${offs_before} → ${offs_after} 件、live-summary.json なし"
 }
 
 check_automation_log_and_socket() {
