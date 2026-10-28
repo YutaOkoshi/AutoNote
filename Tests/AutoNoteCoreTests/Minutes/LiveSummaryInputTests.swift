@@ -34,6 +34,13 @@ import Foundation
         #expect(r.consumedThrough == 310)
     }
 
+    @Test func sendsEverythingAfterConsumedThroughEvenBeyond120Seconds() throws {
+        let all = [u(140, 150, "a"), u(290, 300, "b")]
+        let r = try #require(LiveSummaryInputBuilder.request(previous: state(consumedThrough: 100), confirmed: all))
+        #expect(ends(r) == [150, 300])
+        #expect(r.consumedThrough == 300)
+    }
+
     @Test func partialsAndMarkersAreIgnored() throws {
         let marker = Utterance(start: TimelineTime(seconds: 95), speaker: .unknown, text: LiveFeed.pauseMarkerText, isFinal: true)
         let old = [u(0, 9, "a")]
