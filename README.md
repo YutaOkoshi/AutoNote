@@ -65,3 +65,7 @@ macOS のメニューバーに常駐して会議を録音し、手元で文字�
 | [UX 監査](docs/superpowers/research/2026-10-27-ux-audit/README.md) | 説明なしで初見操作できるかを 61 項目とゼロコンテキスト操作テストで見た結果 |
 | [参考アプリ](docs/superpowers/research/2026-10-24-reference-apps.md) | 同種の Swift 製メニューバーアプリ 3 本の作りの調査 |
 | [機能ギャップ](docs/superpowers/research/2026-10-24-feature-gaps.md) | 21 製品の機能比較と、自作する価値がある部分 |
+
+## ライセンス
+
+[MIT License](LICENSE)。同梱してビルドする whisper.cpp も MIT License で配布されている。
