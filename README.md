@@ -6,7 +6,7 @@ macOS のメニューバーに常駐して会議を録音し、手元で文字�
 
 - メニューバーの波形アイコン、ショートカット（⌃⌥R）、CLI のどれからでも録音を始められる
 - 自分のマイクと Mac のシステム音声（Zoom・Google Meet・Teams・Slack ハドルの相手の声）を別々のトラックで同時に録る
-- 文字起こしは Mac の中で行う。録音中は Apple の音声認識（SpeechTranscriber / DictationTranscriber）でリアルタイムに流し、止めたあとに whisper.cpp で精度の高い確定版を作る
+- 文字起こしは Mac の中で行う。録音中は Apple の音声認識（SpeechTranscriber / DictationTranscriber）でリアルタイムに流し、止めたあとに whisper.cpp で精度の高い確定版を作る（whisper のモデルを取得していないときは、確定版も Apple の音声認識で作る）
 - 確定版の文字起こしから、手元の Claude Code（`claude -p`）が 3 行要約・決定事項・議題・Next Action を持つ議事録を作る
 - 録音中にリアルタイム要約を出せる（設定でオンにしたとき）
 - 議事録は 1 会議 1 ファイルの Markdown で、Obsidian などの Vault のフォルダに保存する。Claude Code がフォルダを読んで「先月決まったこと」に答えられる形にしてある
@@ -28,7 +28,7 @@ macOS のメニューバーに常駐して会議を録音し、手元で文字�
 ## インストール
 
 1. [GitHub Releases](https://github.com/YutaOkoshi/AutoNote/releases) から `AutoNote-<version>-macos-universal.zip` を取り、展開した `AutoNote.app` を `/Applications` に置く
-2. 配布物は Developer ID 署名・公証をしていない。初回は右クリック →「開く」で起動する。開けなければ次を実行する
+2. 配布物は Developer ID 署名・公証をしていない。一度開こうとして拒否されたら、システム設定 › プライバシーとセキュリティ の下にある「このまま開く」を押す。または次を実行する
 
    ```sh
    xattr -d com.apple.quarantine /Applications/AutoNote.app

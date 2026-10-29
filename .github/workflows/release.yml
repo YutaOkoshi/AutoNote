@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   version:
-    # バージョン判定だけなので安い Linux ランナーで済ませる（macOS の約 1/10 の消費）
+    # バージョン判定だけなので Linux ランナーで済ませる（macOS ランナーの時間を節約するため）
     # workflow_dispatch を main 以外で起動しても、リリースは main からしか作らない
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
