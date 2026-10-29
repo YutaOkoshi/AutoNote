@@ -45,7 +45,7 @@
 
 ## 制約
 
-- 既存の Global Constraints（`docs/superpowers/plans/2026-10-25-autonote-plans-overview.md` §9）と §8i。Swift 6 strict concurrency、TDD、E2E は `scripts/e2e-check.sh` に追加。
+- 既存の Global Constraints（`docs/development.md` の「開発の約束事」）と §8i。Swift 6 strict concurrency、TDD、E2E は `scripts/e2e-check.sh` に追加。
 - `LiveFeed` / `LiveTranscriptionWiring` / `AppModel.applyLive` の流れは変えない。要約はその購読者として足す（`LiveFeed.snapshot()` か `updates()` の確定分を読む）。
 - 1 回の入力は上限を持つ（発話テキストで 8,000 文字を超えたら古い方から落とし、落とした旨を `[前略]` で示す）。
 

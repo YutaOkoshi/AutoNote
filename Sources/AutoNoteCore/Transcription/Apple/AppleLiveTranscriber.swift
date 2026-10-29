@@ -6,7 +6,7 @@ import Foundation
 public typealias DictationLiveTranscriber = AppleLiveTranscriber<DictationAdapter>
 public typealias SpeechLiveTranscriber = AppleLiveTranscriber<SpeechAdapter>
 
-/// Realtime transcription with Apple's `SpeechAnalyzer` (the flow measured in plan 00's AppleSpeechProbe).
+/// Realtime transcription with Apple's `SpeechAnalyzer` (the flow measured in the plan 00 AppleSpeechProbe spike; see docs/superpowers/research/2026-10-24-spike-results.md).
 /// `start` sets the analyzer up and returns at once; a results task yields utterances through the stream.
 /// A recognition or audio-conversion error after `start` tears the session down and ends the stream (always
 /// logged to stderr); a consumer that stops reading the stream tears it down too.

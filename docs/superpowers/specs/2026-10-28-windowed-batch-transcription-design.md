@@ -43,7 +43,7 @@
 
 ## 制約
 
-- 既存の Global Constraints（`docs/superpowers/plans/2026-10-25-autonote-plans-overview.md` §9）に従う。Swift 6 strict concurrency、TDD、E2E は `scripts/e2e-check.sh` に追加。
+- 既存の Global Constraints（`docs/development.md` の「開発の約束事」）に従う。Swift 6 strict concurrency、TDD、E2E は `scripts/e2e-check.sh` に追加。
 - whisper.cpp のビルド・バージョンは変えない。`whisper_full` の呼び方（`offset_ms`、スレッド数、言語）は窓の中では今と同じ。
 - `Transcript` の形式、`minutes.json`、`manifest` は変えない。
 - 窓の実装は `AutoNoteCore` に置き、GUI（`LazyBatchTranscriber`）と CLI（`dev transcribe`）が同じ型を使う。

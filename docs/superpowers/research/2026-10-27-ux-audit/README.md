@@ -4,8 +4,8 @@
 
 ## 方法
 1. **ベストプラクティスの収集**: Apple HIG（メニューバーエクストラ・メニュー・アラート・権限・オンボーディング・設定・進捗・通知）、Nielsen の 10 ヒューリスティクス、NN/g の空状態・段階的開示・シグニファイア、競合（Granola / MacWhisper / Audio Hijack / Krisp）から、画面で判定できる 61 項目に落とした → [checklist.md](checklist.md)
-2. **全画面の撮影と採点**: 同意・メニュー・メイン（初期/完了/録音中/停止後）・取り込み・削除確認・設定 8 タブを自前の AX ツールで撮影し、61 項目を採点 → [scorecard.md](scorecard.md)、[shots/](shots/)
-3. **ゼロコンテキスト操作テスト**: アプリの説明を一切与えないエージェントに [同じブリーフ](zero-context-brief.md) で 6 課題を与え、迷った瞬間を記録させた → [tester-1-sonnet.md](tester-1-sonnet.md)、[tester-2-opus.md](tester-2-opus.md)
+2. **全画面の撮影と採点**: 同意・メニュー・メイン（初期/完了/録音中/停止後）・取り込み・削除確認・設定 8 タブを自前の AX ツールで撮影し、61 項目を採点 → [scorecard.md](scorecard.md)（撮影画像は公開時に削除）
+3. **ゼロコンテキスト操作テスト**: アプリの説明を一切与えないエージェントに [同じブリーフ](zero-context-brief.md) で 6 課題を与え、迷った瞬間を記録させた （被験者の操作ログは個人のパスを含むため公開時に削除。結論は下の表に集約済み）
 
 Orca の computer-use はこのアプリの SwiftUI ウィンドウを読めなかった（後述の P0 が原因で AX が応答しなかった）ため、AXUIElement + ScreenCaptureKit の小さなツールを scratchpad に作って操作・撮影した。
 

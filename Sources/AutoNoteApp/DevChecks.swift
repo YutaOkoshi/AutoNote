@@ -4,8 +4,8 @@
 // ターミナルの許可を見てしまうので、`open` で起動した com.yutaokoshi.autonote の許可を確かめるにはここで呼ぶ。
 // `open` 起動では標準出力が見えないので、結果は <logsDirectory>/dev-checks.log に 1 行ずつ追記する。
 //
-// 手順は Spikes/Sources/TapCapture/main.swift（process tap）と
-// Spikes/Sources/AppleSpeechProbe/main.swift の dictation --file 経路を写したもの。
+// 手順は計画 00 のスパイク（process tap と dictation --file 経路。スパイクのコードは削除済みで、
+// 結果は docs/superpowers/research/2026-10-24-spike-results.md にある）を写したもの。
 
 @preconcurrency import AVFoundation
 import AutoNoteCore

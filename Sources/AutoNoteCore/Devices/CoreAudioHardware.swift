@@ -81,7 +81,7 @@ public final class CoreAudioHardware: AudioHardwareQuerying {
         deinit { cancel() }
     }
 
-    // MARK: - Core Audio reads (ported from Spikes DeviceProbe)
+    // MARK: - Core Audio reads (ported from the plan 00 DeviceProbe spike; see docs/superpowers/research/2026-10-24-spike-results.md)
 
     private static func address(_ selector: AudioObjectPropertySelector,
                                 _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {
