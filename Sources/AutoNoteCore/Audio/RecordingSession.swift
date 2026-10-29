@@ -73,7 +73,7 @@ public actor RecordingSession {
         self.now = now; self.tickInterval = tickInterval; self.timeZone = timeZone
     }
 
-    /// アプリ用の組み立て（計画 03・06 の `AppEnvironment.make` が使う）。
+    /// アプリ用の組み立て（`AppEnvironment.make` が使う）。
     public static func live(paths: AppPaths, settings: Settings, clock: any HostClock = MachHostClock()) -> RecordingSession {
         RecordingSession(paths: paths, manifests: ManifestStore(paths: paths),
                          sources: LiveAudioSourceFactory(voiceProcessing: settings.voiceProcessing),

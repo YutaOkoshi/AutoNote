@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-/// What the device coordinator (Task 8) needs from the recorder. `RecordingSessionControl` adapts plan 02's
+/// What the device coordinator needs from the recorder. `RecordingSessionControl` adapts the
 /// `RecordingSession`; tests use `FakeRecordingControl`.
 public protocol RecordingControl: Sendable {
     func start(device: DeviceRef?, language: Language, manual: Bool) async throws -> MeetingID

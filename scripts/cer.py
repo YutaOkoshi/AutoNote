@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""文字誤り率（CER）を出す（計画 00 Task 5 のスパイク用）。Python 3 の標準ライブラリだけで動く。
+"""文字誤り率（CER）を出す（whisper.cpp のベンチ用。実装前のスパイクで作った）。Python 3 の標準ライブラリだけで動く。
 
 使い方: python3 -I scripts/cer.py [--no-punct] <hyp.txt> <ref.txt>
 

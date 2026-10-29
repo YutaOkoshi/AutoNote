@@ -1,6 +1,6 @@
 import Foundation
 
-/// What the queue looks like right now; plan 06's `NoticeRelay` reads it.
+/// What the queue looks like right now; `NoticeRelay` reads it.
 public struct QueueSnapshot: Equatable, Sendable {
     /// `(createdAt, id)` ascending. Done jobs appear only when they carry a `summaryFailure`.
     public var jobs: [JobProgress]

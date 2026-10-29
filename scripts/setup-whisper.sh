@@ -1,10 +1,10 @@
 #!/bin/bash
-# whisper.cpp を tools/whisper.cpp に clone してビルドし、ベンチ用のモデルを取得する（計画 00 Task 5 のスパイク用）。
+# whisper.cpp を tools/whisper.cpp に clone してビルドし、ベンチ用のモデルを取得する（whisper.cpp のベンチ用。実装前のスパイクで作った）。
 #
 # 使い方: scripts/setup-whisper.sh
 #   WHISPER_TAG   clone するタグ（既定: v1.9.5。2026-10-24 時点の最新リリース）
 #   JOBS          ビルドの並列数（既定: 4）
-#   MODELS        取得するモデル（空白区切り。既定: 計画の 7 モデル）
+#   MODELS        取得するモデル（空白区切り。既定: ベンチ対象の 7 モデル）
 #
 # 何度実行してもよい。clone 済み・ビルド済み・取得済みのものはスキップする。
 # Metal ビルド（build-metal/）は Intel では best-effort で、失敗しても警告だけ出して続ける。

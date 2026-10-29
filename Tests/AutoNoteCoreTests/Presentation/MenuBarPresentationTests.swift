@@ -28,7 +28,7 @@ import AutoNoteTestSupport
 
     @Test func idle() {
         let p = make(state: .idle)
-        #expect(p.symbol == "waveform" && p.title == nil)     // 計画 00 の E2E 7b はアイドル時の項目名 waveform を見る
+        #expect(p.symbol == "waveform" && p.title == nil)     // E2E（scripts/e2e-check.sh）の項目 7b はアイドル時の項目名 waveform を見る
         #expect(p.items.contains(start) && !p.items.contains(stop) && !p.items.contains(.cancelCountdown) && p.items.suffix(2) == [.settings, .quit])
         #expect(p.items == [start, .openWindow, .openLatestMinutes(enabled: true), .settings, .quit])
     }
@@ -63,7 +63,7 @@ import AutoNoteTestSupport
         #expect(p.items.prefix(4) == [.status("一時停止中"), stop, .resume, .bookmark])
     }
 
-    @Test func graceHasNoCancel() {   // 要件書 §5.9・§15.1（Task 1）
+    @Test func graceHasNoCancel() {   // 要件書 §5.9・§15.1
         let p = make(state: .grace, startedAt: now - 100, deadline: now + 12, elapsedSeconds: 100)
         #expect(p.items.contains(.status("機材が外れました。12 秒後に停止")) && !p.items.contains(.cancelCountdown) && p.items.contains(stop))
         #expect(p.symbol == "record.circle" && p.title == "1:40" && !p.items.contains(pause))

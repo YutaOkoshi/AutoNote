@@ -3,7 +3,7 @@ import Foundation
 @testable import AutoNoteCore
 import AutoNoteTestSupport
 
-/// Registration prompts, the "already connected" notice and notice buttons (Task 9). Tests that need the device in
+/// Registration prompts, the "already connected" notice and notice buttons. Tests that need the device in
 /// `monitor.connected()` drive it through `run()`; the rest call the coordinator directly.
 @Suite(.timeLimit(.minutes(1))) struct AutoRecordRegistrationTests {
     private func countdowns(_ h: CoordinatorHarness) async -> [UserNotice] {

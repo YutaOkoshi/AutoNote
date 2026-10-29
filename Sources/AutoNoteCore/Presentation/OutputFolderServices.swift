@@ -2,7 +2,7 @@ import Foundation
 
 /// The output-folder-bound services (`PortableConfigStore`, `VaultWriter`) for the folder currently in the
 /// settings. Both come from `SharedVaultServices` so the queue stages, `delete` and the adapters share one
-/// instance per folder (overview 8c, ruling X-T8a).
+/// instance per folder (ruling X-T8a).
 public actor OutputFolderServices {
     private let paths: AppPaths
     private let services: SharedVaultServices

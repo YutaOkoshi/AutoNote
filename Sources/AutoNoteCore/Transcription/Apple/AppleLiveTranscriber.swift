@@ -6,12 +6,12 @@ import Foundation
 public typealias DictationLiveTranscriber = AppleLiveTranscriber<DictationAdapter>
 public typealias SpeechLiveTranscriber = AppleLiveTranscriber<SpeechAdapter>
 
-/// Realtime transcription with Apple's `SpeechAnalyzer` (the flow measured in the plan 00 AppleSpeechProbe spike; see docs/superpowers/research/2026-10-24-spike-results.md).
+/// Realtime transcription with Apple's `SpeechAnalyzer` (the flow measured in the AppleSpeechProbe spike; see docs/superpowers/research/2026-10-24-spike-results.md).
 /// `start` sets the analyzer up and returns at once; a results task yields utterances through the stream.
 /// A recognition or audio-conversion error after `start` tears the session down and ends the stream (always
 /// logged to stderr); a consumer that stops reading the stream tears it down too.
 public actor AppleLiveTranscriber<Adapter: AppleSpeechModuleAdapter>: LiveTranscriber {
-    /// Upper bound on contextual strings handed to the analyzer (plan 04 Task 7).
+    /// Upper bound on contextual strings handed to the analyzer.
     static var maxHints: Int { 100 }
 
     private let requestedStrategy: SegmentationStrategy

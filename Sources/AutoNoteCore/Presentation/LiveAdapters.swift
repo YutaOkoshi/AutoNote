@@ -4,7 +4,7 @@ import os
 private let logger = Logger(subsystem: "com.yutaokoshi.autonote", category: "LiveAdapters")
 
 extension AppCommandError {
-    /// `AppCommandError` passes through; anything else from plans 01–05 becomes `.failed(localizedDescription)`.
+    /// `AppCommandError` passes through; anything else from the Core services becomes `.failed(localizedDescription)`.
     static func wrap(_ error: any Error) -> AppCommandError {
         if let e = error as? AppCommandError { return e }
         return .failed(error.localizedDescription)
@@ -48,7 +48,7 @@ public struct CoordinatorRecorderPort: RecorderPort {
     private let elapsedTime: @Sendable () async -> TimelineTime?
     private let currentLevels: @Sendable () async -> [TrackLevel]
 
-    /// `elapsed` is wired to `RecordingSession.elapsed()` by Task 13 (ruling X25); `levels` to `RecordingSession.levels()`.
+    /// `elapsed` is wired to `RecordingSession.elapsed()` by `AppEnvironment` (ruling X25); `levels` to `RecordingSession.levels()`.
     public init(coordinator: AutoRecordCoordinator, elapsed: @escaping @Sendable () async -> TimelineTime? = { nil },
                 levels: @escaping @Sendable () async -> [TrackLevel] = { [] }) {
         self.coordinator = coordinator
@@ -239,7 +239,7 @@ public struct MeetingsAdapter: MeetingsPort {
     private let queueStatus: @Sendable () async -> QueueStatus
     private let timeZone: TimeZone
 
-    /// `route` is Task 13's `AppWiring.route` (enqueue, or the too-short notice). `queueStatus` feeds the
+    /// `route` is `AppWiring.route` (enqueue, or the too-short notice). `queueStatus` feeds the
     /// rows' processing labels (wire it to `QueuePort.status`).
     public init(paths: AppPaths, manifests: ManifestStore, settings: SettingsStore, output: OutputFolderServices,
                 importer: AudioImporter, crashRecovery: CrashRecovery, route: @escaping @Sendable (Manifest) async -> Void,
@@ -288,7 +288,7 @@ public struct MeetingsAdapter: MeetingsPort {
         try wrappingSync { try LiveSummaryStore(paths: paths).load(id) }
     }
 
-    /// `minutes.json` → manifest title → Vault file (overview order). When the Vault file was edited outside,
+    /// `minutes.json` → manifest title → Vault file, in that order. When the Vault file was edited outside,
     /// `minutes.json` keeps the new minutes and the Vault is left alone until the next save or regeneration.
     public func saveMinutes(_ id: MeetingID, _ m: MinutesOutput, renameFile: Bool, overwrite: Bool) async throws -> SaveMinutesOutcome {
         var updated = try await manifest(id)

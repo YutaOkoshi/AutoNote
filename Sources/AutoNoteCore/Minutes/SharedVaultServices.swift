@@ -2,7 +2,7 @@ import Foundation
 import Synchronization
 
 /// Hands out one `VaultWriter` / `PortableConfigStore` actor per output folder, so every queue stage that
-/// touches the same Vault goes through the same actor (overview 8c).
+/// touches the same Vault goes through the same actor.
 public final class SharedVaultServices: Sendable {
     public static let standard = SharedVaultServices()
 

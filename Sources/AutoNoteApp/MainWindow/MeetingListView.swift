@@ -1,7 +1,7 @@
 import AutoNoteCore
 import SwiftUI
 
-/// The left column: `model.meetings` with the same state words as the menu and the CLI (Task 10).
+/// The left column: `model.meetings` with the same state words as the menu and the CLI.
 struct MeetingListView: View {
     let model: AppModel
     @Binding var selection: String?

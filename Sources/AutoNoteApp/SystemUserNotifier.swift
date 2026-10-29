@@ -77,7 +77,7 @@ final class SystemUserNotifier: NSObject, UserNotifier, UNUserNotificationCenter
         u.categoryIdentifier = content.category
         u.userInfo = content.userInfo
         u.sound = nil
-        // Time-sensitive (never critical) only where the plan marks the notice as needing attention.
+        // Time-sensitive (never critical) only where `NoticeContent.needsAttention` marks the notice as needing attention.
         u.interruptionLevel = NoticeContent.needsAttention(category: content.category) ? .timeSensitive : .active
         let request = UNNotificationRequest(identifier: content.id, content: u, trigger: nil)
         do { try await center.add(request) } catch {

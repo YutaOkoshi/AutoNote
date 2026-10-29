@@ -1,7 +1,7 @@
 import Foundation
 
 /// Pure rules that turn recorder events and queue changes into notices. Holds no state: first-snapshot seeding and
-/// de-duplication belong to the caller (Task 13).
+/// de-duplication belong to the caller (`AppEnvironment`).
 public enum NoticeRelay {
     public static func notices(for e: RecordingEvent) -> [UserNotice] {
         switch e {

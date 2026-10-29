@@ -2,7 +2,7 @@ import AutoNoteCore
 import Foundation
 import SwiftUI
 
-/// The detail column when there are no meetings, nothing is selected and nothing is recording (plan 07 Task 10):
+/// The detail column when there are no meetings, nothing is selected and nothing is recording:
 /// how to record, how to import, what happens after stopping, and the readiness card at the bottom.
 struct EmptyStateView: View {
     let model: AppModel

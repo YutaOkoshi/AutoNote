@@ -19,7 +19,7 @@ public struct LiveSummaryCardContent: Equatable, Sendable {
     }
 }
 
-/// The copy of the live summary card (plan 09). No card until the first result; the status line only inside one.
+/// The copy of the live summary card. No card until the first result; the status line only inside one.
 public enum LiveSummaryPresentation {
     public static let nowTitle = "いま"
     public static let decisionsTitle = "決定事項"
@@ -27,7 +27,7 @@ public enum LiveSummaryPresentation {
     public static let emptyItem = "（なし）"
     public static let pausedText = "要約を休止中（Claude の利用制限）"
     public static let failingText = "要約を更新できません"
-    /// The collapse toggle's accessibility labels (plan 10).
+    /// The collapse toggle's accessibility labels.
     public static let collapseLabel = "要約を折りたたむ"
     public static let expandLabel = "要約を広げる"
 

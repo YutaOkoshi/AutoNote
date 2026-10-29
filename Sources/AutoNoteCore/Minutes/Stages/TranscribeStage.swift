@@ -1,10 +1,10 @@
 import Foundation
 import os
 
-/// Runs plan 04's final transcription; when it fails, falls back to the live transcript (spec §6.4).
+/// Runs the final transcription; when it fails, falls back to the live transcript (spec §6.4).
 /// The batch engine is resolved per job; when none is installed the live transcript becomes the final one,
 /// or the job fails with `no_speech` when the live transcript holds no utterances.
-/// Re-running the final pass later is plan 06's `rerun(id, from: "transcribe")`.
+/// Re-running the final pass later is the app's `rerun(id, from: "transcribe")`.
 public struct TranscribeStage: QueueStage {
     private static let logger = Logger(subsystem: "com.yutaokoshi.autonote", category: "TranscribeStage")
 

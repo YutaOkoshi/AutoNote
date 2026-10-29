@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# 計画 02 Task 1 の TCC まとめ確認。人の手が要らない手順をすべて自動で行い、結果を記録する。
+# TCC（マイク・システム音声録音・音声認識の許可）のまとめ確認。人の手が要らない手順をすべて自動で行い、結果を記録する。
 #
 # 使い方: scripts/tcc-check.sh <phase> [--reset]
-#   audio-persist  システム音声録音の許可の持続（Task 1 Step 4）
+#   audio-persist  システム音声録音の許可の持続
 #                  AudioCapture の許可（auth_value=2）が無ければ「初回」: tccutil reset → 起動 → 「システム音声を確認」
 #                  → ダイアログの有無を記録して、利用者に許可を頼む。
 #                  許可があれば「確認」: もう一度「システム音声を確認」→ TCC.db → 終了 → CFBundleVersion を 1 上げて
 #                  再ビルド → 起動 → 「システム音声を確認」→ ダイアログが出ないこと・last_modified が変わらないことを記録。
 #                  --reset を付けると許可があっても「初回」からやり直す。
-#   audio-denied   許可なしの挙動（Step 5。利用者が許可をオフにして再起動した後に回す）
-#   dictation      DictationTranscriber が音声認識の許可なしで動くか（Step 6）
-#   bt-silence     BT 出力で無音時に IOProc が止まるか（Step 7。出力を Shokz にして 1 回、内蔵スピーカーにして 1 回）
+#   audio-denied   許可なしの挙動（利用者が許可をオフにして再起動した後に回す）
+#   dictation      DictationTranscriber が音声認識の許可なしで動くか
+#   bt-silence     BT 出力で無音時に IOProc が止まるか（出力を Shokz にして 1 回、内蔵スピーカーにして 1 回）
 #
-# 記録先: docs/superpowers/research/2026-10-24-spike-raw/plan02-task1-tcc.log（追記。Bluetooth の UID は下 3 オクテットを伏せる）
+# 記録先: docs/superpowers/research/2026-10-24-spike-raw/tcc-check.log（追記。Bluetooth の UID は下 3 オクテットを伏せる）
 # 許可ダイアログはこのスクリプトでは押さない。出ていれば記録して、利用者に頼む内容を最後に表示する。
 set -uo pipefail
 
@@ -27,7 +27,7 @@ RESET=0
 source "${ROOT}/scripts/config.sh"
 BUNDLE_ID="${AUTONOTE_BUNDLE_ID}"
 APP="${ROOT}/build/AutoNote.app"
-OUT="${ROOT}/docs/superpowers/research/2026-10-24-spike-raw/plan02-task1-tcc.log"
+OUT="${ROOT}/docs/superpowers/research/2026-10-24-spike-raw/tcc-check.log"
 DEVLOG="${HOME}/Library/Application Support/AutoNote/logs/dev-checks.log"
 TCCDB="${HOME}/Library/Application Support/com.apple.TCC/TCC.db"
 PLIST="${ROOT}/Resources/Info.plist"
@@ -330,7 +330,7 @@ phase_bt_silence() {
 }
 
 case "${PHASE}" in audio-persist|audio-denied|dictation|bt-silence) ;; *) sed -n '2,18p' "$0"; exit 2 ;; esac
-[[ -f "${OUT}" ]] || printf '# 計画 02 Task 1 の TCC 確認（scripts/tcc-check.sh の出力。Bluetooth の UID は下 3 オクテットを伏せる）\n' > "${OUT}"
+[[ -f "${OUT}" ]] || printf '# TCC 確認（scripts/tcc-check.sh の出力。Bluetooth の UID は下 3 オクテットを伏せる）\n' > "${OUT}"
 rec ""
 rec "# ===== [$(now)] tcc-check.sh ${PHASE} $(sw_vers -productVersion) $(uname -m) ====="
 

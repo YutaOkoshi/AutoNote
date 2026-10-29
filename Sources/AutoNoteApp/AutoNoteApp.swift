@@ -12,13 +12,13 @@ struct AutoNoteApp: App {
             MenuBarLabel(shell: appDelegate.shell)
         }
 
-        // Plan 06 Task 14. Opened through `AppShell.open`, which activates the app first (ruling X37).
+        // The main window. Opened through `AppShell.open`, which activates the app first (ruling X37).
         Window("AutoNote", id: AppShell.mainWindowID) {
             MainWindow(shell: appDelegate.shell)
         }
         .defaultLaunchBehavior(.suppressed)
 
-        // Plan 06 Task 15. Opened by 設定… (activate first, then `openSettings`) and by the main window's band.
+        // The settings window. Opened by 設定… (activate first, then `openSettings`) and by the main window's band.
         SwiftUI.Settings {
             SettingsView(shell: appDelegate.shell)
         }

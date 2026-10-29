@@ -1,4 +1,4 @@
-# 初回起動から議事録が開くまで — 設計（計画 07 の種）
+# 初回起動から議事録が開くまで — 設計
 
 日付: 2026-10-27　対象: plan-06 ブランチ（HEAD 1913eb7）以降　根拠: `docs/superpowers/research/2026-10-27-ux-audit/README.md` の P1-1〜P1-7
 
@@ -184,7 +184,7 @@ public struct FailureExplanation: Sendable, Equatable {
 - 既存 E2E 33 項目を壊さない。E2E 7 の起動は `settings.json` に `output_folder` が無い状態で行われるので、起動後に `<DATA>/vault` が作られ `settings.json` に書かれることを新しい項目で確かめる。
 - 文言は日本語、内部識別子を画面に出さない。「保存先」に統一。
 
-## 検証（計画の各タスクが満たすもの）
+## 検証（実装が満たすもの）
 
 - 単体: `Readiness` の合成、`FirstRunDefaults`（nil → 既定パス、override 時は data dir 配下、作成失敗で nil）、`FailureExplanation` 全行、`TranscribeStage` の「エンジンなし→ライブ代用、発話 0→no_speech」、`MenuBarPresentation` の新しい項目と表記、短い録音の秒表示。
 - E2E（`scripts/e2e-check.sh` に追加）: 07.1 起動後に `<DATA>/vault` と `settings.json` の `output_folder`、07.2 `Readiness.model == .none`（override 下でダウンロードしない）、07.3 メニューに「保存先が見つかりません」が**出ない**（既定パスがあるため）、07.4 `autonote status --json` の失敗 `message` が従来形式のまま（CLI 互換）。

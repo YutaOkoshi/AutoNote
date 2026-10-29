@@ -13,7 +13,7 @@ public enum AutoRecordError: Error, Equatable, Sendable { case notRecording }
 /// The gate is not re-entrant. Effects call `UserNotifier` (`post`/`withdraw`), `RecordingControl`
 /// (`start`/`stop`/`pause`/…) and the `config` closure while holding it, so those implementations must never
 /// await a coordinator API (`handle`, `stop`, `snapshots()`, …) from inside such a call: that waits on the gate
-/// it is running under and deadlocks silently. Plan 06's UI must dispatch notice actions and other callbacks as
+/// it is running under and deadlocks silently. The UI must dispatch notice actions and other callbacks as
 /// separate `Task`s.
 public actor AutoRecordCoordinator {
     private static let logger = Logger(subsystem: "com.yutaokoshi.autonote", category: "devices")
@@ -173,7 +173,7 @@ public actor AutoRecordCoordinator {
         }
     }
 
-    /// Notice buttons. Only the device cases are handled here; the rest belong to plan 06.
+    /// Notice buttons. Only the device cases are handled here; the rest belong to the app.
     public func handle(_ action: UserNoticeAction) async {
         await serialized {
             switch action {
@@ -227,7 +227,7 @@ public actor AutoRecordCoordinator {
                 try await registry.ignore(device)
             }
         } catch {
-            // plan 06: surface save failures of a registration answer to the user
+            // Save failures of a registration answer are only logged, not yet surfaced to the user
             Self.log("register", error)
         }
     }
@@ -279,7 +279,7 @@ public actor AutoRecordCoordinator {
 
     // MARK: Applying events
 
-    /// FIFO admission (plan 02's `OperationGate`). Never call it from inside `body`: that would deadlock.
+    /// FIFO admission (`OperationGate`). Never call it from inside `body`: that would deadlock.
     private func serialized<T>(_ body: () async -> T) async -> T {
         if !gate.tryEnter() {
             queuedOperations += 1

@@ -3,7 +3,7 @@ import AppKit
 import AutoNoteCore
 import SwiftUI
 
-/// The menu-bar label: `waveform` alone when idle (plan 00 E2E 7b reads that name); the state symbol and the elapsed
+/// The menu-bar label: `waveform` alone when idle (`scripts/e2e-check.sh` item 7b reads that name); the state symbol and the elapsed
 /// time while recording, paused or in the grace period.
 struct MenuBarLabel: View {
     let shell: AppShell
@@ -26,13 +26,13 @@ struct MenuBarLabel: View {
                 Text(title).monospacedDigit()
             }
         } else {
-            // Idle or countdown: `waveform` alone (plan 00 E2E 7b reads that name), or `hourglass` while a job runs.
+            // Idle or countdown: `waveform` alone (E2E item 7b reads that name), or `hourglass` while a job runs.
             Image(systemName: p?.symbol ?? "waveform")
         }
     }
 }
 
-/// The menu: `model.menuBar(now:)`'s items in order (plan 06 Task 13 Step 6), with the plan 02 開発 menu after 設定…
+/// The menu: `model.menuBar(now:)`'s items in order, with the 開発 menu (TCC checks) after 設定…
 /// (ruling X11, `scripts/tcc-check.sh` clicks it) only in development launches (`AppIdentity.showsDevMenu`).
 struct MenuBarContent: View {
     let shell: AppShell
@@ -143,9 +143,9 @@ extension KeyboardShortcut {
     }
 }
 
-// MARK: - 開発 (plan 02 Task 1)
+// MARK: - 開発 (TCC checks)
 
-/// The temporary TCC checks of plan 02 Task 1, kept for `scripts/tcc-check.sh` (ruling X11). The item titles are
+/// The TCC checks, kept for `scripts/tcc-check.sh` (ruling X11). The item titles are
 /// what the script clicks.
 private struct DevMenu: View {
     var body: some View {

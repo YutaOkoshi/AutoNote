@@ -417,7 +417,7 @@ private func all<T: Sendable>(_ stream: AsyncStream<T>) async -> [T]? {
     }
 
     // X9/C21: a real RecordingSession (fake sources) → RecordingSessionActivity → QueueAssembly.make with one BatchGate
-    // shared by a FinalTranscriptionRunner. Recording pauses the gate; stopping resumes it (§13・overview §8b).
+    // shared by a FinalTranscriptionRunner. Recording pauses the gate; stopping resumes it (§13).
     @Test func batchGatePausedWhileRecording() async throws {
         let h = try await SessionHarness.make()
         let gate = BatchGate()

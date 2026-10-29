@@ -2,8 +2,8 @@ import AppKit
 import AutoNoteCore
 import SwiftUI
 
-/// A failed or waiting job, or a failed summary, as one "what — why" band with the buttons that help (plan 07
-/// Task 11). Nothing when the row has nothing to explain. Red for a failure, yellow while waiting.
+/// A failed or waiting job, or a failed summary, as one "what — why" band with the buttons that help.
+/// Nothing when the row has nothing to explain. Red for a failure, yellow while waiting.
 struct FailureBand: View {
     let env: AppEnvironment
     let model: AppModel

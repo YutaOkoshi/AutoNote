@@ -278,7 +278,7 @@ import AutoNoteTestSupport
         task.cancel()
         await task.value
     }
-    // MARK: - Readiness, input level, this launch's recordings, auto-selection (plan 07 Task 8)
+    // MARK: - Readiness, input level, this launch's recordings, auto-selection
 
     private let m2 = MeetingID(rawValue: "20261024-1500-c3d4")
 
@@ -588,7 +588,7 @@ import AutoNoteTestSupport
         #expect(await fakes.readiness.calls.suffix(2) == ["retryModelDownload", "installGuide"])
     }
 
-    // MARK: - Live summary (plan 09 Task 6)
+    // MARK: - Live summary
 
     private func summary(_ id: MeetingID, decisions: [String], updatedAt: Date?,
                          status: LiveSummaryStatus = .active) -> LiveSummaryUpdate {

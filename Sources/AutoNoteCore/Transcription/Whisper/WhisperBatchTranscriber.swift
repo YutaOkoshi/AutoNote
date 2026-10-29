@@ -6,7 +6,7 @@ import Synchronization
 /// samples are in memory. Pausing aborts whisper at the next segment boundary and restarts the window from the end of
 /// its last completed segment after `resume()`; the gate is also waited on before every window. Segment times are
 /// shifted by the window's start and each segment is kept by the window that owns its midpoint. Utterances come back
-/// with `speaker: .unknown` and times relative to the file (Task 11 assigns speaker and start offset).
+/// with `speaker: .unknown` and times relative to the file (the caller assigns speaker and start offset).
 /// A segment over audio with less than `SilenceDetector`'s minimum speech is dropped (whisper hallucinates on silence).
 /// The file must be a 16 kHz mono 16-bit WAV (`TranscriptionError.invalidAudio` otherwise).
 public actor WhisperBatchTranscriber: BatchTranscriber {

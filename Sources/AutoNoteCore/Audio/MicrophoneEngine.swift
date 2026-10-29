@@ -7,7 +7,7 @@ public protocol MicrophonePermissionChecking: Sendable {
     func status() -> MicrophonePermissionStatus
 }
 
-/// Reads the current microphone authorization. Never requests it (plan 06's screen does that).
+/// Reads the current microphone authorization. Never requests it (the app's first-run flow does that).
 public struct AVMicrophonePermission: MicrophonePermissionChecking {
     public init() {}
 

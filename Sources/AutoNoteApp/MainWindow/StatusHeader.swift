@@ -105,7 +105,7 @@ struct StatusHeader: View {
         }
     }
 
-    /// A recording under a minute: its length and 作る / 削除 (plan 07 Task 11).
+    /// A recording under a minute: its length and 作る / 削除.
     private func shortRecordingBand(_ id: MeetingID) -> some View {
         let seconds = model.meetings.first { $0.id == id.rawValue }?.durationSeconds
         return Band(systemImage: "timer", tint: .accentColor) {

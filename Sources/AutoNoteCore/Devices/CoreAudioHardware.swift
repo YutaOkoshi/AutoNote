@@ -34,7 +34,7 @@ public final class CoreAudioHardware: AudioHardwareQuerying {
     }
 
     public func observeDeviceList(_ onChange: @Sendable @escaping () -> Void) throws -> any HardwareObservation {
-        // The block is created inside this nonisolated method, never at top level (plan 00 Task 3: @MainActor inference -> SIGILL).
+        // The block is created inside this nonisolated method, never at top level (found in the spikes: @MainActor inference -> SIGILL).
         let queue = DispatchQueue(label: "autonote.coreaudio.devicelist")
         let block: AudioObjectPropertyListenerBlock = { _, _ in onChange() }
         var address = Self.address(kAudioHardwarePropertyDevices)
@@ -81,7 +81,7 @@ public final class CoreAudioHardware: AudioHardwareQuerying {
         deinit { cancel() }
     }
 
-    // MARK: - Core Audio reads (ported from the plan 00 DeviceProbe spike; see docs/superpowers/research/2026-10-24-spike-results.md)
+    // MARK: - Core Audio reads (ported from the DeviceProbe spike; see docs/superpowers/research/2026-10-24-spike-results.md)
 
     private static func address(_ selector: AudioObjectPropertySelector,
                                 _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {

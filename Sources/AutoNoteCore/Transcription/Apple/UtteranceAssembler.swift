@@ -15,7 +15,7 @@ public struct RecognizedSegment: Equatable, Sendable {
 /// Turns module results into `Utterance`s on the meeting timeline.
 /// Apple's volatile results can move the front of their range, so the first result after a final
 /// fixes the utterance's start; every result up to and including the next final reuses it
-/// (consumers overwrite partials by `start`, overview §4). The final adds `end` and releases the start.
+/// (consumers overwrite partials by `start`). The final adds `end` and releases the start.
 struct UtteranceAssembler: Sendable {
     private var anchor: Double?
 

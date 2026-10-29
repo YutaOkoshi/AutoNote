@@ -5,7 +5,7 @@ import Synchronization
 
 /// Development-only microphone capture for `dev transcribe --mic`: taps the default input with `AVAudioEngine`
 /// and converts it to 16 kHz mono Int16 `AudioChunk`s (track `.mic`, `start` = seconds captured so far).
-/// Independent of plan 02's recorder on purpose. The first run may trigger the microphone permission prompt.
+/// Independent of the app's recorder (`RecordingSession`) on purpose. The first run may trigger the microphone permission prompt.
 /// The tap block is created here (not in a `@MainActor` context) because it runs on the audio thread.
 final class DevMicCapture: @unchecked Sendable {
     struct Failure: Error, CustomStringConvertible { var description: String }

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Every user-facing notice across plans. Copy for non-device cases lives with the plan that posts them (and plan 06).
+/// Every user-facing notice. Copy for non-device cases lives with the code that posts them (and the app).
 public enum UserNotice: Equatable, Sendable {
     case deviceConnectedCountdown(DeviceRef, seconds: Int)
     case deviceSeenFirstTime(DeviceRef)
@@ -54,7 +54,7 @@ public enum UserNoticeAction: Equatable, Sendable {
     case openPrivacySettings
 }
 
-/// Implemented by plan 06. Notices carry no sound.
+/// Implemented by the app. Notices carry no sound.
 public protocol UserNotifier: Sendable {
     func post(_ notice: UserNotice) async
     func withdraw(id: String) async

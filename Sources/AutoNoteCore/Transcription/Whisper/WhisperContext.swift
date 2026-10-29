@@ -1,4 +1,4 @@
-// ヒントの渡し方（計画 04 Task 5 Step 1）: whisper.cpp に `carry_initial_prompt` があるので (a) を採る。
+// ヒントの渡し方: whisper.cpp に `carry_initial_prompt` があるので (a) を採る。
 // `no_context = true`・`carry_initial_prompt = true`・`n_max_text_ctx` は既定のまま（過去の文字起こしは呼び出しをまたいで渡さず、
 // ヒントだけを毎回の窓の先頭に付ける）。
 import Foundation

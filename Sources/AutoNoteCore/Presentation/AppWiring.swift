@@ -20,7 +20,7 @@ public struct QueueEnqueuer: MeetingEnqueuing {
 }
 
 /// Builds the post-processing queue with `automations` always last and the given `gate` (the same instance the
-/// final-transcription runner waits on, so recording pauses it; spec §13, overview §8b (5)).
+/// final-transcription runner waits on, so recording pauses it; spec §13).
 public enum QueueAssembly {
     public static func make(paths: AppPaths, stages: [any QueueStage], automations: AutomationsStage,
                             activity: any RecordingActivity, gate: BatchGate) -> PostProcessingQueue {
@@ -28,7 +28,7 @@ public enum QueueAssembly {
     }
 }
 
-/// The cross-plan wiring of overview §8b: one subscription to the recording events, fanned out to the listeners,
+/// The app-wide wiring: one subscription to the recording events, fanned out to the listeners,
 /// and the one entry point (`route`) for stopped, imported and recovered meetings.
 public actor AppWiring {
     private let events: @Sendable () async -> AsyncStream<RecordingEvent>
@@ -67,7 +67,7 @@ public actor AppWiring {
         }
     }
 
-    /// The common exit of a stopped recording, a finished import and a recovered one (overview §8b (1)(2)).
+    /// The common exit of a stopped recording, a finished import and a recovered one.
     /// The manifest status decides, never the stop reason.
     public func route(_ manifest: Manifest) async {
         switch manifest.status {

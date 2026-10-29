@@ -98,7 +98,7 @@ run_timeout() {
 have_cert() { security find-identity -v -p codesigning 2>/dev/null | grep -q "\"${CERT_NAME}\""; }
 have_gui() { [[ -z "${CI:-}" ]] && pgrep -x WindowServer >/dev/null 2>&1; }
 
-# 共通の補助（計画 01 が足し、後の計画の項目も使う。overview §7）
+# 共通の補助（すべての項目が使う）
 AUTONOTE_CLI="${AUTONOTE_CLI:-${ROOT}/.build/debug/autonote}"   # 環境変数で差し替え可
 AUTONOTE_CLI_BUILT=0
 need_autonote_cli() {   # 0: 使える / 1: 無い（呼び手が skip）/ 2: ビルド失敗（呼び手が fail）。--quick でなければ最初の 1 回だけ swift build

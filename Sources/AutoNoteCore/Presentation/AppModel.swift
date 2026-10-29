@@ -144,7 +144,7 @@ public enum UserAction: Equatable, Sendable {
         return true
     }
 
-    /// The window's readiness bands, without what the selected meeting's failure band already says (plan 07 GUI #4).
+    /// The window's readiness bands, without what the selected meeting's failure band already says.
     public func readinessBands(home: String) -> [ReadinessRow] {
         ReadinessPresentation.bands(readiness, home: home, failure: selectedFailure)
     }

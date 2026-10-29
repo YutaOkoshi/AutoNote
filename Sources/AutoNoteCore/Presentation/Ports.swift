@@ -1,6 +1,6 @@
 import Foundation
 
-/// The one error type the UI and the CLI see from a port. `CommandRouter` (Task 9) maps it to the wire.
+/// The one error type the UI and the CLI see from a port. `CommandRouter` maps it to the wire.
 public enum AppCommandError: Error, Equatable, Sendable {
     case notRecording, alreadyRecording, notFound(String), invalid(String), failed(String)
 }
@@ -112,7 +112,7 @@ public protocol AutomationsPort: Sendable {
     func records() async -> AsyncStream<AutomationRunRecord>
 }
 
-/// Implemented by Task 13's `LiveTranscriptionWiring`.
+/// Implemented by `LiveTranscriptionWiring`.
 public protocol LiveTranscriptPort: Sendable {
     func updates() async -> AsyncStream<[Utterance]>
 }

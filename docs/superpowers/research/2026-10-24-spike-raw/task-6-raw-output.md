@@ -1,6 +1,6 @@
 # Task 6 の生出力（AppleSpeechProbe、Intel x86_64 / macOS 26.6.2、2026-10-25）
 
-計画 00 Task 6 の実装者レポートから、測定の生出力と実装者の所見の部分だけを抜き出したもの（E2E の出力と作業メモは除き、ほかは元の文言のまま）。結果表の項目 2・12 の根拠。パスは `<repo>/`（リポジトリ）と `$TMPDIR/` に置き換えた。参照テキスト `tools/samples/ja-5min.txt` は現在の `scripts/samples/ja-5min.txt` と同じ内容（md5 9c6948098a7d67e13c51dd71e992bb5d）。
+スパイクの Task 6 の実装者レポートから、測定の生出力と実装者の所見の部分だけを抜き出したもの（E2E の出力と作業メモは除き、ほかは元の文言のまま）。結果表の項目 2・12 の根拠。パスは `<repo>/`（リポジトリ）と `$TMPDIR/` に置き換えた。参照テキスト `tools/samples/ja-5min.txt` は現在の `scripts/samples/ja-5min.txt` と同じ内容（md5 9c6948098a7d67e13c51dd71e992bb5d）。
 
 ## 短い確認（whisper ベンチと並走中。RTF は参考値）
 

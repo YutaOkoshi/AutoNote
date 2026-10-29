@@ -1,7 +1,7 @@
 import AutoNoteCore
 import SwiftUI
 
-/// 保持: how many days the recorded audio is kept (§12). Plan 05's `RetentionScheduler` reads the saved value.
+/// 保持: how many days the recorded audio is kept (§12). `RetentionScheduler` reads the saved value.
 struct RetentionTab: View {
     let env: AppEnvironment
 

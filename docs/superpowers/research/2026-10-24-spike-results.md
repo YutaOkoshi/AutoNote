@@ -1,6 +1,6 @@
-# 計画 00 スパイク結果
+# スパイク結果
 
-計画 00（計画 00。計画書は公開時に削除） で実機確認した結果を、[要件書 §19](../specs/2026-10-24-autonote-design.md#19-実装前に実機で確かめること) の 12 項目ごとにまとめる。
+実装前のスパイクで実機確認した結果を、[要件書 §19](../specs/2026-10-24-autonote-design.md#19-実装前に実機で確かめること) の 12 項目ごとにまとめる。
 
 ## 要件書に反映した変更
 
@@ -8,12 +8,12 @@
 
 - §3.2: XCFramework は x86_64 を含み、`bNNNN` プレリリースの zip を使う（項目 8）
 - §3.3: Intel の実時間比を実測値に差し替え、Metal は Intel では使わないと確定（項目 1）
-- §3.4: 自己署名でマイク許可が再ビルド後も保たれることを確認済みに（スパイク項目 9、`open` 起動と TCC.db の行で再測定）。システム音声の許可の持続も未確認。process tap は許可を拒否してもエラーにならず、拒否時の無音も再現できなかったので、許可なしは API エラーから検知できない前提で設計し、計画 02 の最初のタスクで自己署名 `.app` 単体・再起動後に再確認（項目 3・9）
+- §3.4: 自己署名でマイク許可が再ビルド後も保たれることを確認済みに（スパイク項目 9、`open` 起動と TCC.db の行で再測定）。システム音声の許可の持続も未確認。process tap は許可を拒否してもエラーにならず、拒否時の無音も再現できなかったので、許可なしは API エラーから検知できない前提で設計し、TCC 確認（`scripts/tcc-check.sh`）で自己署名 `.app` 単体・再起動後に再確認（項目 3・9）
 - §4.1: Intel の後処理時間の見込みを large-v3-turbo の実時間比 0.68 から計算した値に（項目 1）
 - §5.6: ボイスプロセッシングは「設定で選べる補助・既定オフ」のまま、スパイク未実施のため仮と注記（項目 5）
 - §5.7: システム音の無音検知を「最後のコールバックからの経過時間」に変え、無音区間は `AudioTimeStamp` から時間で埋める（項目 3）
 - §6.2: Intel の確定版を medium → large-v3-turbo、Intel で whisper をリアルタイムに使う場合は small、DictationTranscriber は目安表示用と明記、SFSpeechRecognizer を候補から外す、SpeechTranscriber の Intel 備考を `supportedLocales` が空に。Apple Silicon の行は仮（Task 8 未実施）（項目 1・2・12）
-- §6.3: DictationTranscriber は音声認識の許可なしで動く（AutoNote.app 単体では計画 02 の TCC まとめ確認タスクで再確認）、確定のまとまり方、リアルタイム出力の崩れ方（項目 2）
+- §6.3: DictationTranscriber は音声認識の許可なしで動く（AutoNote.app 単体では TCC まとめ確認（`scripts/tcc-check.sh`）で再確認）、確定のまとまり方、リアルタイム出力の崩れ方（項目 2）
 - §7.1: contextual strings の指定方法（`AnalysisContext.contextualStrings[.general]` ＋ `SpeechAnalyzer.setContext(_:)`）と、造語には効かず既知語には効いたこと（項目 2・12）
 - §8.1: 実際に動いたコマンドラインに差し替え（`--setting-sources project` に変更）、空の MCP 設定は必須、成功判定は `structured_output`・`is_error`・`subtype`、分割閾値は入力 200k トークン超（未検証の仮）、作業ディレクトリはリポジトリ外の空フォルダ（項目 6・11）
 - §8.2: `scripts/minutes-schema.json` が確定版（項目 6）
@@ -62,7 +62,7 @@
 - 要件書への影響（§6.2 の起動時の既定、Intel 列）:
   - 確定版: 「whisper.cpp medium（ベンチ次第で large-v3-turbo）」→ **whisper.cpp large-v3-turbo**（medium より速く、CER も低い）
   - リアルタイム: **DictationTranscriber のまま**（比較は項目 2）。whisper.cpp をリアルタイムに選ぶ場合の既定モデルは、会議アプリが動いている状態で RTF < 0.8 に収まる **small**（large-v3-turbo は無負荷なら収まるが負荷ありで 0.85 になり余裕が無い）。なお今回の RTF は 5 beams のバッチ処理の値で、ストリーミング（greedy・短いチャンク）では別に測る必要がある
-- ヒントの渡し方（計画 04 Task 5 Step 1）: whisper.cpp に `carry_initial_prompt` があるので、`no_context = true`・`carry_initial_prompt = true`・`n_max_text_ctx` は既定のまま（過去の文字起こしは渡さず、ヒントだけ毎回の窓に渡す）
+- ヒントの渡し方: whisper.cpp に `carry_initial_prompt` があるので、`no_context = true`・`carry_initial_prompt = true`・`n_max_text_ctx` は既定のまま（過去の文字起こしは渡さず、ヒントだけ毎回の窓に渡す）
 
 ## 項目 2: Intel 機で DictationTranscriber の日本語リアルタイム認識の遅延と精度を、whisper small と比べる
 
@@ -81,7 +81,7 @@
   - ※ SF の RTF は 1 回目（確定のみを集めた版）が 0.302、連結版が 0.342。同じ処理なので差はぶれ
   - 資産（AssetInventory）: ja-JP は既にディスクにあり、`downloadAndInstall()` は 1 回目 0.16 秒、本計測 0.02 秒（割り当てだけと推定）。en-US は初回 6.02 秒。呼ぶ前の status は installedLocales に載っていても `supported` で、呼んだ後に `installed` になる
   - マイクでのリアルタイム（👤 利用者、Intel MacBook Pro 内蔵マイク、約 70 秒、`--engine dictation --live --locale ja-JP --contextual "AutoNote,所沢,Kubernetes"`、preset `.progressiveLongDictation`、入力 16 kHz Int16 に変換。ログは [2026-10-24-spike-raw/task-6-step3-user-log.txt](2026-10-24-spike-raw/task-6-step3-user-log.txt)）:
-    - **体感遅延**: 部分結果は音声に対して約 0.4〜0.6 秒遅れで出続ける（`[+秒]` と結果が覆う音声の末尾時刻の差）。**最後の発話（音声 ~69.5 秒）から確定まで約 5 秒**（[+74.9]）。話し終えて Ctrl-C を押す前に確定が出た。約 70 秒の発話全体が確定 1 件にまとまり、それまでは部分結果が伸び続けた（発話単位で区切るには沈黙での確定を待つか、`finalize(through:)` や `.frequentFinalization` を試す必要がある。計画 04）
+    - **体感遅延**: 部分結果は音声に対して約 0.4〜0.6 秒遅れで出続ける（`[+秒]` と結果が覆う音声の末尾時刻の差）。**最後の発話（音声 ~69.5 秒）から確定まで約 5 秒**（[+74.9]）。話し終えて Ctrl-C を押す前に確定が出た。約 70 秒の発話全体が確定 1 件にまとまり、それまでは部分結果が伸び続けた（発話単位で区切るには沈黙での確定を待つか、`finalize(through:)` や `.frequentFinalization` を試す必要がある）
     - **英単語の混在**: Kubernetes は英字で出た。Slack は「スラック」とカタカナになった。「Night and Day」は英字と「ナイト&デイ」の両方で出た。数字は崩れる（「205 200人」など、言い直しの途中経過がそのまま残る）。句読点は付かなかった
     - **contextual strings の効き**: 所沢 ○、Kubernetes ○、**AutoNote ×**（「音ノート」）。ただし contextual なしとの比較はしていないので、所沢・Kubernetes が contextual のおかげで出たのかは切り分けていない
 - 手順: `cd Spikes && swift run AppleSpeechProbe --engine dictation --file ../tools/samples/ja-5min.wav --ref ../scripts/samples/ja-5min.txt`、同じく `--engine sf`。RTF＝解析開始〜全確定の壁時計秒 ÷ 295.4 秒（資産確認・初期化の 0.1〜0.3 秒は含めない）。CER は `scripts/cer.py`。生出力は [2026-10-24-spike-raw/task-6-raw-output.md](2026-10-24-spike-raw/task-6-raw-output.md)
@@ -90,10 +90,10 @@
   - 用語辞書（contextual strings）は造語（AutoNote）には効かなかったので、造語の表記揺れは議事録生成側（Claude への用語指定）で直す前提にする
   - **権限: DictationTranscriber は音声認識の TCC 許可（`SFSpeechRecognizer.requestAuthorization`）なしで動く。SFSpeechRecognizer は起動元アプリの Info.plist に `NSSpeechRecognitionUsageDescription` が無いと TCC が SIGABRT で落とす**（ターミナル等から起動したときは、TCC が許可を確かめる「責任プロセス」である起動元アプリの Info.plist が見られる。実行ファイルに埋め込んでも効かない）。SF を予備に残すなら AutoNote.app の Info.plist にこのキーを足す
   - 根拠: DictationTranscriber は、音声認識の許可が未決定（`SFSpeechRecognizer.authorizationStatus` が 0）の状態で認識結果を返した。責任プロセスは起動元の Orca.app。許可ダイアログは SF を実行したときに初めて出た（[2026-10-24-spike-raw/task-6-raw-output.md](2026-10-24-spike-raw/task-6-raw-output.md)）
-  - **計画 02 Task 1 の再確認（2026-10-26、AutoNote.app 単体を `open` で起動、`scripts/tcc-check.sh dictation`）**: `tccutil reset SpeechRecognition com.yutaokoshi.autonote` の後、開発メニュー「Dictation を確認」で `say -v Kyoko` の合成音声（約 4 秒）を認識。`SFSpeechRecognizer.authorizationStatus` は前後とも 0（未決定）、tccd には preflight の問い合わせ（`AUTHREQ_CTX ... kTCCServiceSpeechRecognition, preflight=yes`）だけが出て `AUTHREQ_PROMPTING`（ダイアログ）は無し、TCC.db に `kTCCServiceSpeechRecognition` の行は作られなかった。本文「本日の定例会議を始めます議題は3つあります」（21 字、2.83 秒）。**AutoNote.app 単体でも DictationTranscriber は音声認識の許可なしで動く**。`Resources/Info.plist` に `NSSpeechRecognitionUsageDescription` は足さない（画面ロック中の測定だが、ダイアログの有無は tccd のログで判定した）。ログは [2026-10-24-spike-raw/plan02-task1-tcc.log](2026-10-24-spike-raw/plan02-task1-tcc.log)
+  - **再確認（2026-10-26、AutoNote.app 単体を `open` で起動、`scripts/tcc-check.sh dictation`）**: `tccutil reset SpeechRecognition com.yutaokoshi.autonote` の後、開発メニュー「Dictation を確認」で `say -v Kyoko` の合成音声（約 4 秒）を認識。`SFSpeechRecognizer.authorizationStatus` は前後とも 0（未決定）、tccd には preflight の問い合わせ（`AUTHREQ_CTX ... kTCCServiceSpeechRecognition, preflight=yes`）だけが出て `AUTHREQ_PROMPTING`（ダイアログ）は無し、TCC.db に `kTCCServiceSpeechRecognition` の行は作られなかった。本文「本日の定例会議を始めます議題は3つあります」（21 字、2.83 秒）。**AutoNote.app 単体でも DictationTranscriber は音声認識の許可なしで動く**。`Resources/Info.plist` に `NSSpeechRecognitionUsageDescription` は足さない（画面ロック中の測定だが、ダイアログの有無は tccd のログで判定した）。ログは [2026-10-24-spike-raw/tcc-check.log](2026-10-24-spike-raw/tcc-check.log)
   - §6.2 の SFSpeechRecognizer の「1 分制限」は「60 秒ごとに結果が区切られ、isFinal は最後の区間だけ」と書き換え、使うなら区間の連結が要ると明記する。DictationTranscriber と同じモデルと見られるので、予備としての価値は「macOS 26 未満でも動く」ことだけ（最低 OS は 26.0 なので実質なし）
 
-- 発話の区切り（計画 04 Task 9、2026-10-27、Intel、DictationTranscriber、`tools/samples/ja-segments.wav` 77.5 秒＝架空の会議発言 10 文、文の間に 1.5 秒の沈黙、`dev transcribe --engine dictation --realtime --segmentation <案>`。`--realtime` は 1 チャンクごとの締め切り（開始 + 0.1 秒 × 番号）で流すよう直した後の測定。直す前は処理時間が累積して遅延が膨らんでいた）:
+- 発話の区切り（2026-10-27、Intel、DictationTranscriber、`tools/samples/ja-segments.wav` 77.5 秒＝架空の会議発言 10 文、文の間に 1.5 秒の沈黙、`dev transcribe --engine dictation --realtime --segmentation <案>`。`--realtime` は 1 チャンクごとの締め切り（開始 + 0.1 秒 × 番号）で流すよう直した後の測定。直す前は処理時間が累積して遅延が膨らんでいた）:
 
   | 案 | 確定件数 | 最長の発話 | 確定遅延の中央値（wall − end） |
   |---|---|---|---|
@@ -103,11 +103,11 @@
 
   - 採った案: **silence**（`SegmentationStrategy.current == .silenceFinalize`）。判定基準（件数 8〜13、最長 ≤ 15 秒、遅延中央値 ≤ 3.0 秒）を 3 つとも満たしたのは silence だけ。default と frequent は 60 秒で 1 件に区切られ（スパイクと同じ挙動。frequent の効果は見えなかった）、件数と最長を満たさない。全体の壁時計は 77.5〜77.9 秒（音声 77.5 秒）で、遅延は 10 文を通して一定（累積なし）。
   - 注意: silence の `end` は自前の沈黙検出が `finalize(through:)` に渡した時刻（発話の終わり + 沈黙判定の待ち）なので、`wall − end` は「実際に話し終えてから確定まで」より短い。話し終えてからの体感遅延はこれに沈黙判定の待ち時間（`SilenceDetector` の閾値）が加わる。
-  - マイク確認は未（Step 4 は利用者が居ないので飛ばした）。SpeechTranscriber 側は計画 04 Task 12。
+  - マイク確認は未（利用者が居ないので飛ばした）。SpeechTranscriber 側は Apple Silicon 機での確認待ち。
 
 ## 項目 3: Intel 機で process tap から実際に音声データが届くこと（作成・破棄は確認済み）
 
-- 結論: 届く（許可あり）。Intel x86_64 / macOS 26.6.2 で全システム音の tap から Float32 の PCM を受信し WAV に書けた。**「許可なし時の挙動」は本スパイクでは再現できなかった**。(a) Orca で許可をオフにして同じプロセス系統から実行 → 音が届いた（tccd は拒否を記録）。(b) 許可状態が未確認の Terminal.app から実行 → ダイアログなしで音が届いた。自己署名 `.app` 単体で、再起動後に再確認する（計画 02 の最初のタスク）。
+- 結論: 届く（許可あり）。Intel x86_64 / macOS 26.6.2 で全システム音の tap から Float32 の PCM を受信し WAV に書けた。**「許可なし時の挙動」は本スパイクでは再現できなかった**。(a) Orca で許可をオフにして同じプロセス系統から実行 → 音が届いた（tccd は拒否を記録）。(b) 許可状態が未確認の Terminal.app から実行 → ダイアログなしで音が届いた。自己署名 `.app` 単体で、再起動後に再確認する（`scripts/tcc-check.sh`）。
 - 測定値:
   - 受信フォーマット: 48000 Hz / 2ch / Float32 / interleaved / lpcm（`kAudioTapPropertyFormat`）。出力デバイスは内蔵スピーカー（UID `BuiltInSpeakerDevice`）。
   - 許可あり、`afplay Submarine.aiff` ループ中に 5 秒: callbacks=461、frames=236032（4.92 s）、rms=-31.72 dBFS。出力 WAV を読み直しても rms=-31.72 dBFS、peak=-8.90 dBFS、長さ 4.92 s。
@@ -120,7 +120,7 @@
     - つまりこの環境（未署名の CLI、責任プロセスが Orca.app）では拒否が受信を止めなかった。拒否が効かない理由は未特定（Orca を再起動していないことや、未署名バイナリであることが影響している可能性がある）。
   - Terminal.app から実行（利用者、Orca の許可をオンに戻した後）: 許可ダイアログは出ず、全 API が ok、callbacks=460、frames=235520（4.91 s）、rms=-31.71 dBFS。Terminal.app に以前から許可が付いていたかは未確認（TCC.db が読めなかった）。
   - 以上から、許可なし時の挙動（エラーになるか、無音になるか、届いてしまうか）は**未確定**。
-- 計画 02 Task 1 の再確認（2026-10-26、自己署名 AutoNote.app を `open` で起動、開発メニュー「システム音声を確認（15 秒）」、`scripts/tcc-check.sh audio-persist`。ログは [2026-10-24-spike-raw/plan02-task1-tcc.log](2026-10-24-spike-raw/plan02-task1-tcc.log)）:
+- 再確認（2026-10-26、自己署名 AutoNote.app を `open` で起動、開発メニュー「システム音声を確認（15 秒）」、`scripts/tcc-check.sh audio-persist`。ログは [2026-10-24-spike-raw/tcc-check.log](2026-10-24-spike-raw/tcc-check.log)）:
   - 許可が未決定（`tccutil reset AudioCapture` 後、TCC.db に行なし）・Submarine ループ中・内蔵スピーカー・画面ロック中: tccd が `AUTHREQ_PROMPTING ... kTCCServiceAudioCapture` を出した（**ダイアログ表示、応答待ち**。その要求に `AUTHREQ_RESULT` は出ていない）。応答待ちの間、**`AudioDeviceStart` が約 90 秒止まってから status 0 を返し**（スパイクでは開始は止まらず、止まったのは破棄だけだった）、`tapOnly` で callbacks=0 frames=0 peak_dbfs=-inf。破棄は 10 秒で打ち切り（`teardown timeout`）、約 80 秒後に全 status 0 で完了。callbacks=0 なので `withOutputClock` で取り直したが、同じく開始が約 90 秒止まり callbacks=0、破棄も打ち切り後に完了。**この callbacks=0 は許可が未決定なことによるもので、`tapOnly` / `withOutputClock` の構成差の測定にはならない**
   - 許可ありで `tapOnly` が受信できるか（callbacks・frames・peak）: 未測定（利用者待ち: 許可ダイアログで AutoNote を許可 → `scripts/tcc-check.sh audio-persist`）
   - 自己署名 `.app` 単体・再起動後の許可なしの挙動: 未測定（利用者待ち: システム設定で「システムオーディオ録音のみ」をオフ → 再起動 → `scripts/tcc-check.sh audio-denied`）
@@ -138,10 +138,10 @@
 - 要件書への影響:
   - §5.7「システム音の無音検知 60 秒」は、サンプルの RMS ではなく「最後に IOProc が呼ばれてからの経過時間」でも判定する必要がある。相手が黙っている・会議アプリが音を出していないだけでも callbacks が止まる。
   - 許可なしは API エラーからも検知できない前提で設計する（status はすべて 0 だった）。「許可なし→無音になる」とも決めつけない。UI は「60 秒コールバックなし → 許可または音源を確認するよう案内」に留める。
-  - 許可なし時の挙動は、計画 02 の最初のタスクで自己署名 `.app`（`AutoNote Dev`）単体、再起動後に再確認する。
-  - 初回の許可ダイアログに応答していない間は、全 API が成功したまま何も届かず、停止時に `AudioDeviceDestroyIOProcID` が数分ブロックする。計画 02 では停止処理をメインスレッドで同期的に呼ばない。
-  - 計画 02 Task 1 で、応答待ちの間は `AudioDeviceStart` も約 90 秒止まることが分かった（`open` 起動の AutoNote.app）。開始もメインスレッドで同期的に呼ばない。
-  - 録音ファイルの時間軸: 無音区間はコールバック自体が来ないので、受信フレームをそのまま連結するとマイク側とずれる。計画 02 で AudioTimeStamp（`mHostTime`/`mSampleTime`）による穴埋めが要る。
+  - 許可なし時の挙動は、TCC 確認（`scripts/tcc-check.sh audio-denied`）で自己署名 `.app`（`AutoNote Dev`）単体、再起動後に再確認する。
+  - 初回の許可ダイアログに応答していない間は、全 API が成功したまま何も届かず、停止時に `AudioDeviceDestroyIOProcID` が数分ブロックする。録音器では停止処理をメインスレッドで同期的に呼ばない。
+  - その後の TCC 確認で、応答待ちの間は `AudioDeviceStart` も約 90 秒止まることが分かった（`open` 起動の AutoNote.app）。開始もメインスレッドで同期的に呼ばない。
+  - 録音ファイルの時間軸: 無音区間はコールバック自体が来ないので、受信フレームをそのまま連結するとマイク側とずれる。録音器で AudioTimeStamp（`mHostTime`/`mSampleTime`）による穴埋めが要る。
 
 ## 項目 4: 利用者が実際に使う機材を一つずつつなぎ、`DeviceUID` `ModelUID` `TransportType` 名前を記録する。Bluetooth は切断・再接続で UID が変わらないか、3.5mm は入力ソースの値がどう変わるかを見る
 
@@ -188,7 +188,7 @@
 - 結論: 返る。claude 2.1.310（既定モデル `claude-fable-5-1`、claude.ai の Max 認証）で、60 分・120 分・60 分＋注入の 3 回とも 1 回目で `structured_output` が返り、`scripts/minutes-schema.json` に合った（再試行なし）。注入行があっても `title` は `HACKED` にならなかった。分割閾値は 120 分相当（入力 53,528 トークン）までは不要。
 - 動いたコマンドライン（作業ディレクトリは空の `tools/claude-cwd/`。ブリーフのとおりで修正不要）:
   `claude -p --output-format json --json-schema "$(cat scripts/minutes-schema.json)" --tools "" --strict-mcp-config --mcp-config '{"mcpServers":{}}' --no-session-persistence --max-turns 1 --setting-sources user < <指示文＋区切り＋文字起こし>`
-  - 要件書 §8.1 は `project` を採用（スクリプトの既定も project に変更）。project での実測（60 分・120 分）は計画 05 の最初で行う（本計画では未測定。1 分の小さな確認だけは項目 11）。
+  - 要件書 §8.1 は `project` を採用（スクリプトの既定も project に変更）。project での実測（60 分・120 分）は議事録生成の実装時に行う（スパイクでは未測定。1 分の小さな確認だけは項目 11）。
 - 測定値（入力トークン＝`input_tokens + cache_creation_input_tokens + cache_read_input_tokens`。`total_cost_usd` は API 換算の参考値で、サブスク認証では請求されない）:
 
   | 回 | stdin | 所要（`duration_ms` / 壁時計） | 入力トークン（内訳 in / cache作成 / cache読込） | 出力トークン | `total_cost_usd` | 件数（decisions / agenda / next_actions / terms） | `title` |
@@ -213,25 +213,25 @@
 
 - 結論: 未実施（Task 8）
 - 測定値:
-- 手順: 計画 04 Task 12: `autonote dev engines` と `autonote dev transcribe --engine speech --file/--mic`（Spikes は計画 04 で削除。AppleSpeechProbe の transcriber 経路の代わり）
+- 手順: `autonote dev engines` と `autonote dev transcribe --engine speech --file/--mic`（スパイクのコードは削除済み。AppleSpeechProbe の transcriber 経路の代わり）
 - 要件書への影響:
 
 ## 項目 8: whisper.cpp の公式 XCFramework に x86_64 スライスが含まれるか
 
-- 結論: 含まれる。macOS スライスは `macos-arm64_x86_64` で `x86_64 arm64` の両方を持つので、計画 04 は XCFramework を使える。ただし最新リリースタグ `v1.9.5`（2026-10-06）には zip が添付されておらず、同じコミット（`d1be6fd`）から作られたビルド番号付きプレリリース `b5454` の `whisper-b5454-xcframework.zip` で確認した。
+- 結論: 含まれる。macOS スライスは `macos-arm64_x86_64` で `x86_64 arm64` の両方を持つので、XCFramework を使える。ただし最新リリースタグ `v1.9.5`（2026-10-06）には zip が添付されておらず、同じコミット（`d1be6fd`）から作られたビルド番号付きプレリリース `b5454` の `whisper-b5454-xcframework.zip` で確認した。
 - 測定値:
   - `v1.9.5` のリリースの添付ファイルは 0 件（GitHub API `releases/tags/v1.9.5` の `assets` が空）。`whisper-v1.9.5-xcframework.zip` の URL は 404。`v1.9.4`・`v1.9.3` も添付なしで、`v` タグに zip がある最新は `v1.9.2`。zip は `bNNNN` 形式のプレリリース側に付いている（`v1.9.5` と `b5454` はどちらも `d1be6fde11ac6e0407606b4e42fe72d34add8037` を指す）。
   - `whisper-b5454-xcframework.zip`: 65,816,082 バイト、SHA-256 `e57f8c48933000acabc13bb913fbe82805d483a2deff692cc6738836bd92393b`。展開すると `build-apple/whisper.xcframework/` の下に `macos-arm64_x86_64`、`ios-arm64`、`ios-arm64_x86_64-simulator`、`tvos-arm64`、`tvos-arm64_x86_64-simulator`、`xros-arm64`、`xros-arm64_x86_64-simulator`。
   - `lipo -info macos-arm64_x86_64/whisper.framework/whisper` → `Architectures in the fat file: ... are: x86_64 arm64`。`Info.plist` の `SupportedArchitectures` も `arm64`, `x86_64`。
   - x86_64 スライスの `LC_BUILD_VERSION` は `minos 13.3`、`sdk 26.5`。リンク先は Foundation・Metal・Accelerate・CoreML・libc++。
 - 手順: `curl -sSLf -o tools/xcframework-b5454/whisper-b5454-xcframework.zip https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-b5454-xcframework.zip` → `unzip -q -o ... -d tools/xcframework-b5454/extracted` → `lipo -info tools/xcframework-b5454/extracted/build-apple/whisper.xcframework/macos-*/whisper.framework/whisper`。リリースの添付有無は `curl -s https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=15` で確認。
-- 要件書への影響: 計画 04 は XCFramework を使うが、実行時のフレームワークは `b5454` の zip ではなく、同じコミット（`d1be6fd`）から `scripts/build-whisper-xcframework.sh` が作る `tools/whisper.xcframework`（x86_64 は AVX2/FMA/F16C 付き、arm64 は上流と同じ Metal・Core ML）。zip は SHA-256 と arm64 スライスの比較用の参照としてだけ使う。理由と測定値は下の追記（2026-10-26、計画 04 Task 1b）。
-- 追記（2026-10-26、計画 04 Task 1b）: 公式 zip の x86_64 スライスは AVX/AVX2/FMA/F16C なしでビルドされている（`whisper_print_system_info` が `CPU : SSE3 = 1 | SSSE3 = 1 | ACCELERATE = 1 | REPACK = 1` だけ。上流 `build-xcframework.sh` が `arm64;x86_64` を 1 回でビルドするため ggml が x86 と判定しない）。この Intel 機で `ggml-small.bin`・日本語・beam 5 / best_of 5・4 スレッド・実音声 60 秒を測ると、`WhisperContext` 経由の公式 XCFramework が 94.6 秒（実時間比 1.58）、ソースビルドの `whisper-cli -nt`（AVX-512 込みのネイティブビルド）が 13.1 秒（0.22）で約 7 倍遅く、Intel の一括の既定 large-v3-turbo は実時間を大きく超える。そこで公式 zip をやめ、`scripts/build-whisper-xcframework.sh` が同じコミット（`d1be6fd` = v1.9.5 = b5454）のソースから `tools/whisper.xcframework`（`macos-arm64_x86_64` スライスだけ、git 管理外）を作り、`Package.swift` は `.binaryTarget(name: "whisper", path: "tools/whisper.xcframework")` で参照する。x86_64 は上流の macOS 用フラグに `-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON` を足し（ビルドした機械の AVX-512 には依存させない。macOS 26 が動く Intel Mac はすべて AVX2/FMA/F16C を持つ）、arm64 は上流のフラグ（Metal・Core ML）のまま別々にビルドして `lipo` でまとめる。作り直した後の同じ条件の測定: `WhisperContext` 20.7〜21.1 秒（実時間比 0.35、公式の約 4.5 倍速）。`whisper-cli -nt`（0.22）との比は 1.6 倍だが、`-nt` はタイムスタンプなしで復号量が違う（1238 回 対 1795 回）。タイムスタンプありの `whisper-cli` は同じ AVX2 フラグのビルドで 19.7 秒、ネイティブ（AVX-512）で 17.5 秒なので、ライブラリとしての差は 1.05 倍（AVX2 同士）・1.18 倍（対 AVX-512）に収まる。残りの差のうち約 2.5 秒は `WhisperContext` のキューが QoS `.utility` で走ること（`.userInitiated` にすると 18.4 秒）による。
-- 追記（2026-10-27、計画 04 Task 8）: XCFramework（x86_64 スライス）の small: RTF 0.335、CER 0.2712（`autonote dev transcribe tools/samples/ja-5min.wav --engine whisper --model-path tools/whisper.cpp/models/ggml-small.bin --lang ja`、一括 = beam 5 / best_of 5・4 スレッド、音声 295.4 秒を 99.1 秒、モデル読み込みは含まない。`--no-punct` で 0.2218）。`--hints "AutoNote,所沢,Kubernetes"` で CER 0.2671（`--no-punct` 0.2231）・RTF 0.492、`--lang auto` は `ja` と同じ文字列（CER 0.2712、差 0）・RTF 0.446。後の 2 回は別の作業で負荷平均 5〜7 の中で測ったので RTF は比べにくい（ヒントでの遅れか負荷かは切り分けていない）。
+- 要件書への影響: XCFramework を使うが、実行時のフレームワークは `b5454` の zip ではなく、同じコミット（`d1be6fd`）から `scripts/build-whisper-xcframework.sh` が作る `tools/whisper.xcframework`（x86_64 は AVX2/FMA/F16C 付き、arm64 は上流と同じ Metal・Core ML）。zip は SHA-256 と arm64 スライスの比較用の参照としてだけ使う。理由と測定値は下の追記（2026-10-26）。
+- 追記（2026-10-26）: 公式 zip の x86_64 スライスは AVX/AVX2/FMA/F16C なしでビルドされている（`whisper_print_system_info` が `CPU : SSE3 = 1 | SSSE3 = 1 | ACCELERATE = 1 | REPACK = 1` だけ。上流 `build-xcframework.sh` が `arm64;x86_64` を 1 回でビルドするため ggml が x86 と判定しない）。この Intel 機で `ggml-small.bin`・日本語・beam 5 / best_of 5・4 スレッド・実音声 60 秒を測ると、`WhisperContext` 経由の公式 XCFramework が 94.6 秒（実時間比 1.58）、ソースビルドの `whisper-cli -nt`（AVX-512 込みのネイティブビルド）が 13.1 秒（0.22）で約 7 倍遅く、Intel の一括の既定 large-v3-turbo は実時間を大きく超える。そこで公式 zip をやめ、`scripts/build-whisper-xcframework.sh` が同じコミット（`d1be6fd` = v1.9.5 = b5454）のソースから `tools/whisper.xcframework`（`macos-arm64_x86_64` スライスだけ、git 管理外）を作り、`Package.swift` は `.binaryTarget(name: "whisper", path: "tools/whisper.xcframework")` で参照する。x86_64 は上流の macOS 用フラグに `-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON` を足し（ビルドした機械の AVX-512 には依存させない。macOS 26 が動く Intel Mac はすべて AVX2/FMA/F16C を持つ）、arm64 は上流のフラグ（Metal・Core ML）のまま別々にビルドして `lipo` でまとめる。作り直した後の同じ条件の測定: `WhisperContext` 20.7〜21.1 秒（実時間比 0.35、公式の約 4.5 倍速）。`whisper-cli -nt`（0.22）との比は 1.6 倍だが、`-nt` はタイムスタンプなしで復号量が違う（1238 回 対 1795 回）。タイムスタンプありの `whisper-cli` は同じ AVX2 フラグのビルドで 19.7 秒、ネイティブ（AVX-512）で 17.5 秒なので、ライブラリとしての差は 1.05 倍（AVX2 同士）・1.18 倍（対 AVX-512）に収まる。残りの差のうち約 2.5 秒は `WhisperContext` のキューが QoS `.utility` で走ること（`.userInitiated` にすると 18.4 秒）による。
+- 追記（2026-10-27）: XCFramework（x86_64 スライス）の small: RTF 0.335、CER 0.2712（`autonote dev transcribe tools/samples/ja-5min.wav --engine whisper --model-path tools/whisper.cpp/models/ggml-small.bin --lang ja`、一括 = beam 5 / best_of 5・4 スレッド、音声 295.4 秒を 99.1 秒、モデル読み込みは含まない。`--no-punct` で 0.2218）。`--hints "AutoNote,所沢,Kubernetes"` で CER 0.2671（`--no-punct` 0.2231）・RTF 0.492、`--lang auto` は `ja` と同じ文字列（CER 0.2712、差 0）・RTF 0.446。後の 2 回は別の作業で負荷平均 5〜7 の中で測ったので RTF は比べにくい（ヒントでの遅れか負荷かは切り分けていない）。
 
 ## 項目 9: 自己署名証明書で署名し直したビルドで、マイクとシステム音声の TCC 許可が保たれるか
 
-- 結論: **マイク許可は確認済み（2026-10-25 再測定）**。自己署名（`AutoNote Dev`、Bundle ID 固定）で `CFBundleVersion` を 2 → 3 にして再ビルドしても、`open` で起動した AutoNote.app のマイク許可は保たれた（許可ダイアログが出ず、TCC.db の行も更新されなかった）。システム音声録音（`NSAudioCaptureUsageDescription`）の許可の持続は未測定（利用者待ち: 計画 02 Task 1 で許可ダイアログを出したところ。許可した後に `scripts/tcc-check.sh audio-persist` を回すと、2 回目の確認 → TCC.db → `CFBundleVersion` を上げて再ビルド → ダイアログが出ないか・`last_modified` が変わらないかまで自動で記録する）。
+- 結論: **マイク許可は確認済み（2026-10-25 再測定）**。自己署名（`AutoNote Dev`、Bundle ID 固定）で `CFBundleVersion` を 2 → 3 にして再ビルドしても、`open` で起動した AutoNote.app のマイク許可は保たれた（許可ダイアログが出ず、TCC.db の行も更新されなかった）。システム音声録音（`NSAudioCaptureUsageDescription`）の許可の持続は未測定（利用者待ち: TCC 確認で許可ダイアログを出したところ。許可した後に `scripts/tcc-check.sh audio-persist` を回すと、2 回目の確認 → TCC.db → `CFBundleVersion` を上げて再ビルド → ダイアログが出ないか・`last_modified` が変わらないかまで自動で記録する）。
 - 測定値:
   - 署名（codesign の出力）: `Identifier=com.yutaokoshi.autonote` / `Authority=AutoNote Dev` / `TeamIdentifier=not set`。designated requirement は `identifier "com.yutaokoshi.autonote" and certificate leaf = H"c7f68fcb3afa065151260b113948ac6485837825"` で、cdhash などビルドごとに変わる値を含まない。
   - 再測定 1（利用者、2026-10-25）: `open build/AutoNote.app`（`CFBundleVersion` 2）→ メニュー「マイク許可を確認」→ 許可。TCC.db の行は `com.yutaokoshi.autonote|2|2|2026-10-25 23:40:04`（auth_value 2 = allowed、auth_reason 2 = user consent）。この時点まで AutoNote の行は存在しなかった（下の注意の裏付け）。
@@ -239,7 +239,7 @@
   - 注意（最初の測定）: Task 2 Step 6 の最初の測定（`マイク許可の状態: notDetermined` → 許可 → 再ビルド後 `authorized`）は、実行ファイルを直接起動したため TCC の責任プロセスが Terminal.app になり、Terminal.app の許可を見ていた（最終レビューで TCC.db に `com.yutaokoshi.autonote` の行が無く、`com.apple.Terminal` の行が 2026-10-24 20:12:44 に作られていたことから判明し、再測定 1 で AutoNote の行がそれまで無かったことで裏付けられた）。計画の Task 2 Step 6 の Expected（ターミナルから `build/AutoNote.app/Contents/MacOS/AutoNoteApp` を直接起動して見る）は測り方として誤りだった（項目 2・3 で見た「責任プロセス」と同じ仕組み）。
   - 教訓: TCC の持続は `open` で起動して確かめ、判定は標準出力ではなく TCC.db の行で行う。
 - 手順: `scripts/make-dev-cert.sh` で自己署名のコード署名証明書 `AutoNote Dev` を作り、ログインキーチェーンに入れてコード署名用に信頼する → `scripts/build-app.sh` で `build/AutoNote.app` を組み立てて `codesign --force --sign "AutoNote Dev" --identifier com.yutaokoshi.autonote --timestamp=none` で署名 → `open build/AutoNote.app` → メニュー「マイク許可を確認」→ 許可 → `sqlite3 -readonly ~/Library/Application\ Support/com.apple.TCC/TCC.db "select service,client,auth_value,datetime(last_modified,'unixepoch','localtime') from access where service='kTCCServiceMicrophone'"` で `com.yutaokoshi.autonote` の行を見る → `Resources/Info.plist` の `CFBundleVersion` を上げて `scripts/build-app.sh` → `open` でもう一度開いて「マイク許可を確認」→ ダイアログが出ないことと、TCC.db の行が変わらないことを確かめる。
-- 要件書への影響: §3.4・§19 の項目 9・§20 の「自己署名」を「確認済み（スパイク項目 9、再測定）」にした（最終レビューでいったん「未確認」に下げ、再測定で戻した）。システム音声の許可の持続は計画 02 で確認。
+- 要件書への影響: §3.4・§19 の項目 9・§20 の「自己署名」を「確認済み（スパイク項目 9、再測定）」にした（最終レビューでいったん「未確認」に下げ、再測定で戻した）。システム音声の許可の持続は `scripts/tcc-check.sh audio-persist` で確認。
 
 ## 項目 10: 録音中にマイク機材を抜き、戻したときに `AVAudioEngine` を組み直して同じ録音を続けられるか（第 11.5 節）
 
@@ -276,7 +276,7 @@
 - 要件書への影響:
   - §8.1 の「会話の履歴を残さないオプション」は `--no-session-persistence` がある、と確定してよい（実行後の履歴削除は不要）。
   - `--strict-mcp-config` ＋空の `--mcp-config` は必須（外すと利用者の MCP が全部つながる）。
-  - 要件書 §8.1 で `--setting-sources project`（作業ディレクトリはリポジトリ外の空フォルダなので、実質どの設定も読まない）に決定済み。利用者のフックやプラグインの注入文が議事録生成に混ざらず、入力も減る。`scripts/probe-claude.sh` の既定も `project` に変えた。`project` での長い会議（60 分・120 分）は計画 05 の最初に確認する。
+  - 要件書 §8.1 で `--setting-sources project`（作業ディレクトリはリポジトリ外の空フォルダなので、実質どの設定も読まない）に決定済み。利用者のフックやプラグインの注入文が議事録生成に混ざらず、入力も減る。`scripts/probe-claude.sh` の既定も `project` に変えた。`project` での長い会議（60 分・120 分）は議事録生成の実装時に確認する。
 
 ## 項目 12: SpeechTranscriber に contextual strings 相当の機能があるか
 
@@ -284,5 +284,5 @@
   - 効き（Intel、DictationTranscriber、マイクでの実測。項目 2）: `["AutoNote", "所沢", "Kubernetes"]` を入れて話すと、所沢と Kubernetes は正しく出たが、**AutoNote のような造語は効かなかった**（「音ノート」）。contextual なしとの比較はしていない
 - 結論（Apple Silicon 側）: 未実施（Task 8）
 - 測定値:
-- 手順: 計画 04 Task 12: `autonote dev engines` と `autonote dev transcribe --engine speech --file/--mic`（Spikes は計画 04 で削除。AppleSpeechProbe の transcriber 経路の代わり）
+- 手順: `autonote dev engines` と `autonote dev transcribe --engine speech --file/--mic`（スパイクのコードは削除済み。AppleSpeechProbe の transcriber 経路の代わり）
 - 要件書への影響:

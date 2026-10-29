@@ -126,7 +126,7 @@ import AutoNoteTestSupport
         await #expect(throws: AppCommandError.invalid("処理中です: \(f.id.rawValue)")) { try await adapter.retry(f.id) }
     }
 
-    /// Plan 09 premise 7: only a waiting job held back by the rate-limit round counts.
+    /// Only a waiting job held back by the rate-limit round counts.
     @Test func isInRateLimitWaitOnlyForRateLimitedWaits() {
         let later = Samples.start.addingTimeInterval(3600)
         func status(_ state: String, notBefore: Date?, failure: String?) -> QueueStatus {

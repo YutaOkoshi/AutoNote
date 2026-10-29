@@ -6,7 +6,7 @@ import os
 
 private let logger = Logger(subsystem: AppIdentity.bundleID, category: "AppDelegate")
 
-/// The launch order of plan 06 Task 13 (`applicationDidFinishLaunching` items 1–7) and the terminate hooks.
+/// The launch order (`applicationDidFinishLaunching` items 1–7) and the terminate hooks.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Nil until `AppEnvironment.make` finishes (or when it failed).
@@ -134,7 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.shortcuts = s.shortcuts
 
         // 4. On the very first run, the main window, so it lands somewhere to start from (later launches open nothing);
-        // 5. then the microphone prompt while undetermined (plan 02 never asks).
+        // 5. then the microphone prompt while undetermined (the recorder itself never asks).
         if !s.firstRunCompleted {
             logger.info("first run: opening the main window")
             shell.open(AppShell.mainWindowID)

@@ -1,10 +1,10 @@
 #!/bin/bash
-# whisper.cpp のモデル別ベンチを取り、Markdown の表を標準出力に出す（計画 00 Task 5 のスパイク用）。
+# whisper.cpp のモデル別ベンチを取り、Markdown の表を標準出力に出す（whisper.cpp のベンチ用。実装前のスパイクで作った）。
 # 先に scripts/setup-whisper.sh と scripts/make-sample-audio.sh を実行しておく。
 #
 # 使い方: scripts/bench-whisper.sh [--load]
 #   --load      `yes > /dev/null &` を 2 本走らせた状態で測る（終了時に必ず kill する）
-#   MODELS      測るモデル（空白区切り。既定: 計画の 7 モデル）。例: MODELS="base" scripts/bench-whisper.sh
+#   MODELS      測るモデル（空白区切り。既定: ベンチ対象の 7 モデル）。例: MODELS="base" scripts/bench-whisper.sh
 #   THREADS     スレッド数（既定: 4）
 #   OUT_DIR     whisper-cli の出力テキストの置き場所（既定: /tmp）。out-<モデル>-<ビルド>[-load].txt
 #   LOG_DIR     whisper-bench / whisper-cli のログ全文の置き場所（既定: tools/bench-logs）

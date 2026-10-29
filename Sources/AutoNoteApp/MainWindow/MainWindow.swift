@@ -3,7 +3,7 @@ import AutoNoteCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The main window (plan 06 Task 14): the meeting list on the left, the selected meeting on the right, the status
+/// The main window: the meeting list on the left, the selected meeting on the right, the status
 /// bands above it. Everything that changes data goes through `AppModel.perform`, except the minutes save, which the
 /// brief routes through `MeetingsPort.saveMinutes` directly.
 struct MainWindow: View {

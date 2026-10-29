@@ -1,6 +1,6 @@
 import Foundation
 
-/// The standard post-processing stages (spec §8.1). Plan 06 adds an `automations` stage on top, either in the
+/// The standard post-processing stages (spec §8.1). The app adds an `automations` stage on top, either in the
 /// array it hands to `PostProcessingQueue(paths:stages:activity:gate:)` or via `register(_:)`.
 public enum PostProcessingPipeline {
     /// `transcribe`, `summarize`, `write_vault`, `update_index`, in that order, all sharing `services`.

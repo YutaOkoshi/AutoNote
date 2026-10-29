@@ -163,7 +163,7 @@ enum AttachFailure: String, CaseIterable, Sendable {
         #expect(await control.attachCalls.count <= 3)
     }
 
-    // MARK: - RecordingSessionControl (plan 02 adapter)
+    // MARK: - RecordingSessionControl (`RecordingSession` adapter)
 
     @Test func adapterReportsOnlyUnrequestedStops() async throws {
         let h = try await SessionHarness.make()

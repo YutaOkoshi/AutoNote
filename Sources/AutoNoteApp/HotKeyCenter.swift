@@ -5,7 +5,7 @@ import os
 
 private let logger = Logger(subsystem: AppIdentity.bundleID, category: "HotKeyCenter")
 
-/// Global shortcuts through Carbon `RegisterEventHotKey` (plan 06 Task 13 Step 6). Needs no accessibility permission.
+/// Global shortcuts through Carbon `RegisterEventHotKey`. Needs no accessibility permission.
 @MainActor
 final class HotKeyCenter {
     /// 'ANOT'

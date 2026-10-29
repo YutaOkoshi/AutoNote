@@ -3,7 +3,7 @@ import os
 import Synchronization
 
 /// Realtime transcription with whisper by re-decoding a sliding window (`ChunkPlanner`).
-/// A window's partials and its final share one `start`, so consumers overwrite by `start` (overview §4).
+/// A window's partials and its final share one `start`, so consumers overwrite by `start`.
 /// One decode runs at a time: commits run in order and are never dropped; at most one partial waits,
 /// a newer partial replacing the waiting one. A failed decode is logged and yields empty text
 /// (an empty final still goes out so the consumer removes that window's partial).

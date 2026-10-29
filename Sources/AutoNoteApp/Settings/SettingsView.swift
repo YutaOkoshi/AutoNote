@@ -7,7 +7,7 @@ enum SettingsTab: Hashable {
     case general, devices, transcription, dictionary, minutes, automations, retention, shortcuts
 }
 
-/// The settings window (plan 06 Task 15): eight tabs. Each tab loads what it shows when it appears and writes it
+/// The settings window: eight tabs. Each tab loads what it shows when it appears and writes it
 /// with its own 「保存」.
 struct SettingsView: View {
     @Bindable var shell: AppShell
@@ -48,7 +48,7 @@ struct SettingsView: View {
     }
 }
 
-/// Every settings save (brief Step 3): one `settings.change` (load → apply the tab's fields → `SettingsNormalizer`
+/// Every settings save: one `settings.change` (load → apply the tab's fields → `SettingsNormalizer`
 /// → save, in one actor turn, so a concurrent write such as `ClaudeLocator.fillDefaultPath` is not undone) →
 /// `env.settingsSaved(old:new:)`, which re-applies the hot keys, the login item and the queue inputs. A tab only
 /// changes its own fields, so two open tabs never undo each other.

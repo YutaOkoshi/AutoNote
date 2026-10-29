@@ -1,10 +1,10 @@
-// DevChecks — 計画 02 Task 1 の TCC 確認用の一時コード。計画 06 の Task 13 で削除する。
+// DevChecks — 開発メニューからの TCC 確認用コード（`scripts/tcc-check.sh` が使う）。
 //
 // `.app` の中から呼ぶ理由: TCC の責任プロセスは起動元で決まる。ターミナルから CLI を打つと
 // ターミナルの許可を見てしまうので、`open` で起動した com.yutaokoshi.autonote の許可を確かめるにはここで呼ぶ。
 // `open` 起動では標準出力が見えないので、結果は <logsDirectory>/dev-checks.log に 1 行ずつ追記する。
 //
-// 手順は計画 00 のスパイク（process tap と dictation --file 経路。スパイクのコードは削除済みで、
+// 手順は実装前のスパイク（process tap と dictation --file 経路。スパイクのコードは削除済みで、
 // 結果は docs/superpowers/research/2026-10-24-spike-results.md にある）を写したもの。
 
 @preconcurrency import AVFoundation

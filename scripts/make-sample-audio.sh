@@ -1,5 +1,5 @@
 #!/bin/bash
-# whisper ベンチ用のサンプル音声を合成する（計画 00 Task 5 のスパイク用）。
+# whisper ベンチ用のサンプル音声を合成する（whisper.cpp のベンチ用。実装前のスパイクで作った）。
 #
 # 入力（コミット済み。ベンチの CER の参照テキストそのもの）:
 #   scripts/samples/ja-5min.txt  日本語 約 5 分ぶんの読み上げ文
@@ -7,13 +7,13 @@
 # 出力（tools/ は .gitignore 済み。コミットしない）:
 #   tools/samples/ja-5min.wav  日本語 約 5 分（16kHz モノラル 16bit）
 #   tools/samples/en-30s.wav   英語 約 30 秒（16kHz モノラル 16bit。日本語とは別ファイルのまま）
-#   tools/samples/ja-segments.wav  日本語 10 文（文の間に 1.5 秒の沈黙。発話の区切りの比較用、計画 04 Task 9）
+#   tools/samples/ja-segments.wav  日本語 10 文（文の間に 1.5 秒の沈黙。発話の区切りの比較用）
 #
 # 使い方: scripts/make-sample-audio.sh
 #   JA_VOICE    日本語ボイス（既定: Kyoko。無ければ say -v '?' の ja_JP の先頭）
 #   EN_VOICE    英語ボイス（既定: Samantha）
 #
-# 参照テキストは計画 00 Task 5 で要件書の第 1〜4 章から作り、5 分に切り詰めたもの。
+# 参照テキストは実装前のスパイクで要件書の第 1〜4 章から作り、5 分に切り詰めたもの。
 # 要件書はその後書き換わったので、作り直さずに固定のテキストを読み上げるだけにする
 # （Intel と Apple Silicon で同じ入力を使うため）。
 set -euo pipefail

@@ -29,7 +29,7 @@ public struct LiveConfirmedFeed: Sendable {
     }
 }
 
-/// Drives a `LiveFeed` from the recording events (overview §8b (3)) and republishes its display list.
+/// Drives a `LiveFeed` from the recording events and republishes its display list.
 /// A feed that cannot be made or started is logged; the meeting records on without a live transcript.
 public actor LiveTranscriptionWiring: LiveTranscriptPort {
     private struct Running {

@@ -5,7 +5,7 @@ import os
 
 private let logger = Logger(subsystem: AppIdentity.bundleID, category: "AppEnvironment")
 
-/// Every long-lived service of the running app, built in the order of plan 06 Task 13 Step 5. The decisions live in
+/// Every long-lived service of the running app, built in launch order. The decisions live in
 /// Core (`AppWiring`, `LiveTranscriptionWiring`, the adapters); this type only creates the concrete services and
 /// hands them to each other.
 @MainActor
@@ -22,7 +22,7 @@ final class AppEnvironment {
     let queue: QueueHolder
     let wiring: AppWiring
     let live: LiveTranscriptionWiring
-    /// Plan 09: the live summary of each recording, fed by `live.confirmedFeeds()` (`runLiveSummary()`).
+    /// The live summary of each recording, fed by `live.confirmedFeeds()` (`runLiveSummary()`).
     let liveSummary: LiveSummaryScheduler
     let crashRecovery: CrashRecovery
     let catalog: EngineCatalog
@@ -117,7 +117,7 @@ final class AppEnvironment {
                                     installedModels: { await models.installed().map(\.name) })
         let factory = TranscriberFactory(models: models, machine: machine)
 
-        // 5. Live transcription. The meeting's own language picks the engine (ruling X27); plan 04's signature stays.
+        // 5. Live transcription. The meeting's own language picks the engine (ruling X27); `TranscriberFactory`'s signature stays.
         let live = LiveTranscriptionWiring(audio: { await session.audio(for: $0) }, makeFeed: { id in
             let language = try await manifests.load(id).language
             var current = try await settings.load()
@@ -158,7 +158,7 @@ final class AppEnvironment {
             timer: TaskTimerScheduler(),
             config: { AutoRecordCoordinator.config(from: (try? await settings.load()) ?? AutoNoteCore.Settings()) })
 
-        // 8b. Live summary (plan 09). Off unless the setting is on; the scheduler reads the settings on every tick.
+        // 8b. Live summary. Off unless the setting is on; the scheduler reads the settings on every tick.
         let queuePort = QueueAdapter(holder: queue)
         let liveSummaryStore = LiveSummaryStore(paths: paths)
         let liveSummary = LiveSummaryScheduler(.init(
@@ -176,7 +176,7 @@ final class AppEnvironment {
             log: { NSLog("AutoNote: %@", $0) },
             clock: SystemQueueClock()))
 
-        // 9. Cross-plan wiring. A queue-input change re-registers the stages on the same queue (ruling X19).
+        // 9. App-wide wiring. A queue-input change re-registers the stages on the same queue (ruling X19).
         let trigger = RecordingAutomationTrigger(dispatcher: dispatcher, manifests: manifests)
         let wiring = AppWiring(
             events: { await session.events() }, enqueuer: QueueEnqueuer(queue), notifier: notifier,
@@ -216,7 +216,7 @@ final class AppEnvironment {
         routing.model = model
         let server = SocketServer(socketURL: paths.socketFile, handler: CommandRouter(ports: ports))
 
-        // Plan 05 retention (R9).
+        // Audio retention (R9).
         let retention = Retention(paths: paths, services: .standard)
         let retentionScheduler = RetentionScheduler(retention: retention, settings: settings)
 
@@ -268,7 +268,7 @@ final class AppEnvironment {
 
     // MARK: - Notice loops (launch item 2)
 
-    /// Each queue change: refresh the rows first, then turn the change into notices (overview §8b). The first status
+    /// Each queue change: refresh the rows first, then turn the change into notices. The first status
     /// only seeds `previous`; a notice is posted once per meeting, generation and kind (rulings X16 / X43).
     func relayQueueNotices() async {
         var previous: QueueStatus?
@@ -367,7 +367,7 @@ private final class NoticeRouting {
 
 // MARK: - Queue stages
 
-/// Builds plan 05's standard stages for the given settings. Every runner and lazy transcriber shares `gate`.
+/// Builds the standard post-processing stages for the given settings. Every runner and lazy transcriber shares `gate`.
 private struct StageBuilder: Sendable {
     let paths: AppPaths
     let catalog: EngineCatalog

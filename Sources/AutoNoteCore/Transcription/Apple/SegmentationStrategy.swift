@@ -9,6 +9,6 @@ public enum SegmentationStrategy: String, Codable, Sendable, CaseIterable {
     /// The progressive preset, finalized by us at each `SilenceDetector` boundary.
     case silenceFinalize = "silence"
 
-    /// The strategy the app uses (chosen in plan 04 Task 9 from a measured comparison, see spike-results item 2).
+    /// The strategy the app uses (chosen from a measured comparison, see spike-results item 2).
     public static var current: SegmentationStrategy { .silenceFinalize }
 }

@@ -1,6 +1,6 @@
 import Foundation
 
-/// The dictionary tab's editable copy of `dictionary.md` (plan 06 Task 15). `toFile` trims every cell and drops empty
+/// The dictionary tab's editable copy of `dictionary.md`. `toFile` trims every cell and drops empty
 /// rows; a replacement with only one side filled is an error that names its row.
 public struct DictionaryDraft: Equatable, Sendable {
     public var terms: [String]
@@ -71,7 +71,7 @@ public struct AutomationDraft: Equatable, Sendable {
 }
 
 /// Applied to every settings save. The countdown and grace seconds are the values `AutoRecordCoordinator` will use
-/// (plan 03 owns the ranges; this plan has none of its own) and a negative retention becomes 0 (keep forever).
+/// (the coordinator owns the ranges; the settings have none of their own) and a negative retention becomes 0 (keep forever).
 public enum SettingsNormalizer {
     public static func normalized(_ s: Settings) -> Settings {
         var out = s

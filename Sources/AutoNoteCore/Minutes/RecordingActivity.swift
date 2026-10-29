@@ -1,7 +1,7 @@
 import Foundation
 
 /// Whether a recording is in progress. The stream yields the current value right after subscribing,
-/// then every change. What the queue does with it is Task 8's concern.
+/// then every change. What the queue does with it is the queue's concern.
 public protocol RecordingActivity: Sendable {
     func isRecordingUpdates() async -> AsyncStream<Bool>
 }

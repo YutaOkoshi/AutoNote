@@ -64,7 +64,7 @@ struct DeviceRegistryFile: Codable, Equatable {
 }
 
 /// Mutations (`reload`, `register`, `ignore`, `remove`, `setDisposition`, `setStartOnModelMatch`) run one at a time
-/// through a FIFO gate (plan 02's `OperationGate`), so one caller's read-modify-save never interleaves with
+/// through a FIFO gate (`OperationGate`), so one caller's read-modify-save never interleaves with
 /// another's across the storage `await` (Y25). `entries()` and `match` read the last committed state and never see
 /// a half-finished reload.
 public actor DeviceRegistry {

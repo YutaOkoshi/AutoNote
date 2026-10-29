@@ -1,8 +1,8 @@
 import AutoNoteCore
 import SwiftUI
 
-/// The live summary (plan 09): what is being discussed now, the decisions and the to-dos, in a band like
-/// `StatusHeader`'s. Three parts (plan 10): a header with 「いま」 and the collapse toggle, a body with the
+/// The live summary: what is being discussed now, the decisions and the to-dos, in a band like
+/// `StatusHeader`'s. Three parts: a header with 「いま」 and the collapse toggle, a body with the
 /// decisions and to-dos that scrolls inside a capped height (its text fades at the foot while more is below), and a
 /// footer with the status and 「n 秒前に更新」 that stays visible even when collapsed.
 struct LiveSummaryCard: View {

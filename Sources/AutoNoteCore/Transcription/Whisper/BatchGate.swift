@@ -1,7 +1,7 @@
 import Foundation
 import Synchronization
 
-/// Pauses the batch transcription while a recording is running (要件書 §13). Plan 05's queue calls
+/// Pauses the batch transcription while a recording is running (要件書 §13). The post-processing queue calls
 /// `pause()` when recording starts and `resume()` when it ends. `isPaused` is a synchronous read so
 /// whisper's abort check can poll it.
 public actor BatchGate {

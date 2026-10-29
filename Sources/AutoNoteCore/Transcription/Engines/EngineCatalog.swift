@@ -17,7 +17,7 @@ public struct EngineCatalog: Sendable {
         case .intel:
             return (.dictation, .whisper("large-v3-turbo"), "small")
         case .appleSilicon:
-            // Provisional: revisit after the Apple Silicon measurements (plan 04 Task 12).
+            // Provisional: revisit after the Apple Silicon measurements.
             return (.speech, .whisper("large-v3-turbo"), "small")
         }
     }

@@ -1,6 +1,6 @@
 import Foundation
 
-/// `RecordingActivity` over plan 02's `RecordingSession` (overview §8b): `.started` → `true`, `.stopped` → `false`.
+/// `RecordingActivity` over `RecordingSession`: `.started` → `true`, `.stopped` → `false`.
 /// A paused recording and the grace period after `.microphoneDetached` stay `true`. Equal values are not repeated.
 public struct RecordingSessionActivity: RecordingActivity {
     private let initial: @Sendable () async -> Bool
