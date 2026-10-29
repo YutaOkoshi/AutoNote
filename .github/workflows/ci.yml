@@ -1,6 +1,6 @@
 name: CI
 
-# 無料枠を守るため push は main だけ。開発ブランチは PR を開いたときに走る
+# macOS ランナーの時間を節約するため push は main だけ。開発ブランチは PR を開いたときに走る
 on:
   push:
     branches: [main]
