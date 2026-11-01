@@ -347,6 +347,20 @@ import AutoNoteTestSupport
         #expect(model.menuBar(now: now).items.contains(.readinessIssue(.outputFolder, title: "⚠ 保存先を作れませんでした — 設定を開く…")))
     }
 
+    // 設定の保存後の refresh で、モデルの重さの警告（fit）も読み直す。model は updates() に従ったまま
+    @Test func refreshReadsTheFitWarnings() async {
+        let fakes = FakePorts(readiness: FakeReadinessPort(readiness()))
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        #expect(model.readiness.fit.isEmpty)
+        var heavy = readiness(model: .installed("large-v3-turbo"))
+        heavy.fit = [.finalTooSlow(model: "large-v3-turbo")]
+        await fakes.readiness.setCurrent(heavy)
+        await model.refresh()
+        #expect(model.readiness.fit == [.finalTooSlow(model: "large-v3-turbo")])
+        #expect(model.readiness.model == .installed("base"))
+    }
+
     @Test func claudeFailureBandHidesTheClaudeReadinessBand() async {
         // 選択中の会議の失敗帯が「claude が見つからない」（入れ方を見る）なら、準備帯の claude 行は出さない（重複を避ける）
         let fakes = FakePorts(readiness: FakeReadinessPort(readiness(claude: false)))

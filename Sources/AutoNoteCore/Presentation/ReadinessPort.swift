@@ -42,6 +42,7 @@ public actor LiveReadinessPort: ReadinessPort {
     private let opener: any FileOpener
     private let locate: @Sendable () async -> String?
     private let isExecutable: @Sendable (String) -> Bool
+    private let profile: MachineProfile
 
     private var downloading: (name: String, fraction: Double)?
     private var failure: (name: String, reason: String)?
@@ -52,7 +53,8 @@ public actor LiveReadinessPort: ReadinessPort {
     public init(settings: SettingsStore, outputFolder: any OutputFolderPort, models: ModelManager, catalog: EngineCatalog,
                 opener: any FileOpener,
                 locate: @escaping @Sendable () async -> String? = { await ClaudeLocator.locate() },
-                isExecutable: @escaping @Sendable (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }) {
+                isExecutable: @escaping @Sendable (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) },
+                profile: MachineProfile = .current()) {
         self.settings = settings
         self.outputFolder = outputFolder
         self.models = models
@@ -60,6 +62,7 @@ public actor LiveReadinessPort: ReadinessPort {
         self.opener = opener
         self.locate = locate
         self.isExecutable = isExecutable
+        self.profile = profile
     }
 
     deinit {
@@ -75,7 +78,8 @@ public actor LiveReadinessPort: ReadinessPort {
         let model = await modelValue()
         let claudePath = s.claudePath
         return Readiness(outputFolder: .init(path: path, available: available), model: model,
-                         claude: .init(path: claudePath, found: claudePath.map(isExecutable) ?? false))
+                         claude: .init(path: claudePath, found: claudePath.map(isExecutable) ?? false),
+                         fit: await fitWarnings(s))
     }
 
     public func updates() async -> AsyncStream<Readiness.Model> {
@@ -194,6 +198,16 @@ public actor LiveReadinessPort: ReadinessPort {
             }
             return .none
         }
+    }
+
+    /// `WhisperModelFit` on the engines that will actually run: the live and batch choices `catalog` resolves.
+    private func fitWarnings(_ s: Settings) async -> [FitWarning] {
+        let machine = catalog.machine
+        let finalOverride = EngineChoice.fromSettings(kind: s.finalEngine, model: s.finalModel, role: .batch, machine: machine)
+        let liveOverride = EngineChoice.fromSettings(kind: s.liveEngine, model: s.liveModel, role: .live, machine: machine)
+        let final = await catalog.resolve(role: .batch, language: s.defaultLanguage, override: finalOverride)
+        let live = await catalog.resolve(role: .live, language: s.defaultLanguage, override: liveOverride)
+        return WhisperModelFit.warnings(profile: profile, final: final, live: live)
     }
 
     private func loadSettings() async -> Settings {

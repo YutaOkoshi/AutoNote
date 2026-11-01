@@ -48,6 +48,7 @@ AutoNote をソースからビルドし、テストし、変更を入れるた�
 - 最低 OS は macOS 26.0。`swift-tools-version: 6.2`、Swift 6 言語モード（strict concurrency）
 - `AutoNoteCore` の型・関数で他ターゲットから使うものは `public` にする
 - Intel と Apple Silicon の両方で動かす。機種差は実行時に判定し、`#if arch` で機能を落とさない
+- 機種とモデルの相性（重すぎるモデルの警告）の判定規則は `Sources/AutoNoteCore/Transcription/WhisperModelFit.swift`、機種の値（物理コア・メモリ）と確定版のスレッド数の自動計算は `MachineProfile.swift` の 1 か所に置く。文言は `Presentation/FitWarningPresentation.swift`。規則を変えたら [利用者ガイドの 9 節](guide/getting-started.md) の表も直す
 - 署名は自己署名の `AutoNote Dev`、Bundle ID は `com.yutaokoshi.autonote`。どちらも `scripts/config.sh` が唯一の定義（`AUTONOTE_BUNDLE_ID` と `AUTONOTE_CERT_NAME`。`build-app.sh`・`e2e-check.sh`・`make-dev-cert.sh` などがここを読む。変えるときはここだけを直す）。App Sandbox なし、Hardened Runtime なし
 - 音声・文字起こし・議事録・個人の機材識別子をコミットしない。フィクスチャは架空のデータで作る
 - 音声はローカルから出さない。外部に渡すのは `claude -p` への文字起こしテキストだけ

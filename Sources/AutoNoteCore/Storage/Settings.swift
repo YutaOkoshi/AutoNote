@@ -33,6 +33,9 @@ public struct Settings: Codable, Equatable, Sendable {
     public var liveModel: String? = nil
     public var finalEngine: String? = nil
     public var finalModel: String? = nil
+    /// Threads for final (batch) whisper; nil = automatic (`MachineProfile.automaticBatchThreads`). Kept inside
+    /// `MachineProfile.batchThreadRange`. JSON `final_threads`.
+    public var finalThreads: Int? = nil { didSet { finalThreads = finalThreads.map(Self.clampThreads) } }
     public var voiceProcessing: Bool = false
     public var fillerRemoval: Bool = true
     public var countdownSeconds: Int = 5 { didSet { countdownSeconds = Self.clamp(countdownSeconds, 0, 30) } }
@@ -60,6 +63,9 @@ public struct Settings: Codable, Equatable, Sendable {
     private enum LegacyKeys: String, CodingKey { case consentNoticeShown }
 
     private static func clamp(_ v: Int, _ lo: Int, _ hi: Int) -> Int { min(max(v, lo), hi) }
+    private static func clampThreads(_ v: Int) -> Int {
+        clamp(v, MachineProfile.batchThreadRange.lowerBound, MachineProfile.batchThreadRange.upperBound)
+    }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -73,6 +79,7 @@ public struct Settings: Codable, Equatable, Sendable {
         liveModel = try c.decodeIfPresent(String.self, forKey: .liveModel)
         finalEngine = try c.decodeIfPresent(String.self, forKey: .finalEngine)
         finalModel = try c.decodeIfPresent(String.self, forKey: .finalModel)
+        finalThreads = try c.decodeIfPresent(Int.self, forKey: .finalThreads).map(Self.clampThreads)
         voiceProcessing = try c.decodeIfPresent(Bool.self, forKey: .voiceProcessing) ?? voiceProcessing
         fillerRemoval = try c.decodeIfPresent(Bool.self, forKey: .fillerRemoval) ?? fillerRemoval
         countdownSeconds = Self.clamp(try c.decodeIfPresent(Int.self, forKey: .countdownSeconds) ?? countdownSeconds, 0, 30)

@@ -109,10 +109,11 @@ public enum UserAction: Equatable, Sendable {
         }
     }
 
-    /// Re-reads the output folder, Claude Code and the meeting list. The model keeps following `updates()`.
+    /// Re-reads the output folder, Claude Code, the model fit warnings and the meeting list. The model keeps following
+    /// `updates()`.
     public func refresh() async {
         let fresh = await ports.readiness.current()
-        readiness = Readiness(outputFolder: fresh.outputFolder, model: readiness.model, claude: fresh.claude)
+        readiness = Readiness(outputFolder: fresh.outputFolder, model: readiness.model, claude: fresh.claude, fit: fresh.fit)
         await refreshRows()
     }
 

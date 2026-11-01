@@ -96,10 +96,10 @@ public actor AppWiring {
         return orphans
     }
 
-    /// Only the queue's inputs (output folder, final engine and model) rebuild it.
+    /// Only the queue's inputs (output folder, final engine, model and threads) rebuild it.
     public func settingsChanged(from old: Settings, to new: Settings) async {
         guard old.outputFolder != new.outputFolder || old.finalEngine != new.finalEngine
-            || old.finalModel != new.finalModel else { return }
+            || old.finalModel != new.finalModel || old.finalThreads != new.finalThreads else { return }
         await onQueueInputsChanged(new)
     }
 }

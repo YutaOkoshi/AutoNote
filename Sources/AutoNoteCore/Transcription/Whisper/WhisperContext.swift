@@ -10,8 +10,13 @@ import whisper
 /// without loading the model twice. `whisper_full_with_state` runs on a private utility queue so it never
 /// blocks the cooperative thread pool.
 public final class WhisperContext: WhisperCore, @unchecked Sendable {
-    /// Threads for batch decoding: `min(4, max(1, activeProcessorCount / 2))`.
-    public static var batchThreads: Int { min(4, max(1, ProcessInfo.processInfo.activeProcessorCount / 2)) }
+    /// Threads for batch decoding with the `final_threads` setting (nil = automatic: physical cores − 1, 1...4).
+    public static func batchThreads(setting: Int?, profile: MachineProfile = .current()) -> Int {
+        profile.batchThreads(setting: setting)
+    }
+
+    /// The automatic batch threads on this Mac (`batchThreads(setting: nil)`).
+    public static var batchThreads: Int { batchThreads(setting: nil) }
 
     private let model: SharedModel
     private let state: OpaquePointer

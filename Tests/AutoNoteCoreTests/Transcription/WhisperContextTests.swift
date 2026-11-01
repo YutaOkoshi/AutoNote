@@ -22,6 +22,10 @@ private let realModel = ProcessInfo.processInfo.environment["AUTONOTE_TEST_WHISP
 
     @Test func batchThreadsAreBounded() {
         #expect((1...4).contains(WhisperContext.batchThreads))
+        #expect(WhisperContext.batchThreads == WhisperContext.batchThreads(setting: nil))
+        let intel4 = MachineProfile(kind: .intel, physicalCores: 4, physicalMemory: 32 << 30)
+        #expect(WhisperContext.batchThreads(setting: nil, profile: intel4) == 3)
+        #expect(WhisperContext.batchThreads(setting: 6, profile: intel4) == 6)
     }
 
     // 実モデル。環境変数 AUTONOTE_TEST_WHISPER_MODEL が ggml の実在パスのときだけ

@@ -375,11 +375,13 @@ private struct StageBuilder: Sendable {
     let gate: BatchGate
 
     /// The batch engine is resolved per job from the meeting's language and the final-engine setting of `s`; no
-    /// usable engine (e.g. no model installed yet) returns nil, so the job keeps the live transcript.
+    /// usable engine (e.g. no model installed yet) returns nil, so the job keeps the live transcript. Batch whisper
+    /// uses the `final_threads` of `s`.
     func standard(for s: AutoNoteCore.Settings) async -> [any QueueStage] {
         let override = EngineChoice.fromSettings(kind: s.finalEngine, model: s.finalModel, role: .batch,
                                                  machine: catalog.machine)
-        let catalog = catalog, factory = factory, gate = gate, paths = paths
+        let factory = factory.withBatchThreads(WhisperContext.batchThreads(setting: s.finalThreads))
+        let catalog = catalog, gate = gate, paths = paths
         return PostProcessingPipeline.standardStages(resolveRunner: { language in
             guard let choice = await catalog.resolve(role: .batch, language: language, override: override) else {
                 return nil
