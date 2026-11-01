@@ -30,6 +30,31 @@ private func inv(_ c: IPCCommand, json: Bool = false, args: IPCArgs = IPCArgs())
         #expect(try CLIParser.parse(["automations", "run", "Slack に要約を投稿", "20261024-1400-a1b2"], cwd: cwd) == .invocation(.init(command: .automationsRun, args: IPCArgs(meetingID: "20261024-1400-a1b2", name: "Slack に要約を投稿"), json: false)))
     }
 
+    // merge takes two or more well-formed meeting ids, in the order given.
+    @Test func parsesMerge() throws {
+        let ids = ["20261030-1158-a1b2", "20261030-1200-00ff", "20261030-1205-beef"]
+        #expect(try CLIParser.parse(["merge"] + ids, cwd: cwd) == .invocation(.init(command: .merge, args: IPCArgs(meetingIDs: ids), json: false)))
+        #expect(try CLIParser.parse(["merge", ids[1], ids[0], "--json"], cwd: cwd)
+                == .invocation(.init(command: .merge, args: IPCArgs(meetingIDs: [ids[1], ids[0]]), json: true)))
+        #expect(CLIInvocation(command: .merge).responseTimeoutSeconds == 120)
+        #expect(CLIRenderer.usage.contains("autonote merge <id> <id> [<id>...]"))
+        #expect(CLIRenderer.render(.success(1, IPCResult(meetingID: "20261030-1158-c0de")), for: inv(.merge)).stdout
+                == "受け付けました: 20261030-1158-c0de\n")
+    }
+
+    @Test(arguments: [["merge"], ["merge", "20261030-1158-a1b2"], ["merge", "20261030-1158-a1b2", "x"],
+                      ["merge", "20261030-1158-a1b2", "20261030-1158-A1B2"], ["merge", "20261030-1158-a1b2", "2026103-1158-a1b2"],
+                      ["merge", "20261030-1158-a1b2", "20261030-1158-a1b2"]] as [[String]])
+    func mergeUsageErrors(argv: [String]) {
+        #expect(throws: CLIUsageError.self) { try CLIParser.parse(argv, cwd: cwd) }
+    }
+
+    @Test func mergeArgsUseSnakeCaseKey() throws {
+        let json = String(decoding: try AutoNoteJSON.compactEncoder().encode(IPCArgs(meetingIDs: ["a", "b"])), as: UTF8.self)
+        #expect(json == #"{"meeting_ids":["a","b"]}"#)
+        #expect(try AutoNoteJSON.decoder().decode(IPCArgs.self, from: Data(json.utf8)) == IPCArgs(meetingIDs: ["a", "b"]))
+    }
+
     // --version, help forms and the dev passthrough are recognised.
     @Test func versionHelpAndDev() throws {
         #expect(try CLIParser.parse(["--version"], cwd: cwd) == .version)

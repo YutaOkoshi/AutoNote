@@ -100,6 +100,9 @@ public protocol MeetingsPort: Sendable {
     func transcript(_ id: MeetingID, kind: TranscriptKind) async throws -> Transcript?
     func saveMinutes(_ id: MeetingID, _ m: MinutesOutput, renameFile: Bool, overwrite: Bool) async throws -> SaveMinutesOutcome
     func importAudio(_ file: URL, startedAt: Date?) async throws -> MeetingID
+    /// Combines finished recordings of one meeting into a new meeting, queued from transcription; the sources get
+    /// `merged_into` and leave the list and the Vault. Returns the new meeting's id.
+    func merge(_ ids: [MeetingID]) async throws -> MeetingID
     func recover(_ id: MeetingID) async throws
     func discard(_ id: MeetingID) async throws
     /// `transcripts/<id>/live-summary.json`; nil when the meeting has none.

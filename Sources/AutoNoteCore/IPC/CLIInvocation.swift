@@ -15,10 +15,12 @@ public struct CLIInvocation: Equatable, Sendable {
     /// Recording start/stop take longer than a query. `import` decodes the whole file (a multi-hour recording on
     /// an Intel Mac can take long), so it waits up to 24 h. `automations run` answers when the runner returns,
     /// which the definition's timeout (at most `timeoutRange.upperBound`) plus the kill grace bounds (I3).
+    /// `merge` links (or, across volumes, copies) the recordings into a new meeting; 120 s covers a copy.
     public var responseTimeoutSeconds: Int {
         switch command {
         case .start, .stop: 30
         case .import: 86_400
+        case .merge: 120
         case .automationsRun: AutomationDefinition.timeoutRange.upperBound + AutomationRunner.defaultKillGraceSeconds + 30
         default: 10
         }
@@ -92,6 +94,11 @@ public enum CLIParser {
         case "regenerate":
             guard rest.count == 1 else { throw CLIUsageError("regenerate には会議 ID を 1 つ指定してください") }
             return make(.regenerate, IPCArgs(meetingID: rest[0]))
+        case "merge":
+            guard rest.count >= 2 else { throw CLIUsageError("merge には会議 ID を 2 つ以上指定してください") }
+            if let bad = rest.first(where: { !MeetingID.isWellFormed($0) }) { throw CLIUsageError("会議 ID の形式が正しくありません: \(bad)") }
+            guard Set(rest).count == rest.count else { throw CLIUsageError("merge に同じ会議 ID が重複しています") }
+            return make(.merge, IPCArgs(meetingIDs: rest))
         case "automations":
             switch rest.first {
             case "list" where rest.count == 1: return make(.automationsList)

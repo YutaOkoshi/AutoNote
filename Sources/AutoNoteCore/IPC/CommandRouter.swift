@@ -69,6 +69,9 @@ public struct CommandRouter: IPCHandler {
             guard let id = args.meetingID else { throw AppCommandError.invalid("会議 ID が要ります") }
             try await ports.queue.regenerate(MeetingID(rawValue: id))
             return IPCResult()
+        case .merge:
+            guard let ids = args.meetingIDs, ids.count >= 2 else { throw AppCommandError.invalid("会議 ID を 2 つ以上指定してください") }
+            return IPCResult(meetingID: try await ports.meetings.merge(ids.map(MeetingID.init(rawValue:))).rawValue)
         case .automationsList:
             return IPCResult(automations: await ports.automations.summaries().0)
         case .automationsRun:

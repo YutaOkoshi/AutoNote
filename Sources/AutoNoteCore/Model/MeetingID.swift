@@ -23,6 +23,11 @@ public struct MeetingID: Hashable, Codable, Sendable {
         return MeetingID(rawValue: "\(stamp)-\(suffix)")
     }
 
+    /// Whether `text` has the shape `make` produces (`yyyyMMdd-HHmm-` and four lowercase hex digits).
+    public static func isWellFormed(_ text: String) -> Bool {
+        text.wholeMatch(of: /[0-9]{8}-[0-9]{4}-[0-9a-f]{4}/) != nil
+    }
+
     /// Four lowercase hex digits.
     public static func randomSuffix() -> String {
         String(format: "%04x", UInt16.random(in: .min ... .max))
