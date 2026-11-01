@@ -7,6 +7,7 @@ public enum MeetingListBuilder {
     public static let untitled = "（無題）"
     public static let waitingLabel = "処理待ち"
 
+    /// A meeting combined into another one (`mergedInto`) is left out, whatever the index says.
     /// A meeting the output folder does not hold (it was written to a previous output folder) keeps the title and
     /// path of the note last written, while that file exists (`fileExists`).
     public static func build(index: [IndexEntry], manifests: [Manifest], queue: QueueStatus, outputFolder: URL?,
@@ -15,7 +16,7 @@ public enum MeetingListBuilder {
         let entries = Dictionary(index.map { ($0.meetingID, $0) }, uniquingKeysWith: { a, _ in a })
         let byID = Dictionary(manifests.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let jobs = Dictionary(queue.items.map { ($0.meetingID, $0) }, uniquingKeysWith: { _, b in b })
-        let ids = Set(entries.keys).union(byID.keys)
+        let ids = Set(entries.keys).union(byID.keys).filter { byID[$0]?.mergedInto == nil }
 
         let rows = ids.map { id -> MeetingRow in
             let entry = entries[id]

@@ -169,6 +169,7 @@ public actor FakeMeetingsPort: MeetingsPort {
     public var transcripts: [String: Transcript] = [:]
     public var saveOutcome: SaveMinutesOutcome?
     public var importedID = MeetingID(rawValue: "20261024-1400-0000")
+    public var mergedID = MeetingID(rawValue: "20261024-1400-1111")
     public var liveSummaries: [MeetingID: LiveSummaryState] = [:]
 
     public init(rows: [MeetingRow] = []) { meetingRows = rows }
@@ -182,6 +183,7 @@ public actor FakeMeetingsPort: MeetingsPort {
     public func setTranscript(_ t: Transcript, for id: MeetingID, kind: TranscriptKind) { transcripts["\(id.rawValue)/\(kind.rawValue)"] = t }
     public func setSaveOutcome(_ o: SaveMinutesOutcome?) { saveOutcome = o }
     public func setImportedID(_ id: MeetingID) { importedID = id }
+    public func setMergedID(_ id: MeetingID) { mergedID = id }
     public func setLiveSummary(_ s: LiveSummaryState?, for id: MeetingID) { liveSummaries[id] = s }
 
     public func rows() throws -> [MeetingRow] {
@@ -219,6 +221,11 @@ public actor FakeMeetingsPort: MeetingsPort {
     public func importAudio(_ file: URL, startedAt: Date?) throws -> MeetingID {
         try record("importAudio(\(file.path))")
         return importedID
+    }
+
+    public func merge(_ ids: [MeetingID]) throws -> MeetingID {
+        try record("merge(\(ids.map(\.rawValue).joined(separator: ",")))")
+        return mergedID
     }
 
     public func recover(_ id: MeetingID) throws { try record("recover(\(id.rawValue))") }

@@ -18,6 +18,12 @@
 | `autonote regenerate <id>` | 議事録の再生成 |
 | `autonote automations list [--json]` / `run <名前> <id>` | Automation の一覧と手動実行 |
 
+### 分かれた録音を 1 つの会議にまとめる（`autonote merge`）
+
+1 つの会議が途中の停止やクラッシュで複数の録音に分かれたときは、`autonote merge <id> <id> [<id>...]`（会議 ID は `autonote list --json` で分かる）か、メインウィンドウの一覧で ⌘クリック / ⇧クリックで 2 件以上を選び、右クリックの「1 つの会議に統合」でまとめる。新しい会議が 1 つでき、最初の録音の開始から最後の録音の終了までを 1 本の時間軸として、文字起こしから処理し直す（録音と録音の隙間は一時停止として扱う）。統合できるのは、録音中・処理中でなく、取り込んだ音声でなく、時間が重ならず、言語が同じ会議だけで、当てはまらなければ理由を出して何もしない（CLI は終了コード 1）。統合元の会議は消さず、manifest に `merged_into`（新しい会議の ID）を書いて一覧から外し、統合元の議事録ノートは Vault と `_index.md` から外す。統合元の録音ファイルは保持期間の設定どおりに消える。
+
+統合を取り消す操作はない。元に戻すには、アプリを終了してから、データ領域の `recordings/<統合元の ID>/manifest.json` から `"merged_into"` の行を消し（統合元ごとに行う）、新しい会議の `recordings/<新しい ID>/`・`transcripts/<新しい ID>/`・`queue/jobs/<新しい ID>.json`・`vault-state/<新しい ID>.json` を削除する（Vault に新しい会議のノートが書かれていればそれも削除する）。統合元のノートは戻らないので、必要なら統合元ごとに `autonote regenerate <id>` で書き直す。
+
 ## Automations
 
 議事録ができた瞬間などに、利用者のコマンドを自動で走らせる。定義は `~/Library/Application Support/AutoNote/automations.json`（設定 › Automations でも編集できる）。グループや他人が書き込める権限になっている、または自分の所有でないと、安全のため全部無効にして警告する（`chmod 600` で直る）。

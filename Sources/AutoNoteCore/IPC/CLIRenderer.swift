@@ -22,6 +22,7 @@ public enum CLIRenderer {
            autonote latest [--open] [--json]
            autonote import <file>
            autonote regenerate <id>
+           autonote merge <id> <id> [<id>...]
            autonote automations list [--json]
            autonote automations run <名前> <id>
            autonote --version
@@ -46,7 +47,7 @@ public enum CLIRenderer {
         case .status: return CLIOutput(stdout: statusText(result.status ?? StatusResult()))
         case .list: return CLIOutput(stdout: listText(result.meetings ?? [], timeZone: timeZone))
         case .latest: return CLIOutput(stdout: (result.path ?? "") + "\n")
-        case .import, .regenerate: return CLIOutput(stdout: "受け付けました: \(result.meetingID ?? inv.args.meetingID ?? "")\n")
+        case .import, .regenerate, .merge: return CLIOutput(stdout: "受け付けました: \(result.meetingID ?? inv.args.meetingID ?? "")\n")
         case .automationsList: return CLIOutput(stdout: automationsText(result.automations ?? []))
         case .automationsRun: return runOutput(result.run)
         }

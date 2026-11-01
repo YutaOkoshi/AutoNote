@@ -57,6 +57,13 @@ final class UnsavedEditsGuard {
     var hasUnsavedEdits: Bool { dirty?() ?? false }
 }
 
+/// Meetings chosen for 「1 つの会議に統合」, waiting for the confirmation.
+struct MergeRequest: Identifiable {
+    let ids: [MeetingID]
+    let message: String
+    var id: [MeetingID] { ids }
+}
+
 /// A file the user dropped or picked, waiting for its start time in `ImportSheet`.
 struct ImportCandidate: Identifiable {
     let url: URL
@@ -69,14 +76,21 @@ private struct MainWindowContent: View {
     let shell: AppShell
     @State private var importCandidate: ImportCandidate?
     @State private var unsaved = UnsavedEditsGuard()
+    /// A selection of two or more meetings (⌘/⇧-click). It only feeds the merge menu: the detail keeps showing
+    /// `selectedMeetingID`, so an open editor is not dismissed by widening the selection.
+    @State private var multiSelection: Set<String> = []
+    @State private var mergeRequest: MergeRequest?
+    @State private var mergeFailure: String?
 
-    /// The list selection is the model's `selectedMeetingID` itself, so a notice tap that sets it while the window
+    /// A single selection is the model's `selectedMeetingID` itself, so a notice tap that sets it while the window
     /// is already open moves the selection too. A change from the list first asks the open editor about unsaved
     /// minutes (保存 / 破棄 / キャンセル); キャンセル keeps the current selection.
-    private var selection: Binding<String?> {
-        Binding(get: { model.selectedMeetingID?.rawValue },
+    private var selection: Binding<Set<String>> {
+        Binding(get: { multiSelection.count >= 2 ? multiSelection : Set(model.selectedMeetingID.map { [$0.rawValue] } ?? []) },
                 set: { [unsaved, model] new in
-                    let target = new.map { MeetingID(rawValue: $0) }
+                    if new.count >= 2 { multiSelection = new; return }
+                    multiSelection = []
+                    let target = new.first.map { MeetingID(rawValue: $0) }
                     guard target != model.selectedMeetingID else { return }
                     Task { @MainActor in
                         if await unsaved.mayLeave() { model.selectedMeetingID = target }
@@ -91,7 +105,7 @@ private struct MainWindowContent: View {
 
     var body: some View {
         NavigationSplitView {
-            MeetingListView(model: model, selection: selection)
+            MeetingListView(model: model, selection: selection, onMerge: prepareMerge)
                 .navigationSplitViewColumnWidth(min: 260, ideal: 300)
         } detail: {
             VStack(spacing: 0) {
@@ -127,6 +141,48 @@ private struct MainWindowContent: View {
                 importCandidate = nil
             }
         }
+        .onChange(of: model.selectedMeetingID) { multiSelection = [] }
+        .alert(MergePreview.title, isPresented: isPresented($mergeRequest), presenting: mergeRequest) { request in
+            Button("統合") { merge(request.ids) }
+            Button("キャンセル", role: .cancel) {}
+        } message: { request in
+            Text(request.message)
+        }
+        .alert("統合できませんでした", isPresented: isPresented($mergeFailure), presenting: mergeFailure) { _ in
+            Button("OK") {}
+        } message: { reason in
+            Text(reason)
+        }
+    }
+
+    /// Checks the chosen meetings the same way the merge will and asks for confirmation with the combined start,
+    /// end and gaps; a refusal shows its reason instead.
+    private func prepareMerge(_ ids: [MeetingID]) {
+        Task { @MainActor in
+            do {
+                var manifests: [Manifest] = []
+                for id in ids { manifests.append(try await env.ports.meetings.manifest(id)) }
+                let preview = try MergePreview.make(manifests, queue: model.queue)
+                mergeRequest = MergeRequest(ids: ids, message: preview.message())
+            } catch let error as CombineError {
+                mergeFailure = error.message
+            } catch {
+                mergeFailure = CommandRouter.ipcError(error).message
+            }
+        }
+    }
+
+    /// The merge selects the new meeting, so the open editor is asked about unsaved minutes first.
+    private func merge(_ ids: [MeetingID]) {
+        Task { @MainActor in
+            guard await unsaved.mayLeave() else { return }
+            await model.perform(.merge(ids))
+            if let error = model.lastError { mergeFailure = error } else { multiSelection = [] }
+        }
+    }
+
+    private func isPresented<T>(_ value: Binding<T?>) -> Binding<Bool> {
+        Binding(get: { value.wrappedValue != nil }, set: { if !$0 { value.wrappedValue = nil } })
     }
 
     @ViewBuilder private var detail: some View {

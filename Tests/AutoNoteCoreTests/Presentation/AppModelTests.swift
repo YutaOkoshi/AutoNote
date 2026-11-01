@@ -132,6 +132,11 @@ import AutoNoteTestSupport
         await model.perform(.importAudio(URL(filePath: "/tmp/in.m4a"), startedAt: nil))
         #expect(await fakes.meetings.calls.contains("importAudio(/tmp/in.m4a)"))
         #expect(model.selectedMeetingID == MeetingID(rawValue: "20261024-1400-0000"))
+        // A merge selects the new meeting.
+        await model.perform(.merge([m1, MeetingID(rawValue: "20261024-1500-c3d4")]))
+        #expect(await fakes.meetings.calls.contains("merge(20261024-1400-a1b2,20261024-1500-c3d4)"))
+        #expect(model.selectedMeetingID == MeetingID(rawValue: "20261024-1400-1111"))
+        #expect(model.lastError == nil)
         await fakes.meetings.send([])
         await model.refresh()
         await model.perform(.openLatestMinutes)
@@ -149,6 +154,9 @@ import AutoNoteTestSupport
         await fakes.queue.setNextError(.notFound("会議が見つかりません: x"))
         await model.perform(.regenerate(m1))
         #expect(model.lastError == "会議が見つかりません: x")
+        await fakes.meetings.setNextError(.invalid("言語の違う会議は統合できません"))
+        await model.perform(.merge([m1, MeetingID(rawValue: "20261024-1500-c3d4")]))
+        #expect(model.lastError == "言語の違う会議は統合できません")
     }
 
     @Test func automationFailureCollectedAndCleared() async {

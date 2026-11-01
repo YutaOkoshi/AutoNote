@@ -686,6 +686,7 @@ autonote: "0.1.0"
 | `autonote latest [--open]` | 最新の議事録ファイルのパス（`--open` で Obsidian か既定アプリで開く） |
 | `autonote import <file>` | 音声ファイルの取り込み |
 | `autonote regenerate <id>` | 議事録の再生成 |
+| `autonote merge <id> <id> [<id>...]` | 1 つの会議が分かれた録音を、新しい 1 つの会議にまとめて文字起こしからやり直す（統合元は残し、一覧と Vault から外す） |
 | `autonote automations list` / `run <名前> <id>` | Automation の一覧と手動実行 |
 
 - 出力は人が読める形式を既定とし、`--json` で機械可読にする。終了コードは成功 0、失敗 1

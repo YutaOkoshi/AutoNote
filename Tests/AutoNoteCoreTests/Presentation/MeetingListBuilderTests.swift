@@ -33,6 +33,17 @@ import AutoNoteTestSupport
         #expect(row.summaryFirstLine == "リリースは来週")
     }
 
+    @Test func meetingsMergedIntoAnotherAreLeftOut() throws {
+        // A source of `autonote merge` stays on disk but not in the list, even while its note is still indexed.
+        var source = manifest("20261024-1400-0001", status: .transcriptOnly)
+        source.mergedInto = MeetingID(rawValue: "20261024-1400-c0de")
+        var combined = manifest("20261024-1400-c0de", status: .recorded)
+        combined.mergedFrom = [source.id]
+        let rows = MeetingListBuilder.build(index: [entry("20261024-1400-0001")], manifests: [source, combined],
+                                            queue: .empty, outputFolder: folder, timeZone: Samples.tokyo)
+        #expect(rows.map(\.id) == ["20261024-1400-c0de"])
+    }
+
     @Test func durationSecondsFromManifest() throws {
         var m = manifest("20261024-1400-a1b2", status: .recording)
         m.endedAt = m.startedAt + 32.7   // duration 32.7 s

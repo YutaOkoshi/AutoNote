@@ -29,16 +29,24 @@ public struct Manifest: Codable, Equatable, Hashable, Sendable {
     /// leaves the finished meeting's title and 「Finder で表示」 alone (the note stays in the old folder).
     public var notePath: String?
     public var noteTitle: String?
+    /// Set on a meeting made by `autonote merge`: the meetings it was combined from, oldest first.
+    public var mergedFrom: [MeetingID]?
+    /// Set on a meeting that was combined into another one: the combined meeting. Such a meeting is kept on disk
+    /// (its recordings follow the retention rules) but left out of the list and the Vault. Removing this key and
+    /// deleting the combined meeting undoes a merge.
+    public var mergedInto: MeetingID?
 
     public init(id: MeetingID, title: String?, startedAt: Date, endedAt: Date?, source: MeetingSource,
                 device: DeviceRef?, language: Language, tracks: [TrackFile], pauses: [PauseInterval],
                 bookmarks: [Bookmark], status: MeetingStatus, silenceWarning: Bool, autonoteVersion: String,
-                notePath: String? = nil, noteTitle: String? = nil) {
+                notePath: String? = nil, noteTitle: String? = nil,
+                mergedFrom: [MeetingID]? = nil, mergedInto: MeetingID? = nil) {
         self.id = id; self.title = title; self.startedAt = startedAt; self.endedAt = endedAt
         self.source = source; self.device = device; self.language = language
         self.tracks = tracks; self.pauses = pauses; self.bookmarks = bookmarks
         self.status = status; self.silenceWarning = silenceWarning; self.autonoteVersion = autonoteVersion
         self.notePath = notePath; self.noteTitle = noteTitle
+        self.mergedFrom = mergedFrom; self.mergedInto = mergedInto
     }
 
     /// `endedAt - startedAt` in seconds; nil while still recording.

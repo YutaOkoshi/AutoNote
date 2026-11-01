@@ -233,7 +233,8 @@ check_app_launch() {
     # launch_at_login=false と first_run_completed=true で、ログイン項目の登録や初回のメインウィンドウを出さない
     local fix="${ROOT}/Tests/Fixtures/meetings/${E2E_MEETING_ID}"
     mkdir -p "${DATA}/recordings/${E2E_MEETING_ID}" "${DATA}/transcripts/${E2E_MEETING_ID}"
-    printf '{"launch_at_login": false, "first_run_completed": true}\n' >"${DATA}/settings.json"
+    # claude_path は存在しないパス: 項目 14.1 の統合した会議が待ち行列で要約に進んでも、本物の claude を呼ばない
+    printf '{"launch_at_login": false, "first_run_completed": true, "claude_path": "/nonexistent-autonote-e2e/claude"}\n' >"${DATA}/settings.json"
     ( umask 077; cat >"${DATA}/automations.json" <<'JSON'
 [{"name": "e2e-echo", "enabled": true, "on": "minutes_generated", "command": "echo \"$AUTONOTE_EVENT $AUTONOTE_MEETING_ID\" > \"$AUTONOTE_E2E_OUT\"", "timeout_sec": 30}]
 JSON
@@ -459,6 +460,80 @@ check_live_summary_default_off() {
     local files; files="$(find "${DATA}/transcripts" -name live-summary.json 2>/dev/null | wc -l | tr -d ' ')"
     [[ "${files}" -eq 0 ]] || { LAST_LOG=""; fail "live-summary.json が ${files} 個（期待 0）"; return; }
     pass "idle、app.log の live summary: off が ${offs_before} → ${offs_after} 件、live-summary.json なし"
+}
+
+# 14.1 の補助: 無音の 16 kHz mono 16bit WAV（<秒> 秒）を書く
+e2e_le32() { local v=$1; printf '\\x%02x\\x%02x\\x%02x\\x%02x' $((v & 255)) $(((v >> 8) & 255)) $(((v >> 16) & 255)) $(((v >> 24) & 255)); }
+e2e_silent_wav() {
+    local out=$1 bytes=$(($2 * 32000))
+    { printf 'RIFF'; printf '%b' "$(e2e_le32 $((bytes + 36)))"; printf 'WAVEfmt '
+      printf '%b' "$(e2e_le32 16)\x01\x00\x01\x00$(e2e_le32 16000)$(e2e_le32 32000)\x02\x00\x10\x00"
+      printf 'data'; printf '%b' "$(e2e_le32 "${bytes}")"; head -c "${bytes}" /dev/zero; } >"${out}"
+}
+# 14.1 の補助: 録音済みの会議を 1 つ置く（<id> <開始 ISO8601> <終了 ISO8601> <live|imported>。音声は 2 秒の無音）
+e2e_put_meeting() {
+    local dir="${DATA}/recordings/$1"
+    mkdir -p "${dir}/tracks"
+    e2e_silent_wav "${dir}/tracks/mic-000.wav" 2
+    cat >"${dir}/manifest.json" <<JSON
+{"id": "$1", "started_at": "$2", "ended_at": "$3", "source": "$4",
+ "device": {"name": "E2E Mic", "uid": "E2E-MIC", "transport": "builtin"}, "language": "ja",
+ "tracks": [{"track": "mic", "relative_path": "tracks/mic-000.wav", "start_offset": 0, "duration_seconds": 2}],
+ "pauses": [], "bookmarks": [], "status": "transcript_only", "silence_warning": false, "autonote_version": "0.2.1"}
+JSON
+}
+
+# 14.1: 3 本の録音を autonote merge で統合する。取り込み（source=imported）を混ぜると拒否され何も作らない（SPEC §2.2）。
+# `autonote import` の会議は imported なので統合できない。そのため live の会議を manifest と WAV で直接置く。
+# 統合後の会議はこのアプリの待ち行列に入る。項目 7 の settings.json の claude_path は存在しないパスなので、要約で claude は呼ばれない
+check_merge_recordings() {
+    CURRENT="14.1 autonote merge で 3 本の録音を 1 つの会議に統合し、統合元は一覧から外れる"
+    app_or_skip || return
+    cli_or_skip || return
+    local ids=(20261020-1000-e001 20261020-1000-e002 20261020-1000-e003) imported=20261020-1000-e004
+    e2e_put_meeting "${ids[0]}" 2026-10-20T01:00:00.000Z 2026-10-20T01:00:02.000Z live
+    e2e_put_meeting "${ids[1]}" 2026-10-20T01:00:03.000Z 2026-10-20T01:00:05.000Z live
+    e2e_put_meeting "${ids[2]}" 2026-10-20T01:00:08.000Z 2026-10-20T01:00:10.000Z live
+    e2e_put_meeting "${imported}" 2026-10-20T01:00:12.000Z 2026-10-20T01:00:14.000Z imported
+    local before after code
+    before="$(ls "${DATA}/recordings" | sort)"
+    AUTONOTE_DATA_DIR="${DATA}" run_timeout 30 "${AUTONOTE_CLI}" merge "${ids[2]}" "${imported}"; code=$?
+    [[ ${code} -eq 1 ]] || { fail "imported を含む merge: exit ${code}（期待 1）"; return; }
+    grep -q "取り込んだ音声の会議は統合できません" "${LAST_LOG}" || { fail "拒否の理由が出ない"; return; }
+    after="$(ls "${DATA}/recordings" | sort)"
+    [[ "${after}" == "${before}" ]] || { LAST_LOG=""; fail "拒否されたのに recordings/ が変わった"; return; }
+
+    AUTONOTE_DATA_DIR="${DATA}" run_timeout 120 "${AUTONOTE_CLI}" merge "${ids[@]}"; code=$?
+    [[ ${code} -eq 0 ]] || { fail "merge: exit ${code}（期待 0）"; return; }
+    local new; new="$(sed -n 's/^受け付けました: //p' "${LAST_LOG}")"
+    local m="${DATA}/recordings/${new}/manifest.json"
+    [[ -n "${new}" && -f "${m}" ]] || { fail "新しい会議の manifest が無い（ID「${new}」）"; return; }
+    local key want got i
+    for key in tracks.0.start_offset=0 tracks.1.start_offset=3 tracks.2.start_offset=8 \
+               pauses.0.start=2 pauses.0.end=3 pauses.1.start=5 pauses.1.end=8; do
+        want="${key#*=}"; got="$(plutil -extract "${key%%=*}" raw -o - "${m}" 2>/dev/null)"
+        awk -v a="${got}" -v b="${want}" 'BEGIN { exit !(a != "" && a + 0 == b + 0) }' \
+            || { LAST_LOG="${m}"; fail "${key%%=*} が「${got}」（期待 ${want}）"; return; }
+    done
+    for i in 0 1 2; do
+        [[ -f "${DATA}/recordings/${new}/tracks/mic-00${i}.wav" ]] || { LAST_LOG=""; fail "tracks/mic-00${i}.wav が無い"; return; }
+        [[ "$(plutil -extract "merged_from.${i}" raw -o - "${m}" 2>/dev/null)" == "${ids[${i}]}" ]] \
+            || { LAST_LOG="${m}"; fail "merged_from.${i} が ${ids[${i}]} でない"; return; }
+        got="$(plutil -extract merged_into raw -o - "${DATA}/recordings/${ids[${i}]}/manifest.json" 2>/dev/null)"
+        [[ "${got}" == "${new}" ]] || { LAST_LOG=""; fail "${ids[${i}]} の merged_into が「${got}」（期待 ${new}）"; return; }
+    done
+    local out="${WORK}/list-14.1.json" listed=" "
+    AUTONOTE_DATA_DIR="${DATA}" run_timeout 10 sh -c '"$1" list --json >"$2"' _ "${AUTONOTE_CLI}" "${out}" \
+        || { fail "list --json が失敗"; return; }
+    for i in $(seq 0 100); do
+        got="$(plutil -extract "meetings.${i}.id" raw -o - "${out}" 2>/dev/null)" || break
+        listed+="${got} "
+    done
+    [[ "${listed}" == *" ${new} "* ]] || { LAST_LOG="${out}"; fail "list に新しい会議 ${new} が無い"; return; }
+    for i in 0 1 2; do
+        [[ "${listed}" != *" ${ids[${i}]} "* ]] || { LAST_LOG="${out}"; fail "list に統合元 ${ids[${i}]} が残っている"; return; }
+    done
+    pass "${new}: start_offset 0/3/8、pauses 2–3/5–8、統合元 3 件は merged_into 付きで一覧から外れた"
 }
 
 check_automation_log_and_socket() {
@@ -954,6 +1029,7 @@ CHECKS=(
     check_automation_run
     check_recording_main_thread
     check_live_summary_default_off
+    check_merge_recordings
     check_automation_log_and_socket
     check_cer
     check_whisper

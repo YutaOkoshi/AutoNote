@@ -29,3 +29,22 @@ import AutoNoteTestSupport
     #expect(u(5, .me, "x").isFinal)
     #expect(MeetingStatus.tooShort.rawValue == "too_short")
 }
+
+@Test func manifestRoundTripsMergeLinks() throws {
+    var m = Samples.manifest
+    m.mergedFrom = [MeetingID(rawValue: "20261030-1158-aaaa"), MeetingID(rawValue: "20261030-1200-bbbb")]
+    m.mergedInto = MeetingID(rawValue: "20261030-1158-cccc")
+    let s = String(decoding: try AutoNoteJSON.encoder().encode(m), as: UTF8.self)
+    #expect(s.contains(#""merged_from" : ["#))
+    #expect(s.contains(#""merged_into" : "20261030-1158-cccc""#))
+    #expect(try AutoNoteJSON.decoder().decode(Manifest.self, from: Data(s.utf8)) == m)
+}
+
+@Test func manifestWithoutMergeLinksOmitsThemAndOldJSONStillDecodes() throws {
+    let s = String(decoding: try AutoNoteJSON.encoder().encode(Samples.manifest), as: UTF8.self)
+    #expect(!s.contains("merged_from")); #expect(!s.contains("merged_into"))
+    // A 0.2.1 manifest has neither key.
+    let old = try Data(contentsOf: FixtureLibrary.defaultDirectory.appending(path: "meetings/20261024-1400-a1b2/manifest.json"))
+    let m = try AutoNoteJSON.decoder().decode(Manifest.self, from: old)
+    #expect(m.mergedFrom == nil); #expect(m.mergedInto == nil)
+}

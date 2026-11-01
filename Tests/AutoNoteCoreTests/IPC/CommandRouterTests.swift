@@ -136,6 +136,22 @@ import AutoNoteTestSupport
         #expect(await fakes.meetings.calls == ["importAudio(\(file.path))"])
     }
 
+    @Test func mergePassesTheIDsAndReturnsTheNewOne() async {
+        let fakes = FakePorts()
+        await fakes.meetings.setMergedID(MeetingID(rawValue: "20261030-1158-c0de"))
+        let ok = await router(fakes).handle(req(.merge, IPCArgs(meetingIDs: ["20261030-1205-0003", "20261030-1158-0001"])))
+        #expect(ok.ok && ok.result?.meetingID == "20261030-1158-c0de")
+        #expect(await fakes.meetings.calls == ["merge(20261030-1205-0003,20261030-1158-0001)"])
+
+        let missing = await router(fakes).handle(req(.merge))
+        #expect(missing.error?.code == .invalidArgs)
+        let one = await router(fakes).handle(req(.merge, IPCArgs(meetingIDs: ["20261030-1158-0001"])))
+        #expect(one.error?.code == .invalidArgs)
+        await fakes.meetings.setNextError(.invalid("取り込んだ音声の会議は統合できません（話者を区別できないため）: x"))
+        let refused = await router(fakes).handle(req(.merge, IPCArgs(meetingIDs: ["a", "b"])))
+        #expect(refused.error == IPCError(code: .invalidArgs, message: "取り込んだ音声の会議は統合できません（話者を区別できないため）: x"))
+    }
+
     @Test func regenerateUnknown() async {
         let fakes = FakePorts()
         await fakes.queue.setNextError(.notFound("会議が見つかりません: x"))

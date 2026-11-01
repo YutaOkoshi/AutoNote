@@ -344,6 +344,55 @@ public struct MeetingsAdapter: MeetingsPort {
         return manifest.id
     }
 
+    /// SPEC §2: the new meeting is created and queued first (from transcription, like an import); only then do the
+    /// sources get `merged_into` and lose their Vault notes. Those last steps are logged on failure, not thrown:
+    /// the combined meeting already exists and is processing.
+    public func merge(_ ids: [MeetingID]) async throws -> MeetingID {
+        var sources: [Manifest] = []
+        for id in ids { sources.append(try await manifest(id)) }
+        let busy = await queueStatus().activeMeetingIDs
+        let start = sources.map(\.startedAt).min() ?? Date()
+        // Never reuse an existing meeting directory: failure cleanup deletes the whole directory.
+        var newID = MeetingID.make(start: start, timeZone: timeZone)
+        while exists(paths.meetingDirectory(newID)) || exists(paths.transcriptsDirectory(newID)) {
+            newID = MeetingID.make(start: start, timeZone: timeZone)
+        }
+        let plan: CombinePlan
+        do {
+            plan = try MeetingCombiner.plan(sources, newID: newID, busy: busy, appVersion: appVersion)
+        } catch {
+            throw AppCommandError.invalid(error.message)
+        }
+        let combined: Manifest
+        do {
+            combined = try await MeetingCombiner.execute(plan, paths: paths, manifests: manifests)
+        } catch let error as CombineError {
+            throw AppCommandError.failed(error.message)
+        } catch {
+            throw AppCommandError.wrap(error)
+        }
+        await route(combined)
+
+        let combinedID = combined.id
+        for source in plan.sources {
+            do { try await manifests.update(source.id) { $0.mergedInto = combinedID } } catch {
+                logger.error("merge \(newID.rawValue, privacy: .public): could not mark \(source.id.rawValue, privacy: .public) (\(String(describing: type(of: error)), privacy: .public))")
+            }
+        }
+        if let vault = await output.vault(), isDirectory(vault.folder) {
+            for source in plan.sources {
+                do { try await vault.writer.remove(source.id) } catch {
+                    logger.error("merge \(newID.rawValue, privacy: .public): could not remove the note of \(source.id.rawValue, privacy: .public) (\(String(describing: type(of: error)), privacy: .public))")
+                }
+            }
+            do { _ = try await vault.writer.rebuildIndex() } catch {
+                logger.error("merge \(newID.rawValue, privacy: .public): index rebuild failed (\(String(describing: type(of: error)), privacy: .public))")
+            }
+        }
+        logger.notice("merge \(newID.rawValue, privacy: .public): combined \(plan.sources.map(\.id.rawValue).joined(separator: ","), privacy: .public)")
+        return newID
+    }
+
     public func recover(_ id: MeetingID) async throws {
         _ = try await manifest(id)
         let manifest = try await wrapping { try await crashRecovery.recover(id) }

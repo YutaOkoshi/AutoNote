@@ -6,6 +6,7 @@ public enum UserAction: Equatable, Sendable {
     case delete(MeetingID), rerunAutomation(name: String, meetingID: MeetingID), importAudio(URL, startedAt: Date?)
     case openLatestMinutes, open(MeetingID), notice(UserNoticeAction), toggleRecording, togglePause
     case redetectClaude, redetectClaudeAndRerun(MeetingID), retryModelDownload, installGuide
+    case merge([MeetingID])
 }
 
 /// Everything the menu bar and the window show, gathered from the app's ports.
@@ -220,6 +221,9 @@ public enum UserAction: Equatable, Sendable {
         case .rerunAutomation(let name, let id): apply(try await ports.automations.run(name: name, meetingID: id))
         case .importAudio(let file, let startedAt):
             selectedMeetingID = try await ports.meetings.importAudio(file, startedAt: startedAt)
+            await refresh()
+        case .merge(let ids):
+            selectedMeetingID = try await ports.meetings.merge(ids)
             await refresh()
         case .openLatestMinutes:
             guard let file = try await ports.meetings.latestMinutesFile() else { throw AppCommandError.notFound("議事録がまだありません") }

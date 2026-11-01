@@ -6,7 +6,7 @@ import Testing
     private func line(_ v: some Encodable) throws -> String { String(decoding: try IPCCodec.encode(v), as: UTF8.self) }
 
     @Test func commandsMatchSpecTable() {
-        #expect(IPCCommand.allCases.map(\.rawValue) == ["start", "stop", "pause", "resume", "bookmark", "status", "list", "latest", "import", "regenerate", "automations.list", "automations.run"])
+        #expect(IPCCommand.allCases.map(\.rawValue) == ["start", "stop", "pause", "resume", "bookmark", "status", "list", "latest", "import", "regenerate", "merge", "automations.list", "automations.run"])
     }
 
     @Test func decodesSnakeCaseRequest() throws {

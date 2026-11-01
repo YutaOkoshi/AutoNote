@@ -5,6 +5,7 @@ public enum IPCCommand: String, Codable, Sendable, CaseIterable {
     case start, stop, pause, resume, bookmark, status, list, latest
     case `import`
     case regenerate
+    case merge
     case automationsList = "automations.list"
     case automationsRun = "automations.run"
 }
@@ -17,9 +18,11 @@ public struct IPCArgs: Codable, Equatable, Sendable {
     public var file: String?
     public var meetingID: String?
     public var name: String?
+    /// `merge`: the meetings to combine.
+    public var meetingIDs: [String]?
 
     public init(lang: Language? = nil, note: String? = nil, since: String? = nil, open: Bool? = nil,
-                file: String? = nil, meetingID: String? = nil, name: String? = nil) {
+                file: String? = nil, meetingID: String? = nil, name: String? = nil, meetingIDs: [String]? = nil) {
         self.lang = lang
         self.note = note
         self.since = since
@@ -27,12 +30,14 @@ public struct IPCArgs: Codable, Equatable, Sendable {
         self.file = file
         self.meetingID = meetingID
         self.name = name
+        self.meetingIDs = meetingIDs
     }
 
     // `meetingID` would snake-case to `meeting_i_d`; pin the key.
     private enum CodingKeys: String, CodingKey {
         case lang, note, since, open, file, name
         case meetingID = "meetingId"
+        case meetingIDs = "meetingIds"
     }
 }
 

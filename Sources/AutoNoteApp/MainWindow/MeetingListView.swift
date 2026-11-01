@@ -1,25 +1,32 @@
 import AutoNoteCore
 import SwiftUI
 
-/// The left column: `model.meetings` with the same state words as the menu and the CLI.
+/// The left column: `model.meetings` with the same state words as the menu and the CLI. ⌘/⇧-click selects several
+/// meetings; the context menu of two or more offers 「1 つの会議に統合」 (`onMerge`).
 struct MeetingListView: View {
     let model: AppModel
-    @Binding var selection: String?
+    @Binding var selection: Set<String>
+    let onMerge: ([MeetingID]) -> Void
 
     var body: some View {
         List(selection: $selection) {
             ForEach(model.meetings) { row in
-                let failures = model.automationFailures.filter { $0.meetingID == row.id }.map(\.name)
-                MeetingListRow(row: row, failures: failures)
+                MeetingListRow(row: row, failures: failures(of: row.id))
                     .tag(row.id)
-                    // §14.5: a failed automation can be run again from the window too.
-                    .contextMenu {
-                        ForEach(failures, id: \.self) { name in
-                            Button("再実行: \(name)", systemImage: "arrow.clockwise") {
-                                Task { await model.perform(.rerunAutomation(name: name, meetingID: MeetingID(rawValue: row.id))) }
-                            }
-                        }
+            }
+        }
+        .contextMenu(forSelectionType: String.self) { ids in
+            if ids.count >= 2 {
+                Button("1 つの会議に統合", systemImage: "rectangle.stack.badge.plus") {
+                    onMerge(ids.sorted().map { MeetingID(rawValue: $0) })
+                }
+            } else if let id = ids.first {
+                // §14.5: a failed automation can be run again from the window too.
+                ForEach(failures(of: id), id: \.self) { name in
+                    Button("再実行: \(name)", systemImage: "arrow.clockwise") {
+                        Task { await model.perform(.rerunAutomation(name: name, meetingID: MeetingID(rawValue: id))) }
                     }
+                }
             }
         }
         .overlay {
@@ -27,6 +34,12 @@ struct MeetingListView: View {
                 ContentUnavailableView("会議はまだありません", systemImage: "waveform")
             }
         }
+    }
+}
+
+extension MeetingListView {
+    private func failures(of id: String) -> [String] {
+        model.automationFailures.filter { $0.meetingID == id }.map(\.name)
     }
 }
 
