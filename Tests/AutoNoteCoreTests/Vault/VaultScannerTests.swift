@@ -30,3 +30,14 @@ private let e1 = IndexEntry(meetingID: .init(rawValue: "20261024-1400-a1b2"), da
     #expect(try VaultScanner.locate(m.id, in: v).count == 2)
     #expect(try VaultScanner.locate(.init(rawValue: "nope"), in: v).isEmpty)
 }
+
+@Test func scannerReadsBothSummaryHeadings() throws {
+    let v = try TemporaryDirectory.make()
+    try FileManager.default.createDirectory(at: v.appending(path: "2026"), withIntermediateDirectories: true)
+    let head = "---\ntitle: x\ndate: 2026-10-24\nstart: \"14:00\"\nstatus: minutes_generated\nautonote_id: "
+    let legacy = head + "a\n---\n\n# x\n\n## 3行要約\n- 旧形式の一行目\n- 二行目\n\n## 決定事項\n- なし\n"
+    let current = head + "b\n---\n\n# x\n\n## 議題\n- なし\n\n## 要約\n\n新形式の一段落目。\n\n二段落目。\n\n## 決定事項\n- なし\n"
+    try legacy.write(to: v.appending(path: "2026/a.md"), atomically: true, encoding: .utf8)
+    try current.write(to: v.appending(path: "2026/b.md"), atomically: true, encoding: .utf8)
+    #expect(try VaultScanner.scan(outputFolder: v).map(\.firstLine) == ["旧形式の一行目", "新形式の一段落目。"])
+}

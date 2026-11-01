@@ -1,6 +1,9 @@
 import Foundation
 
 public enum VaultScanner {
+    /// The summary section's heading, current first.
+    static let summaryHeadings = ["## 要約", "## 3行要約"]
+
     public static func scan(outputFolder: URL) throws -> [IndexEntry] {
         try meetingFiles(in: outputFolder).map { entry(for: $0.url, frontmatter: $0.frontmatter, text: $0.text, base: $0.base) }
             .sorted { $0.linkPath < $1.linkPath }
@@ -36,12 +39,17 @@ public enum VaultScanner {
     private static func entry(for url: URL, frontmatter fm: [String: String], text: String, base: URL) -> IndexEntry {
         let status = fm["status"] ?? ""
         var firstLine = status == "transcript_only" ? "（議事録未生成）" : ""
+        // `## 要約` (schema v2: paragraphs) or `## 3行要約` (before v2: a list): the first line of the section,
+        // without a list marker.
         var inSummary = false
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            if line == "## 3行要約" { inSummary = true; continue }
+            if summaryHeadings.contains(String(line)) { inSummary = true; continue }
             guard inSummary else { continue }
             if line.hasPrefix("## ") { break }
-            if line.hasPrefix("- ") { firstLine = String(line.dropFirst(2)); break }
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+            firstLine = trimmed.hasPrefix("- ") ? String(trimmed.dropFirst(2)) : trimmed
+            break
         }
         let prefix = base.path.hasSuffix("/") ? base.path : base.path + "/"
         var rel = url.resolvingSymlinksInPath().path

@@ -1,0 +1,55 @@
+{
+  "schema_version": 2,
+  "title": "ルミナ茶EC受注連携",
+  "summary": [
+    "ルミナ茶のEC受注を倉庫システムへ自動でつなぐ構成を相談した。今は毎朝CSVを手作業で取り込んでおり、取り込み漏れが課題になっている。",
+    "ECサイトから受注APIを経て在庫管理と出荷システムへ流す構成で進めることに決め、受注APIは自分の側で作る。",
+    "年末セールが十二月二十日に始まるため、十二月十日までに結合テストを終える前提で進める。",
+    "セール初日の注文集中で受注APIが詰まるおそれがあり、キューに積んで順に処理する案が出た。APIの認証方式と前回のトラブルの原因は持ち越しになった。"
+  ],
+  "decisions": [
+    { "text": "ECサイトから受注API、在庫管理・出荷システムへ流す構成で進める", "t": "00:00:55" }
+  ],
+  "agenda": [
+    { "title": "現状の取り込み", "body": "毎朝CSVを手作業で取り込んでおり、取り込み漏れが出やすい。", "t": "00:00:15" },
+    { "title": "連携の構成", "body": "受注APIを中心に在庫管理と出荷システムへ流す構成で合意した。", "t": "00:00:40" },
+    { "title": "日程", "body": "年末セールに向けて十二月十日までに結合テストを終える。", "t": "00:01:15" },
+    { "title": "負荷対策", "body": "注文の集中に備えてキューで順に処理する案が出た。", "t": "00:03:05" }
+  ],
+  "next_actions": [
+    { "text": "出荷システムの仕様書を送る", "owner": "相手", "due": "来週月曜", "t": "00:02:30", "priority": "high" },
+    { "text": "受注APIの設計書を作る", "owner": "自分", "due": "今週金曜", "t": "00:02:40", "priority": "high" },
+    { "text": "受注APIを作る", "owner": "自分", "due": null, "t": "00:00:55", "priority": "medium" },
+    { "text": "トラブルの原因を確認する", "owner": null, "due": null, "t": "00:04:00", "priority": "low" }
+  ],
+  "suggested_terms": ["受注API"],
+  "attendees": [
+    { "name": "相手", "role": "ほしぞら食品" },
+    { "name": "自分", "role": null }
+  ],
+  "key_points": [
+    { "text": "注文データは毎朝CSVを手作業で取り込んでいる", "t": "00:00:15" },
+    { "text": "年末セールは十二月二十日に始まる", "t": "00:01:15" }
+  ],
+  "insights": [
+    { "text": "手作業の取り込みは漏れが出やすく、自動化の効果が大きい", "t": "00:00:25" }
+  ],
+  "questions": [
+    { "question": "APIの認証方式はどうするか", "asked_by": "相手", "is_resolved": false, "answer": "APIキー方式で検討中で、まだ決めていない", "t": "00:01:50" },
+    { "question": "出荷システムの仕様書はいつ届くか", "asked_by": "自分", "is_resolved": true, "answer": "来週月曜までに届く", "t": "00:02:10" },
+    { "question": "前回のトラブルの原因は分かったか", "asked_by": null, "is_resolved": false, "answer": null, "t": "00:03:40" }
+  ],
+  "deadlines": [
+    { "description": "年末セールの開始", "date": "12月20日", "owner": null, "t": "00:01:15" },
+    { "description": "結合テストの完了", "date": "12月10日", "owner": "自分", "t": "00:01:30" }
+  ],
+  "follow_ups": [
+    { "text": "APIの認証方式を決める", "t": "00:02:00" },
+    { "text": "前回のトラブルの原因を次回の定例で確認する", "t": "00:04:00" }
+  ],
+  "risks": [
+    { "description": "セール初日に注文が集中して受注APIが詰まる", "severity": "high", "mitigation": "受注をキューに積んで順に処理する", "t": "00:03:05" },
+    { "description": "CSVの手作業取り込みで漏れが出る", "severity": "medium", "mitigation": null, "t": "00:00:25" }
+  ],
+  "architecture_diagram": "graph LR\n  EC[EC site] --> API[Order API]\n  API --> Q[Queue]\n  Q --> INV[Inventory]\n  Q --> SHIP[Shipping]"
+}

@@ -87,6 +87,17 @@ import Testing
         #expect(await scripted.inputs.first?.instructions == DefaultPrompt.instructions)
     }
 
+    @Test func untouchedLegacyPromptIsMigratedBeforeSummarizing() async throws {
+        let f = try await setUp()
+        try writePortable(f, .prompt, DefaultPrompt.legacyInstructionsV1)
+        let scripted = ScriptedSummarizer(results: [.success(Samples.minutes)])
+        var j = job(f)
+        try await stage(scripted).run(&j, context: context(f))
+        #expect(await scripted.inputs.first?.instructions == DefaultPrompt.instructions)
+        let onDisk = try String(contentsOf: f.outputFolder.appending(path: "_autonote/prompt.md"), encoding: .utf8)
+        #expect(onDisk == DefaultPrompt.instructions)
+    }
+
     @Test func successWritesMinutesJsonAndClearsFailure() async throws {
         let f = try await setUp()
         let scripted = ScriptedSummarizer(results: [.success(Samples.minutes)])

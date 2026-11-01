@@ -46,10 +46,9 @@ public struct SummarizeStage: QueueStage {
         Self.logger.info("\(id.rawValue, privacy: .public): minutes generated")
     }
 
+    /// `prompt.md`, an untouched pre-v2 default moved to the current one first (`PromptMigration`).
     private func instructions(_ store: PortableConfigStore) async throws -> String {
-        guard let data = try await store.read(.prompt) else { return DefaultPrompt.instructions }
-        let text = String(decoding: data, as: UTF8.self)
-        return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? DefaultPrompt.instructions : text
+        try await PromptMigration.effectiveInstructions(store)
     }
 
     private func dictionary(_ store: PortableConfigStore) async throws -> DictionaryFile {

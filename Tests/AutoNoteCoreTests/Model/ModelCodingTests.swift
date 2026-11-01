@@ -20,6 +20,11 @@ import AutoNoteTestSupport
     #expect(m.nextActions[0].owner == nil); #expect(m.nextActions[0].due == "10/31"); #expect(m.decisions[0].time == TimelineTime(seconds: 754))
     let back = String(decoding: try AutoNoteJSON.encoder().encode(m), as: UTF8.self)
     #expect(back.contains(#""owner" : null"#)); #expect(back.contains(#""next_actions""#))
+    // v2: a v1 document reads with the defaults and is written back with every v2 key.
+    #expect(m.schemaVersion == 1); #expect(m.nextActions[0].priority == .medium); #expect(m.risks.isEmpty)
+    for key in ["\"priority\" : \"medium\"", "\"attendees\" : [", "\"key_points\"", "\"architecture_diagram\" : null", "\"schema_version\" : 1"] {
+        #expect(back.contains(key), "\(key)")
+    }
 }
 
 @Test func samplesAreAsSpecified() {

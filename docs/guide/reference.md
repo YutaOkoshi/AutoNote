@@ -42,7 +42,8 @@
 
 - きっかけ（`on`）: `minutes_generated` / `transcript_only` / `recording_started` / `recording_stopped`
 - コマンドは `/bin/zsh -lc` で実行する（ログインシェルの PATH を引き継ぐ）。標準入力には同じ内容の JSON を流す。タイムアウトは 1〜86400 秒
-- 環境変数: `AUTONOTE_EVENT`（きっかけ）、`AUTONOTE_MEETING_ID`、`AUTONOTE_FILE`（Vault の会議ファイル。録音開始時は空）、`AUTONOTE_TITLE` / `AUTONOTE_DATE` / `AUTONOTE_START`、`AUTONOTE_JSON`（構造化出力の JSON。議事録生成後のみ）。アプリの環境変数もそのまま引き継ぐ
+- 環境変数: `AUTONOTE_EVENT`（きっかけ）、`AUTONOTE_MEETING_ID`、`AUTONOTE_FILE`（Vault の会議ファイル。録音開始時は空）、`AUTONOTE_TITLE` / `AUTONOTE_DATE` / `AUTONOTE_START`、`AUTONOTE_JSON`（構造化出力の JSON ＝ `minutes.json` のパス。議事録生成後のみ）。アプリの環境変数もそのまま引き継ぐ
+- `minutes.json` のキー（議事録スキーマ v2）: `schema_version`（2。無ければ v1）、`title`、`summary`（3〜5 段落の文字列の配列）、`decisions[]`（`text`, `t`）、`agenda[]`（`title`, `body`, `t`）、`next_actions[]`（`text`, `owner`, `due`, `t`, `priority` = `high`/`medium`/`low`）、`suggested_terms[]`、`attendees[]`（`name`, `role`）、`key_points[]` / `insights[]` / `follow_ups[]`（`text`, `t`）、`questions[]`（`question`, `asked_by`, `is_resolved`, `answer`, `t`）、`deadlines[]`（`description`, `date`, `owner`, `t`）、`risks[]`（`description`, `severity` = `high`/`medium`/`low`, `mitigation`, `t`）、`architecture_diagram`（Mermaid のソースか null）。`t` は根拠となる発言の時刻 `HH:MM:SS`。v1 からある 6 キー（`title` `summary` `decisions` `agenda` `next_actions` `suggested_terms`）の名前と型は変わらない。v1 で作った `minutes.json` には v2 のキーが無いことがある
 - ログ（標準出力・標準エラー・終了コード）は `~/Library/Application Support/AutoNote/logs/automations/<実行ごとのフォルダ>/`（`result.json`、`stdout.txt` など）。失敗しても議事録の成否には影響しない
 - 定義の検証メッセージ: 「同じ名前の Automation があります」「コマンドを入れてください」「タイムアウトは 1〜86400 秒にしてください」「名前を入れてください」
 

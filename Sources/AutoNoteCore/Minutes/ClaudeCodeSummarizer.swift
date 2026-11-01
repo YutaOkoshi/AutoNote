@@ -5,6 +5,8 @@ import os
 public struct ClaudeCodeSummarizer: Summarizer {
     private static let logger = Logger(subsystem: "com.yutaokoshi.autonote", category: "ClaudeCodeSummarizer")
     static let authTimeout: Duration = .seconds(30)
+    /// Per `claude -p` call. Schema v2 asks for more output than v1 (600 s), so 900 s.
+    public static let defaultTimeout: Duration = .seconds(900)
 
     public let claudePath: String
     public let model: String?
@@ -14,7 +16,7 @@ public struct ClaudeCodeSummarizer: Summarizer {
     public let builder: PromptBuilder
 
     public init(claudePath: String, model: String?, workingDirectory: URL, runner: any ProcessRunning = FoundationProcessRunner(),
-                timeout: Duration = .seconds(600), builder: PromptBuilder = PromptBuilder()) {
+                timeout: Duration = ClaudeCodeSummarizer.defaultTimeout, builder: PromptBuilder = PromptBuilder()) {
         self.claudePath = claudePath; self.model = model; self.workingDirectory = workingDirectory
         self.runner = runner; self.timeout = timeout; self.builder = builder
     }

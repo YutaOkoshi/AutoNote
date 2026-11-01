@@ -55,6 +55,8 @@ if [[ "${PLIST_BUNDLE_ID}" != "${BUNDLE_ID}" ]]; then
     echo "エラー: Info.plist の CFBundleIdentifier (${PLIST_BUNDLE_ID}) が scripts/config.sh の AUTONOTE_BUNDLE_ID (${BUNDLE_ID}) と違います。" >&2
     exit 1
 fi
+# 構成図のプレビューに使う mermaid.js（MIT、版とライセンスは docs/development.md）。WKWebView でローカルに描画する
+ditto "${ROOT}/Resources/mermaid" "${APP}/Contents/Resources/mermaid"
 
 # whisper.cpp の XCFramework（macos-arm64_x86_64 スライス）を同梱し、実行ファイルから @rpath で引けるようにする
 WHISPER_FW="${BIN_DIR}/whisper.framework"

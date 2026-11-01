@@ -22,7 +22,7 @@ public enum IndexFile {
     public static let guide = """
     > **Claude Code への案内**（AutoNote が自動で書き直す。手で編集しても次の更新で消える）
     > - このフォルダは会議の記録で、一会議一ファイル。`YYYY/YYYY-MM-DD_HHMM_<タイトル>.md`（議事録未生成は `YYYY/YYYY-MM-DD_HHMMSS.md`）に置いてある。`_autonote/` はアプリの設定なので読まなくてよい
-    > - 各ファイルは frontmatter（title, date, start, end, duration_min, status, autonote_id など）の後に「3行要約」「決定事項」「議題」「Next Action」「ブックマーク」「文字起こし」の節が続く。status が transcript_only のファイルは議事録の節が無い
+    > - 各ファイルは frontmatter（title, date, start, end, duration_min, status, autonote_id など）の後に「出席者」「議題」「要約」「重要ポイント」「決定事項」「アクション」「質問」「締め切り」「フォローアップ」「リスク」「インサイト」「構成図」「ブックマーク」「文字起こし」の節がこの順に続く。中身の無い節は省かれる。古いファイルは「3行要約」「決定事項」「議題」「Next Action」の形のまま。status が transcript_only のファイルは議事録の節が無い
     > - 文字起こしは一発話一段落の `**[HH:MM:SS] 話者**: 本文 ^tHH-MM-SS`。話者は 自分 / 相手 / 不明。議事録中の `[[#^tHH-MM-SS|MM:SS]]` はその発言へのリンクで、時刻の文字列で検索すれば該当行に行ける
     > - 下の表は新しい順の一覧。まずここで日付とタイトルから対象を絞り、該当ファイルの必要な節だけを読む
     """

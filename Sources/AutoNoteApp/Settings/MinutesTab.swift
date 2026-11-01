@@ -10,6 +10,15 @@ struct MinutesTab: View {
     @State private var frontmatter = ""
     @State private var baseline: (prompt: String, frontmatter: String)?
     @State private var saveState: SaveState = .idle
+    @State private var showDiff = false
+    /// SHA-256 of an edited prompt the user chose to keep (「このまま使う」), so the band stays hidden for it.
+    @AppStorage("minutes_prompt_review_ack") private var acknowledged = ""
+
+    /// The band: the saved prompt is an edit made before the schema v2 default (`PromptMigration.needsReview`).
+    private var showsUpdateBand: Bool {
+        guard let saved = baseline?.prompt else { return false }
+        return PromptMigration.needsReview(saved) && acknowledged != PromptMigration.sha256(saved)
+    }
 
     private var isDirty: Bool {
         guard let baseline else { return false }
@@ -22,6 +31,7 @@ struct MinutesTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if showsUpdateBand { updateBand }
             Text("プロンプト").font(.headline)
             TextEditor(text: $prompt)
                 .font(.system(.body, design: .monospaced))
@@ -45,8 +55,43 @@ struct MinutesTab: View {
         .safeAreaInset(edge: .bottom) {
             SaveBar(state: saveState, disabled: baseline == nil) { save() }
         }
+        .sheet(isPresented: $showDiff) {
+            PromptDiffSheet(current: baseline?.prompt ?? prompt)
+        }
         .task { await reload(force: false) }
         .onWindowBecameKey { Task { await reload(force: false) } }
+    }
+
+    private var updateBand: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "info.circle.fill").foregroundStyle(.blue)
+            Text("既定のプロンプトが更新されました。編集したプロンプトには新しい項目（出席者・質問・リスクなど）の指示がありません。")
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Button("差分を見る") { showDiff = true }
+            Button("既定に戻す") { restoreDefault() }
+            Button("このまま使う") {
+                if let saved = baseline?.prompt { acknowledged = PromptMigration.sha256(saved) }
+            }
+        }
+        .font(.callout)
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.blue.opacity(0.1)))
+    }
+
+    /// Writes the current default into `prompt.md` (unsaved edits to the prompt are replaced; the frontmatter is kept).
+    private func restoreDefault() {
+        Task {
+            do {
+                let store = await env.output.portable()
+                try await store.write(.prompt, Data(DefaultPrompt.instructions.utf8))
+                prompt = DefaultPrompt.instructions
+                baseline = (DefaultPrompt.instructions, baseline?.frontmatter ?? frontmatter)
+                saveState = .saved
+            } catch {
+                saveState = .failed("_autonote/ に書き込めません（\((error as NSError).localizedDescription)）")
+            }
+        }
     }
 
     /// Unsaved edits are never overwritten except by 「読み直す」, also when typing started during the read.
@@ -55,7 +100,8 @@ struct MinutesTab: View {
         let before = (prompt, frontmatter)
         do {
             let store = await env.output.portable()
-            let p = try await store.read(.prompt).map { String(decoding: $0, as: UTF8.self) } ?? ""
+            // An untouched pre-v2 default is moved to the current default here too (`PromptMigration`).
+            let p = try await PromptMigration.migrate(store) ?? ""
             let f = try await store.read(.frontmatter).map { String(decoding: $0, as: UTF8.self) }
                 ?? FrontmatterTemplate.defaultText
             guard force || (prompt, frontmatter) == before else { return }
@@ -90,5 +136,45 @@ struct MinutesTab: View {
                 saveState = .failed("_autonote/ に書き込めません（\((error as NSError).localizedDescription)）")
             }
         }
+    }
+}
+
+/// 「差分を見る」: the old default, the user's prompt and the new default side by side.
+private struct PromptDiffSheet: View {
+    let current: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("既定のプロンプトの変更").font(.headline)
+                Spacer()
+                Button("閉じる") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            Text("左が以前の既定、中央がいまのプロンプト、右が新しい既定です。新しい既定の指示を取り込むときは、必要な行をプロンプトに写してください。")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 8) {
+                column("以前の既定", DefaultPrompt.legacyInstructionsV1)
+                column("いまのプロンプト", current)
+                column("新しい既定", DefaultPrompt.instructions)
+            }
+        }
+        .padding()
+        .frame(minWidth: 900, minHeight: 520)
+    }
+
+    private func column(_ title: String, _ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.subheadline.bold())
+            ScrollView {
+                Text(text)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(6)
+            }
+            .border(.separator)
+        }
+        .frame(maxWidth: .infinity)
     }
 }
