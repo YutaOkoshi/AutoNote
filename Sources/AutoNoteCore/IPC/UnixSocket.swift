@@ -98,6 +98,14 @@ enum UnixSocket {
         }
     }
 
+    /// The process id of the peer of a connected socket (`LOCAL_PEERPID`); nil when the kernel does not say.
+    static func peerPID(_ fd: Int32) -> pid_t? {
+        var pid: pid_t = 0
+        var length = socklen_t(MemoryLayout<pid_t>.size)
+        guard getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &length) == 0, pid > 0 else { return nil }
+        return pid
+    }
+
     /// One blocking `read`; nil on EOF or error.
     static func readSome(_ fd: Int32) -> Data? {
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)

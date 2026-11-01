@@ -44,7 +44,7 @@ final class HotKeyCenter {
             if status == noErr, let ref {
                 registered.append(ref)
                 actions[id] = action
-                logger.info("hotkey \(action.rawValue, privacy: .public) registered as \(combo.description, privacy: .public)")
+                logger.notice("hotkey \(action.rawValue, privacy: .public) registered as \(combo.description, privacy: .public)")
             } else {
                 logger.error("hotkey \(action.rawValue, privacy: .public) (\(combo.description, privacy: .public)) failed: \(status)")
             }
@@ -72,7 +72,10 @@ final class HotKeyCenter {
     }
 
     private func pressed(_ id: UInt32) {
-        guard let action = actions[id] else { return }
+        guard let action = actions[id] else {
+            logger.notice("hotkey pressed: id \(id, privacy: .public) is not registered now, ignored")
+            return
+        }
         logger.notice("hotkey pressed: \(action.rawValue, privacy: .public)")
         onPress(action)
     }

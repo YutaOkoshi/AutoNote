@@ -247,6 +247,7 @@ final class AppEnvironment {
         model.shortcuts = new.shortcuts
         let hotKeys = shortcutsChanged(new.shortcuts)
         let loginItem = reconcileLoginItem(launchAtLogin: new.launchAtLogin)
+        logger.notice("settings save applied: hot keys re-registered (\(hotKeys.count, privacy: .public)), login item \(String(describing: loginItem), privacy: .public)")
         return SaveResult(hotKeys: hotKeys, loginItem: loginItem)
     }
 
@@ -344,7 +345,7 @@ final class AppEnvironment {
         let q = await queue.queue
         for stage in await stages.standard(for: s) { await q.register(stage) }
         await registry.reload()
-        logger.info("queue inputs changed: stages re-registered")
+        logger.notice("queue inputs changed: output folder synced, stages re-registered, device list reloaded")
     }
 }
 
@@ -359,7 +360,7 @@ private final class NoticeRouting {
     func handle(_ action: UserNoticeAction) {
         // `SystemUserNotifier` already opened the privacy pane (ruling X43).
         guard action != .openPrivacySettings, let model else { return }
-        Task { await model.perform(.notice(action)) }
+        Task { await model.perform(.notice(action), from: .notificationAction) }
         // A tap on a meeting's notice selects it (above) and shows the window.
         if case .openMeeting = action { openWindow() }
     }

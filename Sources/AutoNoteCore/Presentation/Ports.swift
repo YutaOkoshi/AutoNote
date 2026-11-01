@@ -40,14 +40,15 @@ public protocol RecorderPort: Sendable {
     func elapsed() async -> TimelineTime?
     /// The last second's peak per track (`RecordingSession.levels()`), read on the existing 1-second tick; `[]` when idle.
     func levels() async -> [TrackLevel]
-    func start(language: Language?) async throws
-    func stop() async throws
-    func pause() async throws
-    func resume() async throws
+    /// `origin` says where the command came from; the coordinator logs it with the transition.
+    func start(language: Language?, origin: RecordingControlOrigin) async throws
+    func stop(origin: RecordingControlOrigin) async throws
+    func pause(origin: RecordingControlOrigin) async throws
+    func resume(origin: RecordingControlOrigin) async throws
     func bookmark(note: String?) async throws -> Bookmark
-    func cancelCountdown() async
+    func cancelCountdown(origin: RecordingControlOrigin) async
     func setLanguage(_ l: Language) async
-    func handleNotice(_ action: UserNoticeAction) async
+    func handleNotice(_ action: UserNoticeAction, origin: RecordingControlOrigin) async
 }
 
 public protocol RecordingEventsPort: Sendable {

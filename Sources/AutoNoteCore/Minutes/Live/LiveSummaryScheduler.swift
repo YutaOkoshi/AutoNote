@@ -1,5 +1,8 @@
 import Foundation
+import os
 import Synchronization
+
+private let logger = Logger(subsystem: "com.yutaokoshi.autonote", category: "LiveSummaryScheduler")
 
 /// Where one meeting's live summary session is (tests read it).
 enum LiveSummaryPhase: Equatable {
@@ -134,6 +137,7 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
     private func begin(_ feed: LiveConfirmedFeed) {
         let id = feed.meetingID
         if let existing = sessions[id], existing.phase != .ended { return }
+        logger.notice("\(id.rawValue, privacy: .public): live summary session opened (on live transcript started; calls only while live_summary_enabled)")
         sessions[id] = Session()
         let reader = Task {
             for await list in feed.utterances { self.sessions[id]?.confirmed = list }
@@ -144,6 +148,7 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
     }
 
     private func close(_ id: MeetingID) {
+        logger.notice("\(id.rawValue, privacy: .public): live summary session closing (on live transcript ended)")
         sessions[id]?.closed = true
         sessions[id]?.sleeper?.cancel()
     }

@@ -1,7 +1,7 @@
 import Foundation
 import AutoNoteCore
 
-/// Records every call. Attach failures are scripted per UID; `emitSelfStop()` plays a stop the recorder made itself.
+/// Records every call. Attach failures are scripted per UID; `emitSelfStop(reason:)` plays a stop the recorder made itself.
 /// `hold(_:)` makes the next calls of `start` / `detachMicrophone` block (after being recorded) until `release(_:)`.
 public actor FakeRecordingControl: RecordingControl {
     public enum HeldCall: Hashable, Sendable { case start, detach }
@@ -20,7 +20,7 @@ public actor FakeRecordingControl: RecordingControl {
     private var attachFailures: [String: (remaining: Int, error: any Error)] = [:]
     private var defaultAttachError: (any Error)?
     private var startFails = false
-    private var selfStopContinuations: [AsyncStream<Void>.Continuation] = []
+    private var selfStopContinuations: [AsyncStream<StopReason>.Continuation] = []
     private var held: Set<HeldCall> = []
     private var blocked: [HeldCall: [CheckedContinuation<Void, Never>]] = [:]
 
@@ -57,8 +57,8 @@ public actor FakeRecordingControl: RecordingControl {
     public func failStart() { startFails = true }
 
     /// Yields once on every stream `selfStops()` has returned so far.
-    public func emitSelfStop() {
-        for continuation in selfStopContinuations { continuation.yield(()) }
+    public func emitSelfStop(reason: StopReason = .diskFull) {
+        for continuation in selfStopContinuations { continuation.yield(reason) }
     }
 
     public func start(device: DeviceRef?, language: Language, manual: Bool) async throws -> MeetingID {
@@ -96,8 +96,8 @@ public actor FakeRecordingControl: RecordingControl {
     }
 
     /// A new stream per call; each gets every later `emitSelfStop()`.
-    public func selfStops() async -> AsyncStream<Void> {
-        let (stream, continuation) = AsyncStream<Void>.makeStream()
+    public func selfStops() async -> AsyncStream<StopReason> {
+        let (stream, continuation) = AsyncStream<StopReason>.makeStream()
         selfStopContinuations.append(continuation)
         return stream
     }

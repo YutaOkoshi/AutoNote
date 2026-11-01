@@ -25,6 +25,7 @@ public actor AutoRecordCoordinator {
     private let timer: any TimerScheduling
     private let config: @Sendable () async -> AutoRecordConfig
     private let now: @Sendable () -> Date
+    private let onTransition: @Sendable (RecorderTransitionRecord) -> Void
 
     private static let countdownNoticeID = UserNotice.deviceConnectedCountdown(placeholderRef, seconds: 0).id
     private static let graceNoticeID = UserNotice.deviceGoneGrace(placeholderRef, seconds: 0).id
@@ -61,9 +62,10 @@ public actor AutoRecordCoordinator {
 
     public init(monitor: DeviceMonitor, registry: DeviceRegistry, recorder: any RecordingControl,
                 notifier: any UserNotifier, timer: any TimerScheduling,
-                config: @Sendable @escaping () async -> AutoRecordConfig, now: @Sendable @escaping () -> Date = Date.init) {
+                config: @Sendable @escaping () async -> AutoRecordConfig, now: @Sendable @escaping () -> Date = Date.init,
+                onTransition: @Sendable @escaping (RecorderTransitionRecord) -> Void = { _ in }) {
         self.monitor = monitor; self.registry = registry; self.recorder = recorder; self.notifier = notifier
-        self.timer = timer; self.config = config; self.now = now
+        self.timer = timer; self.config = config; self.now = now; self.onTransition = onTransition
         // Replaced by `config()` before the first `apply`; until then snapshots use the settings defaults.
         machine = RecorderStateMachine(config: Self.config(from: Settings()))
     }
@@ -92,7 +94,9 @@ public actor AutoRecordCoordinator {
         }
         await withTaskGroup(of: Void.self) { group in
             group.addTask { [self] in
-                for await _ in selfStops { await self.apply(.sessionEnded) }
+                for await reason in selfStops {
+                    await self.apply(.sessionEnded, origin: reason == .diskFull ? .diskFull : .sessionEnded)
+                }
             }
             for await event in events { await handle(event) }
             group.cancelAll()
@@ -103,12 +107,13 @@ public actor AutoRecordCoordinator {
         await serialized {
             switch event {
             case .added(let device):
+                logDevice("added", device)
                 await registry.reload()
                 let match = await registry.match(device)
                 let entryID: String?
                 if case .registered(let id, _) = match { entryID = id } else { entryID = nil }
                 // Unregistered devices are passed too: a returning origin in grace is recognized by its UID.
-                await applyInGate(.deviceConnected(device, autoStartEntryID: entryID))
+                await applyInGate(.deviceConnected(device, autoStartEntryID: entryID), origin: .deviceConnected)
                 switch match {
                 case .unknown, .reRegistrationSuggested:   // asked whatever the state (§11.3)
                     askedToRegister[device.deviceUID] = device
@@ -117,10 +122,11 @@ public actor AutoRecordCoordinator {
                     askedToRegister[device.deviceUID] = nil   // answered elsewhere (settings, another prompt)
                 }
             case .removed(let device):
+                logDevice("removed", device)
                 if let ref = alreadyConnected.removeValue(forKey: device.deviceUID) {
                     await notifier.withdraw(id: UserNotice.deviceAlreadyConnected(ref).id)
                 }
-                await applyInGate(.deviceDisconnected(device))
+                await applyInGate(.deviceDisconnected(device), origin: .deviceDisconnected)
             case .present(let device, let reason):
                 // Y5: only a registered device while idle gets the notice; never a countdown (§11.1). Unregistered
                 // ones (the built-in microphone every launch) get nothing.
@@ -139,18 +145,19 @@ public actor AutoRecordCoordinator {
     // MARK: Operations (menu, CLI, shortcuts)
 
     /// Records from the Mac's default input. Throws what the recorder's start threw (after the same cleanup as auto-start).
-    public func manualStart(language: Language?) async throws {
+    public func manualStart(language: Language?, origin: RecordingControlOrigin) async throws {
         let error = await serialized { () async -> (any Error)? in
             if let language, !isInSession { pendingLanguage = language }
-            return await applyInGate(.manualStart)
+            return await applyInGate(.manualStart, origin: origin)
         }
         if let error { throw error }
     }
 
-    public func stop(reason: StopReason = .manual) async { await apply(.manualStop, stopReason: reason) }
-    public func pause() async { await apply(.pause) }
-    public func resume() async { await apply(.resume) }
-    public func cancelCountdown() async { await apply(.cancelCountdown) }
+    /// The recorder is told `origin.stopReason` (quitting is `.appTerminating`, everything else here `.manual`).
+    public func stop(origin: RecordingControlOrigin) async { await apply(.manualStop, origin: origin) }
+    public func pause(origin: RecordingControlOrigin) async { await apply(.pause, origin: origin) }
+    public func resume(origin: RecordingControlOrigin) async { await apply(.resume, origin: origin) }
+    public func cancelCountdown(origin: RecordingControlOrigin) async { await apply(.cancelCountdown, origin: origin) }
 
     public func bookmark(note: String?) async throws -> Bookmark {
         let result = await serialized { () async -> Result<Bookmark, any Error> in
@@ -173,16 +180,17 @@ public actor AutoRecordCoordinator {
         }
     }
 
-    /// Notice buttons. Only the device cases are handled here; the rest belong to the app.
-    public func handle(_ action: UserNoticeAction) async {
+    /// Notice buttons. Only the device cases are handled here; the rest belong to the app. `origin` is where the
+    /// button was (a system notification or the main window's band).
+    public func handle(_ action: UserNoticeAction, origin: RecordingControlOrigin) async {
         await serialized {
             switch action {
             case .cancelCountdown:
-                await applyInGate(.cancelCountdown)
+                await applyInGate(.cancelCountdown, origin: origin)
             case .startNow(let ref):
-                await startNow(ref)
+                await startNow(ref, origin: origin)
             case .registerDevice(let ref, let answer):
-                await answerRegistration(ref, answer)
+                await answerRegistration(ref, answer, origin: origin)
             case .openMeeting, .retry, .resolveOverwrite, .transcribeTooShort, .discardTooShort, .recoverInterrupted,
                  .discardInterrupted, .openPrivacySettings:
                 break
@@ -191,21 +199,21 @@ public actor AutoRecordCoordinator {
     }
 
     /// The caller holds the gate. Starts on a still-connected registered device without a countdown.
-    private func startNow(_ ref: DeviceRef) async {
+    private func startNow(_ ref: DeviceRef, origin: RecordingControlOrigin) async {
         guard let device = await monitor.connected().first(where: { $0.deviceUID == ref.uid }) else {
-            Self.logger.info("start now: device no longer connected")
+            Self.logger.notice("start now (origin: \(origin.rawValue, privacy: .public)) ignored: device no longer connected")
             return
         }
         await registry.reload()
         guard case .registered(let entryID, _) = await registry.match(device) else {
-            Self.logger.info("start now: device is not registered")
+            Self.logger.notice("start now (origin: \(origin.rawValue, privacy: .public)) ignored: device is not registered")
             return
         }
-        await applyInGate(.startForConnectedDevice(device, entryID: entryID))
+        await applyInGate(.startForConnectedDevice(device, entryID: entryID), origin: origin)
     }
 
     /// The caller holds the gate. `.no` stores nothing, so the next connection asks again.
-    private func answerRegistration(_ ref: DeviceRef, _ answer: RegisterAnswer) async {
+    private func answerRegistration(_ ref: DeviceRef, _ answer: RegisterAnswer, origin: RecordingControlOrigin) async {
         let connected = await monitor.connected().first(where: { $0.deviceUID == ref.uid })
         let asked = askedToRegister.removeValue(forKey: ref.uid)
         await notifier.withdraw(id: UserNotice.deviceSeenFirstTime(ref).id)
@@ -220,7 +228,9 @@ public actor AutoRecordCoordinator {
                 let modelMatch = await config().startOnModelMatch
                 let entry = try await registry.register(device, startOnModelMatchDefault: modelMatch)
                 // Still plugged in: the table decides (idle counts down, anything else ignores it).
-                if connected != nil { await applyInGate(.deviceConnected(device, autoStartEntryID: entry.id)) }
+                if connected != nil {
+                    await applyInGate(.deviceConnected(device, autoStartEntryID: entry.id), origin: origin)
+                }
             case .no:
                 break
             case .never:
@@ -291,29 +301,34 @@ public actor AutoRecordCoordinator {
     }
 
     @discardableResult
-    private func apply(_ event: RecorderEvent, stopReason: StopReason = .manual) async -> (any Error)? {
-        await serialized { await applyInGate(event, stopReason: stopReason) }
+    private func apply(_ event: RecorderEvent, origin: RecordingControlOrigin) async -> (any Error)? {
+        await serialized { await applyInGate(event, origin: origin) }
     }
 
-    /// Scheduled timers land here. Internal so tests can deliver a stale token.
-    func timerFired(token: Int) async { await apply(.timerFired(token: token)) }
+    /// Scheduled timers land here. Internal so tests can deliver a stale token. The origin (countdown or grace) is
+    /// decided inside the gate, from the state the timer finds.
+    func timerFired(token: Int) async { await apply(.timerFired(token: token), origin: .countdownFired) }
 
     /// The caller holds the gate. Returns the error of a start that failed during this apply (only `manualStart`
     /// uses it). `emit: false` is for the nested `sessionEnded` of a failed start, whose caller emits once.
+    /// Every event is logged at `notice` with its origin before its effects run, so a stop that hangs is still on record.
     @discardableResult
-    private func applyInGate(_ event: RecorderEvent, stopReason: StopReason = .manual, emit: Bool = true) async
+    private func applyInGate(_ event: RecorderEvent, origin given: RecordingControlOrigin, emit: Bool = true) async
         -> (any Error)? {
         machine.config = await config()
         let from = machine.state
+        let meeting = meetingID
         let (to, effects) = machine.apply(event)
-        if from != to {
-            Self.logger.info(
-                "\(from.rawValue, privacy: .public) -> \(to.rawValue, privacy: .public) on \(Self.name(of: event), privacy: .public)")
-        }
+        // A timer that runs out in grace is the grace expiring (the only stop caused by the device).
+        let origin: RecordingControlOrigin = if case .timerFired = event, from == .grace { .graceExpired } else { given }
+        let reason = origin.stopReason
+        let record = RecorderTransitionRecord(
+            from: from, to: to, event: Self.name(of: event), origin: origin,
+            stopReason: effects.contains(.stopRecording) ? reason : nil, meetingID: meeting)
+        Self.logger.notice("\(record.logLine, privacy: .public)")
+        onTransition(record)
         if to == .idle && from != .idle && from != .countdown { endSession() }
         if from == .idle && to != .idle { await withdrawAlreadyConnected() }
-        // A grace that runs out is the only stop caused by the device; the rest use the caller's reason.
-        let reason: StopReason = if from == .grace, case .timerFired = event { .deviceGone } else { stopReason }
         var startError: (any Error)?
         for effect in effects {
             if let error = await execute(effect, stopReason: reason) { startError = error }
@@ -378,7 +393,7 @@ public actor AutoRecordCoordinator {
             return nil
         } catch {
             Self.log("start", error)
-            await applyInGate(.sessionEnded, emit: false)   // inline: the gate is already held
+            await applyInGate(.sessionEnded, origin: .startFailed, emit: false)   // inline: the gate is already held
             banner = Banner.startFailed
             return error
         }
@@ -423,6 +438,13 @@ public actor AutoRecordCoordinator {
         timerHandle?.cancel(); timerHandle = nil
         meetingID = nil; startedAt = nil; deadline = nil; banner = nil
         sessionLanguage = nil; pendingLanguage = nil
+    }
+
+    /// A device event as the coordinator sees it: the UID (public, an identifier), whether it is the recording's
+    /// origin device, and the state it arrived in. The name stays private.
+    private func logDevice(_ what: String, _ device: DeviceIdentity) {
+        let isOrigin = machine.origin?.deviceUID == device.deviceUID
+        Self.logger.notice("device \(what, privacy: .public): \(device.deviceUID, privacy: .public) \(device.name, privacy: .private) (origin device: \(isOrigin ? "yes" : "no", privacy: .public), state: \(self.machine.state.rawValue, privacy: .public))")
     }
 
     /// Only the error's type is public; its description may hold paths or device names.

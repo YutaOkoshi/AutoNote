@@ -60,7 +60,7 @@ public actor LiveTranscriptionWiring: LiveTranscriptPort {
     public func handle(_ e: RecordingEvent) async {
         switch e {
         case .started(let id):
-            await stop()
+            await stop(because: "next recording started")
             await begin(id)
         case .paused(let t):
             await running?.feed.pause(at: t)
@@ -68,8 +68,8 @@ public actor LiveTranscriptionWiring: LiveTranscriptPort {
             await running?.feed.resume(at: t)
         case .bookmarked(let b):
             await running?.feed.bookmark(b)
-        case .stopped:
-            await stop()
+        case .stopped(_, let reason):
+            await stop(because: "recording stopped (\(reason.rawValue))")
         default:
             break
         }
@@ -122,6 +122,7 @@ public actor LiveTranscriptionWiring: LiveTranscriptPort {
             logger.error("\(id.rawValue, privacy: .public): live transcript unavailable (\(String(describing: error), privacy: .public))")
             return
         }
+        logger.notice("\(id.rawValue, privacy: .public): live transcript started (on recording started)")
         let feed = start.feed
         // Register before the forward task can publish, so no subscriber misses the first list.
         for continuation in feedSubscribers.values { continuation.yield(confirmedFeed(for: id)) }
@@ -142,9 +143,10 @@ public actor LiveTranscriptionWiring: LiveTranscriptPort {
     }
 
     /// Stops feeding audio, then finishes the feed (which writes `live.json`). A finish error is logged only.
-    private func stop() async {
+    private func stop(because cause: String) async {
         guard let current = running else { return }
         running = nil
+        logger.notice("\(current.id.rawValue, privacy: .public): live transcript stopping (on \(cause, privacy: .public))")
         for task in current.audioTasks { task.cancel() }
         for task in current.audioTasks { await task.value }
         do {

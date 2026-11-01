@@ -247,6 +247,7 @@ public actor RecordingSession {
         }
         if available < Self.diskStopBytes, let id = meetingID {
             diskStopRequested = true
+            Self.logger.notice("\(id.rawValue, privacy: .public): free space \(available, privacy: .public) bytes is below \(Self.diskStopBytes, privacy: .public), stopping (diskFull)")
             Task { await self.stop(meeting: id, reason: .diskFull) }
         }
     }
@@ -331,6 +332,9 @@ public actor RecordingSession {
         }
 
         state = .recording(id)
+        let microphone = configuration.microphoneUID == nil ? "default input" : "device"
+        let failed = [(Track.mic, micError), (.system, systemError)].compactMap { $0.1 == nil ? nil : $0.0.rawValue }
+        Self.logger.notice("\(id.rawValue, privacy: .public): recording started (mic: \(microphone, privacy: .public), \(configuration.microphoneUID ?? "-", privacy: .public); failed tracks: \(failed.isEmpty ? "none" : failed.joined(separator: ","), privacy: .public))")
         broadcaster.yield(.started(id))
         for (track, error) in [(Track.mic, micError), (.system, systemError)] {
             if let error { await reportFailure(track, error) }
@@ -341,6 +345,7 @@ public actor RecordingSession {
 
     /// Undoes a start that never reached `.recording`: no source is running at this point.
     private func abandonStart(_ id: MeetingID) async {
+        Self.logger.notice("\(id.rawValue, privacy: .public): start abandoned before recording")
         await drainPipeline()
         _ = writers.transition { try $0.close(at: .zero) }   // the directory is deleted next; failures do not matter
         await saver?.flush()
@@ -349,9 +354,11 @@ public actor RecordingSession {
     }
 
     private func performStop(reason: StopReason) async throws -> Manifest {
-        let (_, clock) = try active()
+        let (id, clock) = try active()
         guard let saver else { throw RecordingError.notRecording }
         let end = clock.now()
+        // Logged first, so a stop that hangs in a source is still on record.
+        Self.logger.notice("\(id.rawValue, privacy: .public): recording stopping (reason: \(reason.rawValue, privacy: .public), recorded \(String(format: "%.1f", end.seconds), privacy: .public) s)")
         let running = [micSource, systemSource].compactMap { $0 }
         micSource = nil; systemSource = nil
         await withTaskGroup(of: Void.self) { group in   // each source returns within its own stop timeout
@@ -383,6 +390,7 @@ public actor RecordingSession {
             broadcaster.yield(.stopped(manifest, reason))
         }
         if case .success(let manifest) = result { broadcaster.yield(.stopped(manifest, reason)) }
+        Self.logger.notice("\(id.rawValue, privacy: .public): recording stopped (reason: \(reason.rawValue, privacy: .public), \(String(format: "%.1f", end.seconds), privacy: .public) s, status: \(status.rawValue, privacy: .public), saved: \(result.isSuccess ? "yes" : "no", privacy: .public))")
         clearMeeting()
         return try result.get()
     }
@@ -453,4 +461,8 @@ public actor RecordingSession {
     static func log(_ what: String, _ error: any Error) {
         logger.error("\(what, privacy: .public) failed: \(String(describing: error), privacy: .public)")
     }
+}
+
+private extension Result {
+    var isSuccess: Bool { if case .success = self { true } else { false } }
 }
