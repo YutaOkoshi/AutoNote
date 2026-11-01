@@ -479,7 +479,7 @@ e2e_put_meeting() {
 {"id": "$1", "started_at": "$2", "ended_at": "$3", "source": "$4",
  "device": {"name": "E2E Mic", "uid": "E2E-MIC", "transport": "builtin"}, "language": "ja",
  "tracks": [{"track": "mic", "relative_path": "tracks/mic-000.wav", "start_offset": 0, "duration_seconds": 2}],
- "pauses": [], "bookmarks": [], "status": "transcript_only", "silence_warning": false, "autonote_version": "0.2.1"}
+ "pauses": [], "bookmarks": [], "status": "transcript_only", "silence_warning": false, "autonote_version": "0.3.0"}
 JSON
 }
 
