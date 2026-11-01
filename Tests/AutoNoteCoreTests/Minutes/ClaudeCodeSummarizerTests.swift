@@ -173,6 +173,12 @@ import Foundation
         #expect(out.title == "ok")
     }
 
+    @Test func defaultTimeoutIs900Seconds() {
+        #expect(ClaudeCodeSummarizer.defaultTimeout == .seconds(900))
+        let s = ClaudeCodeSummarizer(claudePath: "/bin/false", model: nil, workingDirectory: URL(filePath: "/tmp"))
+        #expect(s.timeout == .seconds(900))
+    }
+
     @Test func timeoutIsTimedOut() async throws {
         let dir = try tempDir(), work = dir.appending(path: "work")
         let claude = try FakeClaude.make(in: dir, responses: [success(title: "t")], sleepSeconds: 5)

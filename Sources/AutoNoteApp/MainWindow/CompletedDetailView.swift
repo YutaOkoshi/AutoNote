@@ -2,8 +2,15 @@ import AppKit
 import AutoNoteCore
 import SwiftUI
 
-/// A meeting with minutes: the editor, the bookmarks, the final transcript (read-only, §9.4) and the actions.
+/// A meeting with minutes: the actions, then three tabs (spec F2 §3.4): 要約 (read-only, the default), 文字起こし
+/// (the final transcript and the bookmarks, §9.4) and 編集 (the editor). Switching tabs never asks about unsaved
+/// edits; 要約 shows the draft, unsaved edits included.
 struct CompletedDetailView: View {
+    enum DetailTab: String, CaseIterable, Identifiable {
+        case summary = "要約", transcript = "文字起こし", edit = "編集"
+        var id: String { rawValue }
+    }
+
     let env: AppEnvironment
     let model: AppModel
     let row: MeetingRow
@@ -14,6 +21,10 @@ struct CompletedDetailView: View {
     @State private var draft: EditableMinutes?
     @State private var bookmarks: [Bookmark] = []
     @State private var transcript: [LiveLine] = []
+    @State private var utterances: [Utterance] = []
+    @State private var tab: DetailTab = .summary
+    /// The transcript line a summary row's time asked for; the 文字起こし tab scrolls to it and highlights it.
+    @State private var jump: TranscriptJump?
     @State private var renameFile = false
     @State private var confirmOverwrite = false
     @State private var confirmDelete = false
@@ -36,45 +47,24 @@ struct CompletedDetailView: View {
                 }
             }
             actions
+            Picker("表示", selection: $tab) {
+                ForEach(DetailTab.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 360)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
             Divider()
-            // The minutes open at the top (要約), not where the processing view's transcript was scrolled to:
-            // scroll to the top once the content is loaded, and start each meeting's scroll view at the top.
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        Color.clear.frame(height: 0).id(Self.topID)
-                        if let errorText {
-                            Label(errorText, systemImage: "exclamationmark.circle").foregroundStyle(.red)
-                        }
-                        if draft != nil {
-                            // §9.1: the rename box shows once the title changed, off by default.
-                            MinutesEditor(minutes: Binding(get: { draft ?? EditableMinutes(Self.empty) }, set: { draft = $0 }),
-                                          renameFile: titleChanged ? $renameFile : nil)
-                        } else {
-                            Text("議事録を読み込めませんでした").foregroundStyle(.secondary)
-                        }
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("ブックマーク").font(.headline)
-                            if bookmarks.isEmpty { Text("（なし）").foregroundStyle(.secondary) }
-                            ForEach(bookmarks.indices, id: \.self) { i in
-                                Label {
-                                    Text("\(bookmarks[i].at.hhmmss)\(bookmarks[i].note.map { "  \($0)" } ?? "")")
-                                        .monospacedDigit()
-                                } icon: {
-                                    Image(systemName: "bookmark.fill").foregroundStyle(.orange)
-                                }
-                            }
-                        }
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("文字起こし（確定版）").font(.headline)
-                            TranscriptList(lines: transcript)
-                        }
-                    }
-                    .padding(16)
+            if let errorText {
+                Label(errorText, systemImage: "exclamationmark.circle").foregroundStyle(.red)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .defaultScrollAnchor(.top)
-                .onChange(of: loadCount) { proxy.scrollTo(Self.topID, anchor: .top) }
+                    .padding(12)
+            }
+            switch tab {
+            case .summary: summaryTab
+            case .transcript: transcriptTab
+            case .edit: editTab
             }
         }
         .task(id: row.id) { await load() }
@@ -86,6 +76,82 @@ struct CompletedDetailView: View {
             Button("上書きする", role: .destructive) { Task { _ = await save(overwrite: true) } }
             Button("キャンセル", role: .cancel) {}
         }
+    }
+
+    /// The minutes open at the top (要約), not where the processing view's transcript was scrolled to: scroll to the
+    /// top once the content is loaded.
+    private var summaryTab: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Color.clear.frame(height: 0).id(Self.topID)
+                    if let draft {
+                        MinutesSummaryView(minutes: draft.minutes) { time in
+                            guard let index = MinutesPresentation.utteranceIndex(for: time, in: utterances) else { return }
+                            jump = TranscriptJump(index: index)
+                            tab = .transcript
+                        }
+                    } else {
+                        Text("議事録を読み込めませんでした").foregroundStyle(.secondary)
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .defaultScrollAnchor(.top)
+            .onChange(of: loadCount) { proxy.scrollTo(Self.topID, anchor: .top) }
+        }
+    }
+
+    private var transcriptTab: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("ブックマーク").font(.headline)
+                        if bookmarks.isEmpty { Text("（なし）").foregroundStyle(.secondary) }
+                        ForEach(bookmarks.indices, id: \.self) { i in
+                            Label {
+                                Text("\(bookmarks[i].at.hhmmss)\(bookmarks[i].note.map { "  \($0)" } ?? "")")
+                                    .monospacedDigit()
+                            } icon: {
+                                Image(systemName: "bookmark.fill").foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("文字起こし（確定版）").font(.headline)
+                        TranscriptList(lines: transcript, highlighted: jump?.index)
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .defaultScrollAnchor(.top)
+            // Scroll once the tab's rows exist (on the switch from 要約), and again for a later jump.
+            .task(id: jump) {
+                guard let jump else { return }
+                await Task.yield()
+                proxy.scrollTo(TranscriptList.rowID(jump.index), anchor: .center)
+            }
+        }
+    }
+
+    private var editTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                if draft != nil {
+                    // §9.1: the rename box shows once the title changed, off by default.
+                    MinutesEditor(minutes: Binding(get: { draft ?? EditableMinutes(Self.empty) }, set: { draft = $0 }),
+                                  renameFile: titleChanged ? $renameFile : nil)
+                } else {
+                    Text("議事録を読み込めませんでした").foregroundStyle(.secondary)
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .defaultScrollAnchor(.top)
     }
 
     /// Unsaved edits: the minutes (title included) differ from what was loaded or last saved.
@@ -136,7 +202,9 @@ struct CompletedDetailView: View {
             original = minutes
             draft = minutes.map(EditableMinutes.init)
             bookmarks = (try? await meetings.manifest(id))?.bookmarks ?? []
-            transcript = LiveTranscriptView.lines(try await meetings.transcript(id, kind: .final)?.utterances ?? [])
+            utterances = try await meetings.transcript(id, kind: .final)?.utterances ?? []
+            transcript = LiveTranscriptView.lines(utterances)
+            jump = nil
             renameFile = false
             message = nil
             errorText = nil
@@ -146,6 +214,8 @@ struct CompletedDetailView: View {
             draft = nil
             bookmarks = []
             transcript = []
+            utterances = []
+            jump = nil
             renameFile = false
             message = nil
             errorText = CommandRouter.ipcError(error).message
@@ -269,17 +339,31 @@ struct MinutesMissingView: View {
     private var queueItem: QueueItemDTO? { FailureExplanation.queueItem(for: row.id, in: model.queue.items) }
 }
 
-/// The transcript inside an outer scroll view: plain rows, no own scrolling.
+/// A summary row's jump into the transcript. A fresh `token` per tap, so tapping the same time again scrolls again.
+struct TranscriptJump: Equatable {
+    let index: Int
+    let token = UUID()
+}
+
+/// The transcript inside an outer scroll view: plain rows, no own scrolling. Each row has an id for `scrollTo`;
+/// the highlighted row (a jump from 要約) gets a tinted background.
 private struct TranscriptList: View {
     let lines: [LiveLine]
+    var highlighted: Int?
+
+    static func rowID(_ index: Int) -> String { "transcript.\(index)" }
 
     var body: some View {
         if lines.isEmpty {
             Text("（なし）").foregroundStyle(.secondary)
         } else {
             LazyVStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
                     TranscriptLineView(line: line)
+                        .padding(.horizontal, 4)
+                        .background(RoundedRectangle(cornerRadius: 4)
+                            .fill(index == highlighted ? Color.accentColor.opacity(0.18) : Color.clear))
+                        .id(Self.rowID(index))
                 }
             }
             .textSelection(.enabled)

@@ -2,38 +2,9 @@ import AutoNoteCore
 import Foundation
 import SwiftUI
 
-/// One editable list item with a stable identity, so a row can be removed without index-based bindings.
-struct EditableItem<Value: Equatable>: Identifiable, Equatable {
-    let id = UUID()
-    var value: Value
-}
-
-/// `MinutesOutput` as the editor edits it: the list sections carry stable identities.
-struct EditableMinutes: Equatable {
-    var title: String
-    var summary: [EditableItem<String>]
-    var decisions: [EditableItem<Decision>]
-    var agenda: [EditableItem<AgendaItem>]
-    var nextActions: [EditableItem<NextAction>]
-    var suggestedTerms: [String]
-
-    init(_ m: MinutesOutput) {
-        title = m.title
-        summary = m.summary.map { EditableItem(value: $0) }
-        decisions = m.decisions.map { EditableItem(value: $0) }
-        agenda = m.agenda.map { EditableItem(value: $0) }
-        nextActions = m.nextActions.map { EditableItem(value: $0) }
-        suggestedTerms = m.suggestedTerms
-    }
-
-    var minutes: MinutesOutput {
-        MinutesOutput(title: title, summary: summary.map(\.value), decisions: decisions.map(\.value),
-                      agenda: agenda.map(\.value), nextActions: nextActions.map(\.value), suggestedTerms: suggestedTerms)
-    }
-}
-
-/// Edits the title and every section of the minutes (3-line summary, decisions, agenda, Next Action with owner and
-/// due date). The `t` timestamps are kept as they are.
+/// The 編集 tab: edits the title and the v1 sections (summary, decisions, agenda, actions with owner and due date);
+/// the v2 sections (attendees, key points, questions, deadlines, follow-ups, risks, insights, diagram) can only be
+/// removed item by item. The `t` timestamps and every other key are kept as they are (`EditableMinutes`).
 struct MinutesEditor: View {
     @Binding var minutes: EditableMinutes
     /// 「ファイル名も変更する」 under the title; nil hides it (the title is unchanged).
@@ -48,7 +19,7 @@ struct MinutesEditor: View {
                 Toggle("ファイル名も変更する", isOn: renameFile)
             }
 
-            section("3 行要約") {
+            section("要約") {
                 ForEach(Array($minutes.summary.enumerated()), id: \.element.id) { offset, $line in
                     TextField("要約 \(offset + 1)", text: $line.value, axis: .vertical)
                 }
@@ -75,17 +46,52 @@ struct MinutesEditor: View {
                 }
             }
 
-            section("Next Action") {
+            section("アクション") {
                 if minutes.nextActions.isEmpty { empty }
                 ForEach($minutes.nextActions) { $item in
                     row(time: item.value.t, remove: { minutes.nextActions.removeAll { $0.id == item.id } }) {
                         VStack(alignment: .leading, spacing: 4) {
-                            TextField("内容", text: $item.value.text, axis: .vertical)
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text("優先度 \(MinutesPresentation.levelText(item.value.priority))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                TextField("内容", text: $item.value.text, axis: .vertical)
+                            }
                             HStack {
                                 TextField("担当", text: optional($item.value.owner))
                                 TextField("期限", text: optional($item.value.due))
                             }
                         }
+                    }
+                }
+            }
+
+            // v2: remove only (no add or edit in this version).
+            removable("出席者", $minutes.attendees) { a in
+                Text(a.role.map { "\(a.name)（\($0)）" } ?? a.name)
+            }
+            removable("重要ポイント", $minutes.keyPoints, time: \.t) { Text($0.text) }
+            removable("質問", $minutes.questions, time: \.t) { q in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(q.question)
+                    Text([q.askedBy, q.isResolved ? MinutesPresentation.resolvedText : MinutesPresentation.unresolvedText,
+                          q.answer.map { "→ \($0)" }].compactMap { $0 }.joined(separator: "　"))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            removable("締め切り", $minutes.deadlines, time: \.t) { d in
+                Text("\(d.description) — \(d.date)\(d.owner.map { "（\($0)）" } ?? "")")
+            }
+            removable("フォローアップ", $minutes.followUps, time: \.t) { Text($0.text) }
+            removable("リスク", $minutes.risks, time: \.t) { r in
+                Text("重大度 \(MinutesPresentation.levelText(r.severity))　\(r.description)\(r.mitigation.map { " — 対策: \($0)" } ?? "")")
+            }
+            removable("インサイト", $minutes.insights, time: \.t) { Text($0.text) }
+            if let diagram = minutes.architectureDiagram {
+                section("構成図") {
+                    HStack(alignment: .top, spacing: 8) {
+                        Text(diagram).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        removeButton { minutes.architectureDiagram = nil }
                     }
                 }
             }
@@ -106,10 +112,35 @@ struct MinutesEditor: View {
         HStack(alignment: .top, spacing: 8) {
             Text(time).font(.caption.monospacedDigit()).foregroundStyle(.secondary).padding(.top, 4)
             content()
-            Button("削除", systemImage: "minus.circle") { remove() }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.borderless)
-                .help("この項目を削除")
+            removeButton(remove)
+        }
+    }
+
+    private func removeButton(_ remove: @escaping () -> Void) -> some View {
+        Button("削除", systemImage: "minus.circle") { remove() }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .help("この項目を削除")
+    }
+
+    /// A v2 section shown read-only with a remove button per item; hidden when empty.
+    @ViewBuilder
+    private func removable<Value: Equatable & Sendable, C: View>(
+        _ title: String, _ items: Binding<[EditableItem<Value>]>, time: KeyPath<Value, String>? = nil,
+        @ViewBuilder _ content: @escaping (Value) -> C
+    ) -> some View {
+        if !items.wrappedValue.isEmpty {
+            section(title) {
+                ForEach(items.wrappedValue) { item in
+                    HStack(alignment: .top, spacing: 8) {
+                        if let time {
+                            Text(item.value[keyPath: time]).font(.caption.monospacedDigit()).foregroundStyle(.secondary).padding(.top, 2)
+                        }
+                        content(item.value).frame(maxWidth: .infinity, alignment: .leading)
+                        removeButton { items.wrappedValue.removeAll { $0.id == item.id } }
+                    }
+                }
+            }
         }
     }
 

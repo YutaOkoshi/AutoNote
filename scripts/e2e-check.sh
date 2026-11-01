@@ -547,7 +547,7 @@ check_fake_transcript() {
 
 check_claude_probe_files() {
     CURRENT="13. scripts/minutes-schema.json と probe-claude.sh の静的確認"
-    if ! run jq -e '(.required | sort) == (["agenda","decisions","next_actions","suggested_terms","summary","title"]) and .additionalProperties == false and .properties.title.maxLength == 20 and .properties.summary.minItems == 3 and .properties.summary.maxItems == 3' scripts/minutes-schema.json; then
+    if ! run jq -e '(.required | sort) == (["agenda","architecture_diagram","attendees","deadlines","decisions","follow_ups","insights","key_points","next_actions","questions","risks","schema_version","suggested_terms","summary","title"]) and .additionalProperties == false and .properties.title.maxLength == 20 and .properties.summary.minItems == 3 and .properties.summary.maxItems == 5 and .properties.next_actions.items.properties.priority.enum == ["high","medium","low"]' scripts/minutes-schema.json; then
         fail "minutes-schema.json が JSON でない、または必須キー・制約が違う"; return
     fi
     if ! run bash -n scripts/probe-claude.sh; then fail "probe-claude.sh に構文エラー"; return; fi

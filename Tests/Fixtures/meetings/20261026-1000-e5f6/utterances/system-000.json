@@ -1,0 +1,65 @@
+[
+  {
+    "start": 3,
+    "end": 8,
+    "speaker": "other",
+    "text": "本日はルミナ茶のEC受注を倉庫システムにつなぐ件でご相談です。",
+    "is_final": true
+  },
+  {
+    "start": 15,
+    "end": 20,
+    "speaker": "other",
+    "text": "現在は注文データを毎朝CSVで手作業で取り込んでいます。",
+    "is_final": true
+  },
+  {
+    "start": 40,
+    "end": 48,
+    "speaker": "other",
+    "text": "ECサイトから受注APIに送り、そこから在庫管理と出荷システムに流す形を考えています。",
+    "is_final": true
+  },
+  {
+    "start": 75,
+    "end": 80,
+    "speaker": "other",
+    "text": "年末のセールは十二月二十日に始まるので、それまでに動かしたいです。",
+    "is_final": true
+  },
+  {
+    "start": 110,
+    "end": 113,
+    "speaker": "other",
+    "text": "APIの認証方式はどうされますか。",
+    "is_final": true
+  },
+  {
+    "start": 150,
+    "end": 155,
+    "speaker": "other",
+    "text": "出荷システムの仕様書は来週月曜までにお送りします。",
+    "is_final": true
+  },
+  {
+    "start": 185,
+    "end": 192,
+    "speaker": "other",
+    "text": "一点心配なのは、セール初日に注文が集中して受注APIが詰まることです。",
+    "is_final": true
+  },
+  {
+    "start": 230,
+    "end": 232,
+    "speaker": "other",
+    "text": "まだ調査中です。",
+    "is_final": true
+  },
+  {
+    "start": 300,
+    "end": 304,
+    "speaker": "other",
+    "text": "本日はありがとうございました。",
+    "is_final": true
+  }
+]

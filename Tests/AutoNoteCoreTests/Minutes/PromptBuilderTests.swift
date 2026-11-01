@@ -93,10 +93,23 @@ import Foundation
     }
 
     @Test func defaultInstructionsCoverSpecRules() {
-        for phrase in ["日本語で書く", "根拠となる発言がある場合のみ", "推測で埋めず", "架空の ToDo を作らない", "t には根拠となる発言の時刻"] {
-            #expect(DefaultPrompt.instructions.contains(phrase))
+        for phrase in ["日本語で書く", "根拠となる発言がある場合のみ", "推測で埋めず", "架空の ToDo を作らない", "t には根拠となる発言の時刻",
+                       "3〜5 段落", "schema_version は 2", "priority は high / medium / low",
+                       "Next Action に紐づかない期日", "next_actions の due に書く",
+                       "ラベルのまま", "Mermaid の graph TD または graph LR", "ノード名は英語"] {
+            #expect(DefaultPrompt.instructions.contains(phrase), "\(phrase)")
         }
-        #expect(!DefaultPrompt.mergeInstructions.isEmpty)
+        #expect(!DefaultPrompt.instructions.contains("ちょうど 3 件"))
+        // Every schema key is named in the instructions.
+        for key in ["attendees", "key_points", "insights", "questions", "asked_by", "is_resolved", "answer", "deadlines",
+                    "follow_ups", "risks", "severity", "mitigation", "architecture_diagram", "suggested_terms"] {
+            #expect(DefaultPrompt.instructions.contains(key), "\(key)")
+        }
+        for phrase in ["key_points", "insights", "questions", "deadlines", "follow_ups", "risks", "同じ質問を一つにまとめる",
+                       "severity は高い方", "architecture_diagram", "attendees", "3〜5 段落"] {
+            #expect(DefaultPrompt.mergeInstructions.contains(phrase), "\(phrase)")
+        }
+        #expect(!DefaultPrompt.mergeInstructions.contains("ちょうど 3 件"))
     }
 
     @Test func estimateIsCharsPlusOverhead() {

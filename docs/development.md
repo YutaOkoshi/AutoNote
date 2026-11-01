@@ -38,7 +38,7 @@ AutoNote をソースからビルドし、テストし、変更を入れるた�
 - `Sources/AutoNoteTestSupport`: テストと `autonote dev` が使う偽物（音声デバイス・時計・ディスク・whisper など）とフィクスチャの読み込み
 - `Tests/AutoNoteCoreTests`: 単体テスト
 - `Tests/Fixtures`: テスト用の会議データ。内容はすべて架空
-- `Resources/`: `Info.plist` などアプリに同梱するもの
+- `Resources/`: `Info.plist` などアプリに同梱するもの。`Resources/mermaid/` は議事録の構成図のプレビューに使う mermaid.js（下の「同梱しているもの」）
 - `scripts/`: ビルド・E2E・ベンチ・スパイク用のスクリプト（下の一覧）
 - `.github/`: CI とリリースのワークフロー、その補助スクリプト
 - `docs/`: 利用者ガイド、この文書、要件書と設計書（`superpowers/specs/`）、調査記録（`superpowers/research/`）
@@ -90,9 +90,18 @@ autonote dev live-summary <live.json> [--state <state.json>] [--claude]
 | `bench-whisper.sh` | whisper.cpp のモデル別ベンチを取り、Markdown の表で出す |
 | `cer.py` | 文字誤り率（CER）を出す。`python3 -I` で実行する |
 | `make-fake-transcript.py` | 指定した分数の偽の会議文字起こしを作る |
-| `probe-claude.sh` | `claude -p` の構造化出力と実行環境の固定を確かめる |
+| `probe-claude.sh` | `claude -p` の構造化出力と実行環境の固定を確かめる。指示文はアプリの既定（`DefaultPrompt`）を抜き出して使い、議事録スキーマ v2 で検査し、`.build/debug/autonote` があれば `MinutesOutput` として decode できるかも見る |
+| `probe_prompt.py` | `probe-claude.sh` の補助（既定の指示文の抜き出しとスキーマ検査）。`python3 -I` で実行する |
 | `minutes-schema.json` | 議事録生成で `claude -p --json-schema` に渡す出力スキーマ |
 | `samples/` | ベンチの参照テキスト（日本語 5 分、英語 30 秒、日本語 10 文） |
+
+## 同梱しているもの
+
+| もの | 版 | ライセンス | 置き場所 | 用途 |
+|---|---|---|---|---|
+| mermaid.js（`dist/mermaid.min.js`） | 11.4.1（npm の `mermaid@11.4.1`、tarball の shasum `577fad5c31a01a06d9f793e298d411f1379eecc8`） | MIT（`Resources/mermaid/LICENSE`） | `Resources/mermaid/` → `AutoNote.app/Contents/Resources/mermaid/`（`scripts/build-app.sh` が入れる） | 詳細画面「要約」タブの構成図の「プレビュー」。WKWebView にインラインで読み込み、ネットワークに出ない（CSP で外部読み込みを禁止し、WebKit のコンテンツルールで http(s) をすべて止め、データストアは非永続） |
+
+版を上げるときは npm の tarball から `package/dist/mermaid.min.js` と `package/LICENSE` を取り出して差し替え、上の表を直す。
 
 ## CI / リリース（GitHub Actions）
 

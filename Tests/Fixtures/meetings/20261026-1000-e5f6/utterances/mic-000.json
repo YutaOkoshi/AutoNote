@@ -1,0 +1,79 @@
+[
+  {
+    "start": 8,
+    "end": 11,
+    "speaker": "me",
+    "text": "よろしくお願いします。",
+    "is_final": true
+  },
+  {
+    "start": 25,
+    "end": 29,
+    "speaker": "me",
+    "text": "手作業だと取り込み漏れが出やすいですね。",
+    "is_final": true
+  },
+  {
+    "start": 55,
+    "end": 60,
+    "speaker": "me",
+    "text": "その構成で進めましょう。受注APIはこちらで作ります。",
+    "is_final": true
+  },
+  {
+    "start": 90,
+    "end": 95,
+    "speaker": "me",
+    "text": "では十二月十日までに結合テストを終える前提で進めます。",
+    "is_final": true
+  },
+  {
+    "start": 120,
+    "end": 125,
+    "speaker": "me",
+    "text": "APIキー方式で考えていますが、まだ決めていません。",
+    "is_final": true
+  },
+  {
+    "start": 130,
+    "end": 133,
+    "speaker": "me",
+    "text": "仕様書はいつ頃いただけますか。",
+    "is_final": true
+  },
+  {
+    "start": 160,
+    "end": 166,
+    "speaker": "me",
+    "text": "受け取ったら、私の方で受注APIの設計書を今週金曜までに作ります。",
+    "is_final": true
+  },
+  {
+    "start": 200,
+    "end": 206,
+    "speaker": "me",
+    "text": "受注はキューに積んで順に処理すれば、集中しても落ちにくいと思います。",
+    "is_final": true
+  },
+  {
+    "start": 220,
+    "end": 223,
+    "speaker": "me",
+    "text": "前回のトラブルの原因は分かりましたか。",
+    "is_final": true
+  },
+  {
+    "start": 240,
+    "end": 244,
+    "speaker": "me",
+    "text": "原因は次回の定例で確認させてください。",
+    "is_final": true
+  },
+  {
+    "start": 305,
+    "end": 307,
+    "speaker": "me",
+    "text": "失礼します。",
+    "is_final": true
+  }
+]
