@@ -14,9 +14,9 @@ public protocol RecordingControl: Sendable {
     func setLanguage(_ language: Language) async
     func detachMicrophone() async
     func attachMicrophone(uid: String?) async throws
-    /// Stops the recorder made on its own (disk full and the like), not the ones asked for with `stop(reason:)`.
-    /// `async` so the subscription exists before the call returns: no stop after it is missed.
-    func selfStops() async -> AsyncStream<Void>
+    /// Stops the recorder made on its own (disk full and the like), not the ones asked for with `stop(reason:)`,
+    /// each with its reason. `async` so the subscription exists before the call returns: no stop after it is missed.
+    func selfStops() async -> AsyncStream<StopReason>
 }
 
 /// Thin adapter over `RecordingSession`. Errors of the non-throwing operations are logged and swallowed.
@@ -27,7 +27,7 @@ public actor RecordingSessionControl: RecordingControl {
     /// Set by `stop(reason:)` while its `.stopped` event has not been seen yet. Holding the reason (not just a flag)
     /// keeps a self-stop with a different reason that lands during our own stop from being swallowed.
     private(set) var expectingOwnStop: StopReason?
-    private var subscribers: [UUID: AsyncStream<Void>.Continuation] = [:]
+    private var subscribers: [UUID: AsyncStream<StopReason>.Continuation] = [:]
     private var forwarding: Task<Void, Never>?
 
     public init(session: RecordingSession) { self.session = session }
@@ -77,7 +77,7 @@ public actor RecordingSessionControl: RecordingControl {
     }
 
     /// Every call gets its own stream; all of them see the same self-stops from then on.
-    public func selfStops() async -> AsyncStream<Void> {
+    public func selfStops() async -> AsyncStream<StopReason> {
         if forwarding == nil {
             let events = await session.events()
             // Re-check: another call may have started forwarding during the await. The loser's `events` is then simply
@@ -92,7 +92,7 @@ public actor RecordingSessionControl: RecordingControl {
                 }
             }
         }
-        let (stream, continuation) = AsyncStream<Void>.makeStream()
+        let (stream, continuation) = AsyncStream<StopReason>.makeStream()
         let id = UUID()
         continuation.onTermination = { [weak self] _ in Task { await self?.removeSubscriber(id) } }
         subscribers[id] = continuation
@@ -105,7 +105,7 @@ public actor RecordingSessionControl: RecordingControl {
             expectingOwnStop = nil
             return
         }
-        for continuation in subscribers.values { continuation.yield(()) }
+        for continuation in subscribers.values { continuation.yield(reason) }
     }
 
     private func removeSubscriber(_ id: UUID) { subscribers[id] = nil }

@@ -23,8 +23,13 @@ private func runReattach(_ control: FakeRecordingControl, _ timer: ManualTimerSc
 }
 
 /// True when `stream` yields an element within `limit` (the reading task is cancelled otherwise).
-private func receives(_ stream: AsyncStream<Void>, within limit: Duration) async -> Bool {
-    let reader = Task { var iterator = stream.makeAsyncIterator(); return await iterator.next() != nil }
+private func receives<T: Sendable>(_ stream: AsyncStream<T>, within limit: Duration) async -> Bool {
+    await firstValue(stream, within: limit) != nil
+}
+
+/// The next element of `stream`, or nil when none arrives within `limit`.
+private func firstValue<T: Sendable>(_ stream: AsyncStream<T>, within limit: Duration) async -> T? {
+    let reader = Task { var iterator = stream.makeAsyncIterator(); return await iterator.next() }
     let deadline = Task { try? await Task.sleep(for: limit); reader.cancel() }
     let received = await reader.value
     deadline.cancel()
@@ -184,7 +189,8 @@ enum AttachFailure: String, CaseIterable, Sendable {
             Issue.record("expected .stopped(_, .diskFull), got \(String(describing: received.last))"); return
         }
         // The adapter forwards in event order, so a leaked manual stop would already be buffered ahead of this one.
-        #expect(await receives(selfStops, within: .seconds(5)))
+        // The reason travels with it, so the coordinator can log the stop as `diskFull`.
+        #expect(await firstValue(selfStops, within: .seconds(5)) == .diskFull)
         #expect(await !receives(selfStops, within: .milliseconds(200)))
         #expect(await receives(otherSelfStops, within: .seconds(5)))     // every stream gets the self-stop
         #expect(await !receives(otherSelfStops, within: .milliseconds(200)))

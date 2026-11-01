@@ -164,9 +164,11 @@ public enum UserAction: Equatable, Sendable {
                                  automationFailures: automationFailures, shortcuts: shortcuts, now: now, timeZone: timeZone)
     }
 
-    public func perform(_ a: UserAction) async {
+    /// `origin` is where the person asked (the recorder logs it with the transition). The main window's views use the
+    /// default; the menu bar, the shortcuts, notifications and quitting pass their own.
+    public func perform(_ a: UserAction, from origin: RecordingControlOrigin = .window) async {
         do {
-            try await execute(a)
+            try await execute(a, origin: origin)
             lastError = nil
         } catch {
             lastError = CommandRouter.ipcError(error).message
@@ -205,15 +207,15 @@ public enum UserAction: Equatable, Sendable {
 
     // MARK: - Actions
 
-    private func execute(_ a: UserAction) async throws {
+    private func execute(_ a: UserAction, origin: RecordingControlOrigin) async throws {
         let r = ports.recorder
         switch a {
-        case .start: try await r.start(language: nil)
-        case .stop: try await r.stop()
-        case .pause: try await r.pause()
-        case .resume: try await r.resume()
+        case .start: try await r.start(language: nil, origin: origin)
+        case .stop: try await r.stop(origin: origin)
+        case .pause: try await r.pause(origin: origin)
+        case .resume: try await r.resume(origin: origin)
         case .bookmark(let note): _ = try await r.bookmark(note: note)
-        case .cancelCountdown: await r.cancelCountdown()
+        case .cancelCountdown: await r.cancelCountdown(origin: origin)
         case .setLanguage(let l): await r.setLanguage(l)
         case .regenerate(let id): try await ports.queue.regenerate(id)
         case .delete(let id): try await ports.queue.delete(id)
@@ -225,17 +227,17 @@ public enum UserAction: Equatable, Sendable {
             guard let file = try await ports.meetings.latestMinutesFile() else { throw AppCommandError.notFound("議事録がまだありません") }
             await ports.opener.open(file)
         case .open(let id): selectedMeetingID = id
-        case .notice(let action): try await handle(action)
+        case .notice(let action): try await handle(action, origin: origin)
         case .toggleRecording:
             // A manual start from the countdown discards it (§5.9); the grace period stops (ruling X34).
             switch recorder.state {
-            case .idle, .countdown: try await r.start(language: nil)
-            case .recording, .paused, .grace: try await r.stop()
+            case .idle, .countdown: try await r.start(language: nil, origin: origin)
+            case .recording, .paused, .grace: try await r.stop(origin: origin)
             }
         case .togglePause:
             switch recorder.state {
-            case .recording: try await r.pause()
-            case .paused: try await r.resume()
+            case .recording: try await r.pause(origin: origin)
+            case .paused: try await r.resume(origin: origin)
             case .idle, .countdown, .grace: break
             }
         case .redetectClaude:
@@ -249,10 +251,10 @@ public enum UserAction: Equatable, Sendable {
         }
     }
 
-    private func handle(_ action: UserNoticeAction) async throws {
+    private func handle(_ action: UserNoticeAction, origin: RecordingControlOrigin) async throws {
         switch action {
         case .cancelCountdown, .startNow, .registerDevice:
-            await ports.recorder.handleNotice(action)
+            await ports.recorder.handleNotice(action, origin: origin)
         case .openMeeting(let id):
             selectedMeetingID = id
         case .retry(let id):

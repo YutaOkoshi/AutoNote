@@ -56,6 +56,28 @@ public struct Settings: Codable, Equatable, Sendable {
 
     public init() {}
 
+    /// The `settings.json` key names whose values differ between `old` and `new`, sorted; a nested object names the
+    /// inner key (`shortcuts.toggle_recording`). For the log of a settings save, which never shows the values.
+    public static func changedKeys(from old: Settings, to new: Settings) -> [String] {
+        func object(_ s: Settings) -> [String: Any] {
+            guard let data = try? AutoNoteJSON.encoder().encode(s),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+            return object
+        }
+        func diff(_ a: [String: Any], _ b: [String: Any], prefix: String) -> [String] {
+            Set(a.keys).union(b.keys).flatMap { key -> [String] in
+                let name = prefix + key
+                switch (a[key], b[key]) {
+                case (let x as [String: Any], let y as [String: Any]): return diff(x, y, prefix: name + ".")
+                case (let x as NSObject, let y as NSObject): return x.isEqual(y) ? [] : [name]
+                case (nil, nil): return []
+                default: return [name]
+                }
+            }
+        }
+        return diff(object(old), object(new), prefix: "").sorted()
+    }
+
     /// Read-only legacy key (`consent_notice_shown` after the snake-case conversion); never encoded.
     private enum LegacyKeys: String, CodingKey { case consentNoticeShown }
 

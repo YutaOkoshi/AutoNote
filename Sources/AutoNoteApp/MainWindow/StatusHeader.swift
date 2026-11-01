@@ -99,7 +99,7 @@ struct StatusHeader: View {
                 Button(button.title) {
                     guard let action = NoticeContent.action(category: content.category, buttonID: button.id,
                                                             userInfo: content.userInfo) else { return }
-                    Task { await model.perform(.notice(action)) }
+                    Task { await model.perform(.notice(action), from: .window) }
                 }
             }
         }

@@ -61,24 +61,24 @@ public struct CoordinatorRecorderPort: RecorderPort {
     public func elapsed() async -> TimelineTime? { await elapsedTime() }
     public func levels() async -> [TrackLevel] { await currentLevels() }
 
-    public func start(language: Language?) async throws {
-        try await check(.start)
-        try await wrapping { try await coordinator.manualStart(language: language) }
+    public func start(language: Language?, origin: RecordingControlOrigin) async throws {
+        try await check(.start, origin)
+        try await wrapping { try await coordinator.manualStart(language: language, origin: origin) }
     }
 
-    public func stop() async throws {
-        try await check(.stop)
-        await coordinator.stop()
+    public func stop(origin: RecordingControlOrigin) async throws {
+        try await check(.stop, origin)
+        await coordinator.stop(origin: origin)
     }
 
-    public func pause() async throws {
-        try await check(.pause)
-        await coordinator.pause()
+    public func pause(origin: RecordingControlOrigin) async throws {
+        try await check(.pause, origin)
+        await coordinator.pause(origin: origin)
     }
 
-    public func resume() async throws {
-        try await check(.resume)
-        await coordinator.resume()
+    public func resume(origin: RecordingControlOrigin) async throws {
+        try await check(.resume, origin)
+        await coordinator.resume(origin: origin)
     }
 
     public func bookmark(note: String?) async throws -> Bookmark {
@@ -92,12 +92,21 @@ public struct CoordinatorRecorderPort: RecorderPort {
         }
     }
 
-    public func cancelCountdown() async { await coordinator.cancelCountdown() }
+    public func cancelCountdown(origin: RecordingControlOrigin) async { await coordinator.cancelCountdown(origin: origin) }
     public func setLanguage(_ l: Language) async { await coordinator.setLanguage(l) }
-    public func handleNotice(_ action: UserNoticeAction) async { await coordinator.handle(action) }
+    public func handleNotice(_ action: UserNoticeAction, origin: RecordingControlOrigin) async {
+        await coordinator.handle(action, origin: origin)
+    }
 
-    private func check(_ c: RecorderCommand) async throws(AppCommandError) {
-        try RecorderCommandRules.check(c, state: await coordinator.current().state)
+    /// A refused command never reaches the coordinator, so it is logged here (a stray stop is still on record).
+    private func check(_ c: RecorderCommand, _ origin: RecordingControlOrigin? = nil) async throws(AppCommandError) {
+        let state = await coordinator.current().state
+        do {
+            try RecorderCommandRules.check(c, state: state)
+        } catch {
+            logger.notice("\(String(describing: c), privacy: .public) (origin: \(origin?.rawValue ?? "-", privacy: .public)) refused in \(state.rawValue, privacy: .public)")
+            throw error
+        }
     }
 }
 

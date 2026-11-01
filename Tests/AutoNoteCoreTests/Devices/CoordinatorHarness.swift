@@ -48,7 +48,8 @@ final class CoordinatorHarness: Sendable {
     init(config: AutoRecordConfig = AutoRecordConfig(countdownSeconds: 5, graceSeconds: 30, language: .ja,
                                                      startOnModelMatch: false),
          registered: [DeviceIdentity] = [deviceA, deviceB],
-         registeredOnOtherMac: [DeviceIdentity] = []) async throws {
+         registeredOnOtherMac: [DeviceIdentity] = [],
+         onTransition: @Sendable @escaping (RecorderTransitionRecord) -> Void = { _ in }) async throws {
         configBox = ConfigBox(config)
         let other = DeviceRegistry(storage: storage, mac: FakeMacIdentity(Self.otherMac))
         for device in registeredOnOtherMac { _ = try await other.register(device) }
@@ -63,7 +64,7 @@ final class CoordinatorHarness: Sendable {
         coordinator = AutoRecordCoordinator(
             monitor: monitor, registry: registry, recorder: recorder, notifier: notifier, timer: timer,
             config: { box.value.withLock { $0 } },
-            now: { CoordinatorHarness.base.addingTimeInterval(timer.now) })
+            now: { CoordinatorHarness.base.addingTimeInterval(timer.now) }, onTransition: onTransition)
     }
 
     func setConfig(_ config: AutoRecordConfig) { configBox.value.withLock { $0 = config } }

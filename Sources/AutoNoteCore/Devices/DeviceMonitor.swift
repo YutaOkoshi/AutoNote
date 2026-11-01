@@ -1,9 +1,12 @@
 import Foundation
+import os
 
 /// Streams input-device events. The Core Audio listener and the power and timer callbacks only enqueue an `Input`;
 /// one serial loop inside the actor handles them in order (snapshot -> DeviceListDiff -> WakeSuppression).
 /// Recordings that span a sleep are out of scope here (Y18).
 public actor DeviceMonitor {
+    private static let logger = Logger(subsystem: "com.yutaokoshi.autonote", category: "DeviceMonitor")
+
     private enum Input: Sendable {
         case hardwareChanged
         case power(PowerEvent)
@@ -102,6 +105,7 @@ public actor DeviceMonitor {
             let change = diff.update(with: hardware.snapshot())
             apply(change)
             let passed = suppression.filter(added: change.added, removed: change.removed)
+            Self.log(change, passed: passed)
             broadcast(passed.removed.map(DeviceEvent.removed) + passed.added.map(DeviceEvent.added))
         case .power(.willSleep):
             presentAtSleep = Set(connectedDevices.map(\.deviceUID))
@@ -117,6 +121,19 @@ public actor DeviceMonitor {
             guard generation == windowGeneration else { return }
             windowTimer = nil
             broadcast(suppression.endWindow(current: connectedDevices))
+        }
+    }
+
+    /// Every input-device change Core Audio reported, by UID, and which ones the post-wake window held back. Whether a
+    /// device is the recording's origin is logged by `AutoRecordCoordinator`, which knows the origin.
+    private static func log(_ change: (added: [DeviceIdentity], removed: [DeviceIdentity]),
+                            passed: (added: [DeviceIdentity], removed: [DeviceIdentity])) {
+        let passedUIDs = Set((passed.added + passed.removed).map(\.deviceUID))
+        for (what, devices) in [("added", change.added), ("removed", change.removed)] {
+            for device in devices {
+                let held = passedUIDs.contains(device.deviceUID) ? "" : " (held: after wake)"
+                logger.notice("input device \(what, privacy: .public): \(device.deviceUID, privacy: .public) \(device.name, privacy: .private) \(device.transport.rawValue, privacy: .public)\(held, privacy: .public)")
+            }
         }
     }
 

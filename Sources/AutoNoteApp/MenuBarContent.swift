@@ -121,7 +121,7 @@ struct MenuBarContent: View {
     }
 
     private func run(_ model: AppModel, _ action: UserAction) {
-        Task { await model.perform(action) }
+        Task { await model.perform(action, from: .menu) }
     }
 
     private static func isReadinessIssue(_ item: MenuItem) -> Bool {

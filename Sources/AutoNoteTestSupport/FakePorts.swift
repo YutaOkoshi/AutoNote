@@ -25,6 +25,8 @@ private struct Subscribers<Element: Sendable>: Sendable {
 /// state on success (start → recording, stop → idle, pause → paused, resume → recording).
 public actor FakeRecorderPort: RecorderPort {
     public private(set) var calls: [String] = []
+    /// The origin of every call that takes one, in call order (`calls` keeps its old strings).
+    public private(set) var origins: [RecordingControlOrigin] = []
     public private(set) var snapshot: RecorderSnapshot
     public var nextError: AppCommandError?
     public var elapsedValue: TimelineTime?
@@ -51,22 +53,26 @@ public actor FakeRecorderPort: RecorderPort {
     public func elapsed() -> TimelineTime? { elapsedValue }
     public func levels() -> [TrackLevel] { levelsValue }
 
-    public func start(language: Language?) throws {
+    public func start(language: Language?, origin: RecordingControlOrigin) throws {
+        origins.append(origin)
         try perform("start(\(language?.rawValue ?? "nil"))", .start)
         move(to: .recording)
     }
 
-    public func stop() throws {
+    public func stop(origin: RecordingControlOrigin) throws {
+        origins.append(origin)
         try perform("stop", .stop)
         move(to: .idle)
     }
 
-    public func pause() throws {
+    public func pause(origin: RecordingControlOrigin) throws {
+        origins.append(origin)
         try perform("pause", .pause)
         move(to: .paused)
     }
 
-    public func resume() throws {
+    public func resume(origin: RecordingControlOrigin) throws {
+        origins.append(origin)
         try perform("resume", .resume)
         move(to: .recording)
     }
@@ -76,9 +82,15 @@ public actor FakeRecorderPort: RecorderPort {
         return Bookmark(at: elapsedValue ?? .zero, note: note)
     }
 
-    public func cancelCountdown() { calls.append("cancelCountdown") }
+    public func cancelCountdown(origin: RecordingControlOrigin) {
+        origins.append(origin)
+        calls.append("cancelCountdown")
+    }
     public func setLanguage(_ l: Language) { calls.append("setLanguage(\(l.rawValue))") }
-    public func handleNotice(_ action: UserNoticeAction) { calls.append("handleNotice(\(action))") }
+    public func handleNotice(_ action: UserNoticeAction, origin: RecordingControlOrigin) {
+        origins.append(origin)
+        calls.append("handleNotice(\(action))")
+    }
 
     private func perform(_ call: String, _ command: RecorderCommand) throws(AppCommandError) {
         calls.append(call)

@@ -154,7 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .toggleRecording: .toggleRecording
             case .togglePause: .togglePause
             }
-            Task { await model.perform(user) }
+            Task { await model.perform(user, from: .hotkey) }
         }
         hotKeys.apply(s.shortcuts)
         env.shortcutsChanged = { hotKeys.apply($0) }
@@ -227,7 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .terminateNow:
             return .terminateNow
         case .cancelCountdownThenTerminate:
-            replyAfter { await model.perform(.cancelCountdown) }
+            replyAfter { await model.perform(.cancelCountdown, from: .terminating) }
             return .terminateLater
         case .stopThenTerminate:
             logger.info("quitting while recording (\(String(describing: reason), privacy: .public)): stopping first")
@@ -256,7 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// (e.g. too short), so a quit right after the stop does not leave a meeting without a job.
     private static func stopAndAwaitJob(model: AppModel, env: AppEnvironment?) async {
         let id = model.recorder.meetingID
-        await model.perform(.stop)
+        await model.perform(.stop, from: .terminating)
         guard let id, let env else { return }
         let deadline = ContinuousClock.now + jobTimeout
         while ContinuousClock.now < deadline {

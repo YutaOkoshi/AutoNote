@@ -108,8 +108,8 @@ enum DevAutoRecord {
         // quit, EOF or SIGINT: no state check outside the gate. Both calls go through the coordinator's gate and are
         // no-ops when they do not apply: a countdown is cancelled so its timer cannot start a session, and a session
         // in progress is stopped (Y13). Only then is `run()` cancelled.
-        await coordinator.cancelCountdown()
-        await coordinator.stop(reason: .appTerminating)
+        await coordinator.cancelCountdown(origin: .terminating)
+        await coordinator.stop(origin: .terminating)
         runTask.cancel()
         await monitor.stop()
         await out.waitUntilWritten(await coordinator.current())
@@ -137,18 +137,18 @@ enum DevAutoRecord {
         case ("yes", let uid?), ("no", let uid?), ("never", let uid?):
             let answer: RegisterAnswer = command == "yes" ? .yes : command == "no" ? .no : .never
             guard let ref = await ref(uid) else { return .continue }
-            await coordinator.handle(.registerDevice(ref, answer: answer))
+            await coordinator.handle(.registerDevice(ref, answer: answer), origin: .cli)
         case ("start", let uid?):
             guard let ref = await ref(uid) else { return .continue }
-            await coordinator.handle(.startNow(ref))
+            await coordinator.handle(.startNow(ref), origin: .cli)
         case ("cancel", nil):
-            await coordinator.cancelCountdown()
+            await coordinator.cancelCountdown(origin: .cli)
         case ("manual", nil):
-            do { try await coordinator.manualStart(language: nil) } catch { await out.error("manual start failed: \(error)") }
+            do { try await coordinator.manualStart(language: nil, origin: .cli) } catch { await out.error("manual start failed: \(error)") }
         case ("pause", nil):
-            await coordinator.pause()
+            await coordinator.pause(origin: .cli)
         case ("resume", nil):
-            await coordinator.resume()
+            await coordinator.resume(origin: .cli)
         case ("bookmark", let note):
             do {
                 await out.write(BookmarkLine(bookmark: try await coordinator.bookmark(note: note)))
@@ -162,7 +162,7 @@ enum DevAutoRecord {
             }
             await coordinator.setLanguage(language)
         case ("stop", nil):
-            await coordinator.stop(reason: .manual)
+            await coordinator.stop(origin: .cli)
         case ("quit", nil):
             return .quit
         default:

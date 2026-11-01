@@ -1,6 +1,9 @@
 import Darwin
 import Foundation
+import os
 import Synchronization
+
+private let logger = Logger(subsystem: "com.yutaokoshi.autonote", category: "SocketServer")
 
 /// Answers one decoded request; the server writes the response back as one JSON line.
 public protocol IPCHandler: Sendable {
@@ -157,6 +160,7 @@ private final class Listener: Sendable {
     /// response and the connection stays open; an overlong line gets one failure and the connection closes
     /// (the buffered tail of that line is unusable).
     private func serve(_ c: Int32) {
+        let peer = UnixSocket.peerPID(c).map { String($0) } ?? "unknown"
         var buffer = LineBuffer()
         while let chunk = UnixSocket.readSome(c) {
             let lines: [Data]
@@ -169,7 +173,10 @@ private final class Listener: Sendable {
             for line in lines {
                 let response: IPCResponse
                 do {
-                    response = handle(try IPCCodec.decodeRequest(line))
+                    let request = try IPCCodec.decodeRequest(line)
+                    // Every command, with who sent it: a start or stop nobody pressed may come from another process.
+                    logger.notice("ipc \(request.cmd.rawValue, privacy: .public) from pid \(peer, privacy: .public)")
+                    response = handle(request)
                 } catch {
                     response = .failure(error.id, error.error)
                 }

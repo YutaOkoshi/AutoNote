@@ -38,16 +38,16 @@ public struct CommandRouter: IPCHandler {
         case .status:
             return IPCResult(status: await status())
         case .start:
-            try await ports.recorder.start(language: args.lang)
+            try await ports.recorder.start(language: args.lang, origin: .cli)
             return IPCResult()
         case .stop:
-            try await ports.recorder.stop()
+            try await ports.recorder.stop(origin: .cli)
             return IPCResult()
         case .pause:
-            try await ports.recorder.pause()
+            try await ports.recorder.pause(origin: .cli)
             return IPCResult()
         case .resume:
-            try await ports.recorder.resume()
+            try await ports.recorder.resume(origin: .cli)
             return IPCResult()
         case .bookmark:
             return IPCResult(bookmark: try await ports.recorder.bookmark(note: args.note))

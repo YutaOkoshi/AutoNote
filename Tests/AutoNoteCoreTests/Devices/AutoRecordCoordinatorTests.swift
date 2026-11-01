@@ -20,7 +20,7 @@ import AutoNoteTestSupport
     @Test func cancelCountdownPreventsStart() async throws {
         let h = try await CoordinatorHarness()
         await h.coordinator.handle(.added(h.A))
-        await h.coordinator.cancelCountdown()
+        await h.coordinator.cancelCountdown(origin: .menu)
         await h.timer.advance(by: 5)
         #expect(await h.recorder.starts.isEmpty)
         #expect(await h.coordinator.current().state == .idle)
@@ -78,7 +78,7 @@ import AutoNoteTestSupport
     @Test func manualStartUsesDefaultInputAndIgnoresDisconnect() async throws {
         let h = try await CoordinatorHarness()
         let c = h.coordinator
-        try await c.manualStart(language: .en)
+        try await c.manualStart(language: .en, origin: .menu)
         let starts = await h.recorder.starts
         #expect(starts.count == 1)
         #expect(starts[0].0 == nil && starts[0].1 == .en && starts[0].2 == true)
@@ -92,7 +92,7 @@ import AutoNoteTestSupport
         let h = try await CoordinatorHarness()
         let c = h.coordinator
         await h.recorder.failStart()
-        await #expect(throws: RecordingError.self) { try await c.manualStart(language: nil) }
+        await #expect(throws: RecordingError.self) { try await c.manualStart(language: nil, origin: .menu) }
         #expect(await c.current().state == .idle)
         #expect(await c.current().banner == Banner.startFailed)
     }
@@ -119,11 +119,11 @@ import AutoNoteTestSupport
         let h = try await CoordinatorHarness()
         let c = h.coordinator
         await h.startAutoRecording()
-        await c.pause()
+        await c.pause(origin: .menu)
         #expect(await c.current().state == .paused)
-        await c.resume()
+        await c.resume(origin: .menu)
         #expect(await c.current().state == .recording)
-        await c.stop()
+        await c.stop(origin: .menu)
         #expect(await h.recorder.pauseCount == 1)
         #expect(await h.recorder.resumeCount == 1)
         #expect(await h.recorder.stopCount == 1)
@@ -151,7 +151,7 @@ import AutoNoteTestSupport
         await c.setLanguage(.en)
         #expect(await h.recorder.languages == [.en])
         #expect(await c.current().language == .en)
-        await c.stop()
+        await c.stop(origin: .menu)
         #expect(await c.current().language == .ja)
 
         await c.setLanguage(.auto)
@@ -160,7 +160,7 @@ import AutoNoteTestSupport
         await h.startAutoRecording()
         let starts = await h.recorder.starts
         #expect(starts.count == 2 && starts[1].1 == .auto)
-        await c.stop()
+        await c.stop(origin: .menu)
         #expect(await c.current().language == .ja)
     }
 
@@ -272,7 +272,7 @@ import AutoNoteTestSupport
         await c.handle(.added(h.A))
         let starting = Task { await h.timer.advance(by: 5) }
         try await h.waitUntil { await h.recorder.blockedCount(.start) == 1 }
-        let stopping = Task { await c.stop() }
+        let stopping = Task { await c.stop(origin: .menu) }
         try await h.waitUntil { await c.queuedOperations == 1 }
         #expect(await h.recorder.stopCount == 0)
         await h.recorder.release(.start)
@@ -287,7 +287,7 @@ import AutoNoteTestSupport
         let h = try await CoordinatorHarness()
         let c = h.coordinator
         await c.handle(.added(h.A))          // countdown, token 1
-        await c.cancelCountdown()
+        await c.cancelCountdown(origin: .menu)
         await h.timer.advance(by: 1)
         await c.handle(.added(h.A))          // countdown again, token 2 due at t = 6
         await c.timerFired(token: 1)         // the cancelled countdown's token reaches the coordinator

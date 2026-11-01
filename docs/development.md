@@ -30,6 +30,10 @@ AutoNote をソースからビルドし、テストし、変更を入れるた�
 
 注意: ソケット（`<データ領域>/autonote.sock`）のパスは UNIX ドメインソケットの上限（約 104 バイト）に収まる必要がある。長すぎるとソケットを作れず（`pathTooLong`）、アプリは IPC なしで動く（ログに残るだけで画面には出ない）。`/tmp/an-xxxxxx` のような短いパスにする。
 
+### 録音の開始・停止の理由をログで読む
+
+録音がなぜ始まった・止まったかは `log show --last 1h --predicate 'subsystem == "com.yutaokoshi.autonote"'` で読める（流しながら見るなら `log stream --predicate ...`）。開始・停止・一時停止のたびに、`devices` カテゴリに `recording -> idle on manualStop (origin: hotkey, stop: manual, meeting: <会議 ID>)` のような 1 行が出る。`origin` がきっかけ（`hotkey`・`menu`・`window`・`notificationAction`・`cli`・`countdownFired`・`graceExpired`・`diskFull`・`terminating`・`sessionEnded`・`startFailed`・`deviceConnected`・`deviceDisconnected`。定義は `Sources/AutoNoteCore/Devices/RecordingControlOrigin.swift`）、`stop` が録音に渡した `StopReason` で、何も変えなかった操作は末尾に `ignored` が付く。前後の行で、ショートカットの受信（`HotKeyCenter`）、CLI のコマンドと送信元 PID（`SocketServer`）、機材の追加・削除（`DeviceMonitor` と `devices`）、設定の保存で変わったキー名（`AppWiring`。値は出さない）、録音セッションの開始・終了と秒数（`RecordingSession`）、ライブ文字起こし・ライブ要約の開始・終了を突き合わせる。どれも `notice` 以上なので後から `log show` で読める（`info` と `debug` は残らない）。
+
 ## リポジトリ構成
 
 - `Sources/AutoNoteCore`: 録音・文字起こし・議事録生成・Vault 書き出し・IPC・Automations などの中核ロジック（UI なし）
