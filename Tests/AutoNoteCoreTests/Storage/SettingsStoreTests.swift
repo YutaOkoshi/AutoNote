@@ -97,3 +97,27 @@ import AutoNoteTestSupport
     s.liveSummaryIntervalSeconds = 30; #expect(s.liveSummaryIntervalSeconds == 30)
     #expect(Settings.liveSummaryIntervalRange == 10...120)
 }
+
+// final_threads: 無ければ nil（自動）。読むときも代入でも 1〜8 に clamp。nil は書き出さない
+@Test func finalThreadsRoundTripsAndClamps() async throws {
+    let p = AppPaths(root: try TemporaryDirectory.make()); try p.createBaseDirectories()
+    let store = SettingsStore(paths: p)
+    func load(_ json: String) async throws -> Settings {
+        try Data(json.utf8).write(to: p.settingsFile)
+        return try await store.load()
+    }
+    #expect(Settings().finalThreads == nil)
+    #expect(try await load(#"{"output_folder":"/v"}"#).finalThreads == nil)
+    #expect(try await load(#"{"final_threads":3}"#).finalThreads == 3)
+    #expect(try await load(#"{"final_threads":0}"#).finalThreads == 1)
+    #expect(try await load(#"{"final_threads":64}"#).finalThreads == 8)
+    _ = try await store.update { $0.finalThreads = 2 }
+    #expect(try String(contentsOf: p.settingsFile, encoding: .utf8).contains("\"final_threads\""))
+    #expect(try await store.load().finalThreads == 2)
+    _ = try await store.update { $0.finalThreads = nil }
+    #expect(!(try String(contentsOf: p.settingsFile, encoding: .utf8).contains("final_threads")))
+    var s = Settings()
+    s.finalThreads = -5; #expect(s.finalThreads == 1)
+    s.finalThreads = 9; #expect(s.finalThreads == 8)
+    s.finalThreads = nil; #expect(s.finalThreads == nil)
+}

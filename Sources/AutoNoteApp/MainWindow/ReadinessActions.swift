@@ -22,6 +22,7 @@ struct ReadinessActionButton: View {
         case .retryModelDownload: Task { await model.perform(.retryModelDownload) }
         case .installGuide: Task { await model.perform(.installGuide) }
         case .redetectClaude: Task { await model.perform(.redetectClaude) }
+        case .openTranscriptionSettings: shell.showSettings(.transcription, using: openSettings)
         }
     }
 }

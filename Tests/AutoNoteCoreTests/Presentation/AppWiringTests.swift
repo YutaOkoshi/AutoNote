@@ -248,7 +248,7 @@ private func all<T: Sendable>(_ stream: AsyncStream<T>) async -> [T]? {
         #expect(await none.notifier.posted == [.recordingTooShort(id)])
     }
 
-    // outputFolder か finalEngine か finalModel が変わる → onQueueInputsChanged 1 回。countdownSeconds だけ → 0 回
+    // outputFolder か finalEngine か finalModel か finalThreads が変わる → onQueueInputsChanged 1 回。countdownSeconds だけ → 0 回
     @Test func queueInputsChangeRebuildsOnlyWhenNeeded() async {
         let counter = Counter()
         let w = Wiring(onQueueInputsChanged: { await counter.add($0) })
@@ -257,15 +257,18 @@ private func all<T: Sendable>(_ stream: AsyncStream<T>) async -> [T]? {
         var engine = old; engine.finalEngine = "whisper"
         var model = old; model.finalModel = "large-v3-turbo"
         var countdown = old; countdown.countdownSeconds = 10
+        var threads = old; threads.finalThreads = 2
         await w.wiring.settingsChanged(from: old, to: folder)
         #expect(await counter.settings == [folder])
         await w.wiring.settingsChanged(from: old, to: engine)
         #expect(await counter.settings == [folder, engine])
         await w.wiring.settingsChanged(from: old, to: model)
         #expect(await counter.settings == [folder, engine, model])
+        await w.wiring.settingsChanged(from: old, to: threads)
+        #expect(await counter.settings == [folder, engine, model, threads])
         await w.wiring.settingsChanged(from: old, to: countdown)
         await w.wiring.settingsChanged(from: old, to: old)
-        #expect(await counter.settings.count == 3)
+        #expect(await counter.settings.count == 4)
     }
 
     // makeFeed は FakeLiveTranscriber 2 本の LiveFeed（liveJSON = paths.transcriptFile(id, .live)）。.started(id) →

@@ -2,7 +2,8 @@ import AutoNoteCore
 import SwiftUI
 
 /// 文字起こし: engines and models for live and final transcription (§6.2), whisper model downloads, language,
-/// echo cancellation (§5.6) and filler removal (§6.5).
+/// echo cancellation (§5.6) and filler removal (§6.5). A model too heavy for this Mac gets a note under its picker
+/// (`WhisperModelFit`), updated as soon as the picker changes; the final transcription's CPU threads are set here too.
 struct TranscriptionTab: View {
     let env: AppEnvironment
 
@@ -15,6 +16,8 @@ struct TranscriptionTab: View {
     @State private var finalDefault: EngineChoice?
     @State private var voiceProcessing = false
     @State private var fillerRemoval = true
+    @State private var finalThreads: Int?
+    @State private var profile = MachineProfile.current()
     @State private var installed: Set<String> = []
     @State private var progress: [String: Double] = [:]
     @State private var modelError: String?
@@ -35,10 +38,21 @@ struct TranscriptionTab: View {
                 Section("リアルタイム") {
                     EnginePicker(title: "エンジン", selection: $live, entries: liveEntries, fallback: liveDefault)
                     missingModelNote(live)
+                    fitNotes { if case .liveTooSlow = $0 { true } else { false } }
                 }
                 Section("確定版") {
                     EnginePicker(title: "エンジン", selection: $final, entries: finalEntries, fallback: finalDefault)
                     missingModelNote(final)
+                    fitNotes { if case .liveTooSlow = $0 { false } else { true } }
+                    Picker("文字起こしに使う CPU", selection: $finalThreads) {
+                        Text("自動（\(profile.batchThreads(setting: nil)) スレッド）").tag(Int?.none)
+                        // A saved value above the core count (written by hand) stays visible instead of an invalid tag.
+                        ForEach(Array(Set(profile.threadChoices + [finalThreads].compactMap { $0 })).sorted(), id: \.self) { n in
+                            Text("\(n) スレッド").tag(Int?.some(n))
+                        }
+                    }
+                    Text("自動 = 物理コア数 − 1（他の作業のために 1 コア空けます。上限 4）。この Mac は物理 \(profile.physicalCores) コアです。増やすと停止後の処理は速くなりますが、そのあいだ他のアプリが重くなります")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("whisper のモデル") {
                     ForEach(WhisperModelCatalog.all, id: \.name) { model in
@@ -65,6 +79,16 @@ struct TranscriptionTab: View {
         if let choice, choice.kind == .whisper, let model = choice.model, !installed.contains(model) {
             Text("whisper \(model) はまだダウンロードしていません。下でダウンロードするまで既定のエンジンを使います")
                 .font(.caption).foregroundStyle(.orange)
+        }
+    }
+
+    /// The fit warnings for what will run (the picked engine, or the default it falls back to) that `include` keeps.
+    @ViewBuilder private func fitNotes(_ include: (FitWarning) -> Bool) -> some View {
+        let warnings = WhisperModelFit.warnings(profile: profile, final: final ?? finalDefault, live: live ?? liveDefault)
+        ForEach(warnings.filter(include), id: \.self) { warning in
+            Label(FitWarningPresentation.message(warning), systemImage: "exclamationmark.triangle")
+                .font(.caption).foregroundStyle(.orange)
+                .accessibilityLabel(FitWarningPresentation.message(warning))
         }
     }
 
@@ -99,6 +123,7 @@ struct TranscriptionTab: View {
         final = EngineChoice.fromSettings(kind: s.finalEngine, model: s.finalModel, role: .batch, machine: machine)
         voiceProcessing = s.voiceProcessing
         fillerRemoval = s.fillerRemoval
+        finalThreads = s.finalThreads
         await refreshEntries()
         loaded = true
     }
@@ -143,6 +168,7 @@ struct TranscriptionTab: View {
 
     private func save() {
         let lang = language, live = live, final = final, voice = voiceProcessing, filler = fillerRemoval
+        let threads = finalThreads
         Task {
             do {
                 _ = try await SettingsSaving.save(env) {
@@ -153,6 +179,7 @@ struct TranscriptionTab: View {
                     $0.finalModel = final?.model
                     $0.voiceProcessing = voice
                     $0.fillerRemoval = filler
+                    $0.finalThreads = threads
                 }
                 saveState = .saved
             } catch {

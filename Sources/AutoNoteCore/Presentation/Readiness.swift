@@ -1,6 +1,7 @@
 import Foundation
 
 /// Whether the three things a first meeting needs are in place: the output folder, the transcription model and Claude Code.
+/// `fit` carries the whisper models that are too heavy for this Mac (`WhisperModelFit`); they do not block a meeting.
 public struct Readiness: Sendable, Equatable {
     public enum Model: Sendable, Equatable {
         case installed(String)
@@ -30,14 +31,16 @@ public struct Readiness: Sendable, Equatable {
     public var outputFolder: OutputFolder
     public var model: Model
     public var claude: Claude
+    public var fit: [FitWarning]
 
-    public init(outputFolder: OutputFolder, model: Model, claude: Claude) {
+    public init(outputFolder: OutputFolder, model: Model, claude: Claude, fit: [FitWarning] = []) {
         self.outputFolder = outputFolder
         self.model = model
         self.claude = claude
+        self.fit = fit
     }
 
-    /// Complete means every part is ready; a model that is absent, downloading or failed is not.
+    /// Complete means every part is ready; a model that is absent, downloading or failed is not. `fit` warnings do not count.
     public var isComplete: Bool {
         guard outputFolder.available, claude.found else { return false }
         if case .installed = model { return true }
@@ -51,8 +54,13 @@ public struct Readiness: Sendable, Equatable {
 
 /// One line of the readiness card.
 public struct ReadinessRow: Equatable, Sendable {
-    public enum Item: Equatable, Sendable { case outputFolder, model, claude }
-    public enum Action: Equatable, Sendable { case changeOutputFolder, retryModelDownload, installGuide, redetectClaude }
+    public enum Item: Hashable, Sendable {
+        case outputFolder, model, claude
+        case fit(FitWarning)
+    }
+    public enum Action: Equatable, Sendable {
+        case changeOutputFolder, retryModelDownload, installGuide, redetectClaude, openTranscriptionSettings
+    }
 
     public var item: Item
     public var title: String
@@ -72,9 +80,9 @@ public struct ReadinessRow: Equatable, Sendable {
 }
 
 public enum ReadinessPresentation {
-    /// Always three rows: output folder, model, Claude.
+    /// Output folder, model, one row per `fit` warning, Claude.
     public static func rows(_ r: Readiness, home: String) -> [ReadinessRow] {
-        [folderRow(r.outputFolder, home: home), modelRow(r.model), claudeRow(r.claude)]
+        [folderRow(r.outputFolder, home: home), modelRow(r.model)] + r.fit.map(fitRow) + [claudeRow(r.claude)]
     }
 
     /// The rows that are not ready, in the same order. With the selected meeting's `failure` band on screen, the
@@ -97,7 +105,13 @@ public enum ReadinessPresentation {
         case .retryModelDownload: "もう一度"
         case .installGuide: "入れ方を見る"
         case .redetectClaude: "もう一度探す"
+        case .openTranscriptionSettings: "文字起こしの設定を開く"
         }
+    }
+
+    private static func fitRow(_ w: FitWarning) -> ReadinessRow {
+        ReadinessRow(item: .fit(w), title: FitWarningPresentation.title(w), status: FitWarningPresentation.status(w),
+                     ready: false, band: FitWarningPresentation.message(w), actions: [.openTranscriptionSettings])
     }
 
     private static func folderRow(_ f: Readiness.OutputFolder, home: String) -> ReadinessRow {

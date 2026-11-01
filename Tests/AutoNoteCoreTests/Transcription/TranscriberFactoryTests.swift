@@ -34,4 +34,12 @@ import Testing
         #expect(live is DictationLiveTranscriber)
         #expect(try await f.makeLive(.speech) is SpeechLiveTranscriber)
     }
+
+    // 既定は自動（WhisperContext.batchThreads）。withBatchThreads で final_threads の値に差し替え、0 以下は 1
+    @Test func batchThreadsDefaultToAutomaticAndCanBeReplaced() throws {
+        let f = try factory()
+        #expect(f.batchThreads == WhisperContext.batchThreads)
+        #expect(f.withBatchThreads(2).batchThreads == 2)
+        #expect(f.withBatchThreads(0).batchThreads == 1)
+    }
 }

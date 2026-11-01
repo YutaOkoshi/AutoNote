@@ -96,11 +96,11 @@ public actor AppWiring {
         return orphans
     }
 
-    /// Only the queue's inputs (output folder, final engine and model) rebuild it. Every save is logged with the
+    /// Only the queue's inputs (output folder, final engine, model and threads) rebuild it. Every save is logged with the
     /// names of the keys it changed (never their values) and whether the queue is rebuilt.
     public func settingsChanged(from old: Settings, to new: Settings) async {
         let rebuild = old.outputFolder != new.outputFolder || old.finalEngine != new.finalEngine
-            || old.finalModel != new.finalModel
+            || old.finalModel != new.finalModel || old.finalThreads != new.finalThreads
         let keys = Settings.changedKeys(from: old, to: new)
         logger.notice("settings saved: changed [\(keys.joined(separator: ", "), privacy: .public)]; queue rebuild: \(rebuild ? "yes" : "no", privacy: .public)")
         guard rebuild else { return }

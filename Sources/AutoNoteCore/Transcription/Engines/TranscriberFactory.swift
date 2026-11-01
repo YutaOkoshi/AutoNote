@@ -3,17 +3,26 @@ import Foundation
 /// Turns an `EngineChoice` into a transcriber. Whisper models are looked up in `ModelManager`
 /// (not downloaded here: a missing one is `TranscriptionError.modelMissing`).
 public struct TranscriberFactory: Sendable {
-    /// Threads for live whisper decoding (batch uses `WhisperContext.batchThreads`).
+    /// Threads for live whisper decoding (batch uses `batchThreads`).
     public static let liveWhisperThreads = 2
 
     private let models: ModelManager
     private let machine: MachineKind
     private let segmentation: SegmentationStrategy
+    /// Threads for batch whisper (`WhisperContext.batchThreads(setting:)` of the `final_threads` setting).
+    public let batchThreads: Int
 
-    public init(models: ModelManager, machine: MachineKind, segmentation: SegmentationStrategy = .current) {
+    public init(models: ModelManager, machine: MachineKind, segmentation: SegmentationStrategy = .current,
+                batchThreads: Int = WhisperContext.batchThreads) {
         self.models = models
         self.machine = machine
         self.segmentation = segmentation
+        self.batchThreads = max(1, batchThreads)
+    }
+
+    /// The same factory with another batch thread count (the queue is rebuilt with it when `final_threads` changes).
+    public func withBatchThreads(_ threads: Int) -> TranscriberFactory {
+        TranscriberFactory(models: models, machine: machine, segmentation: segmentation, batchThreads: threads)
     }
 
     public func makeLive(_ c: EngineChoice) async throws -> any LiveTranscriber {
@@ -29,7 +38,7 @@ public struct TranscriberFactory: Sendable {
         case .dictation, .speech:
             throw TranscriptionError.engineUnavailable("\(c.kind.rawValue) cannot run as a batch engine")
         case .whisper:
-            return try Self.whisperBatch(modelURL: try await modelURL(c), machine: machine, gate: gate)
+            return try Self.whisperBatch(modelURL: try await modelURL(c), machine: machine, gate: gate, threads: batchThreads)
         }
     }
 
@@ -41,9 +50,10 @@ public struct TranscriberFactory: Sendable {
     /// Batch whisper on a model file outside the manager (the dev CLI's `--model-path`). `log` gets one line per
     /// window (nil: the unified log).
     public static func whisperBatch(modelURL: URL, machine: MachineKind, gate: BatchGate,
+                                    threads: Int = WhisperContext.batchThreads,
                                     log: (@Sendable (String) -> Void)? = nil) throws -> any BatchTranscriber {
         WhisperBatchTranscriber(
-            core: try WhisperContext(modelURL: modelURL, machine: machine, threads: WhisperContext.batchThreads), gate: gate,
+            core: try WhisperContext(modelURL: modelURL, machine: machine, threads: threads), gate: gate,
             log: log ?? WhisperBatchTranscriber.systemLog)
     }
 

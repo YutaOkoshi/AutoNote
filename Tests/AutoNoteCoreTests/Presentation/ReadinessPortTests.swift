@@ -89,6 +89,33 @@ private final class ScriptedDownloader: ModelDownloading, Sendable {
                                                     claude: .init(path: "/fake/claude", found: true)))
     }
 
+    // この機種（Intel 4 コア 32 GB）で q5_0 を確定版にもライブにも使う → 両方の警告。ライブを Apple に戻すと確定版だけ
+    @Test func currentCarriesFitWarningsForTheResolvedEngines() async throws {
+        let blob = Data("fake-q5-model!!!".utf8)
+        let entry = WhisperModel(name: "large-v3-turbo-q5_0", url: URL(string: "https://example.invalid/q5.bin")!,
+                                 sizeBytes: Int64(blob.count),
+                                 sha256: SHA256.hash(data: blob).map { String(format: "%02x", $0) }.joined())
+        let paths = AppPaths(root: try TemporaryDirectory.make())
+        let settings = SettingsStore(paths: paths)
+        _ = try await settings.update {
+            $0.finalEngine = "whisper"; $0.finalModel = "large-v3-turbo-q5_0"
+            $0.liveEngine = "whisper"; $0.liveModel = "large-v3-turbo-q5_0"
+        }
+        let models = ModelManager(directory: try TemporaryDirectory.make(), catalog: [entry],
+                                  downloader: ScriptedDownloader(payload: blob))
+        _ = try await models.download("large-v3-turbo-q5_0") { _ in }
+        let catalog = EngineCatalog(machine: .intel,
+                                    speech: FakeSpeechCapabilities(speechAvailable: false, speechLocales: [], dictationLocales: ["ja-JP"]),
+                                    installedModels: { await models.installed().map(\.name) })
+        let port = LiveReadinessPort(settings: settings, outputFolder: FakeOutputFolderPort(available: true), models: models,
+                                     catalog: catalog, opener: FakeFileOpener(),
+                                     profile: MachineProfile(kind: .intel, physicalCores: 4, physicalMemory: 32 << 30))
+        #expect(await port.current().fit == [.finalTooSlow(model: "large-v3-turbo-q5_0"),
+                                             .liveTooSlow(model: "large-v3-turbo-q5_0")])
+        _ = try await settings.update { $0.liveEngine = nil; $0.liveModel = nil }
+        #expect(await port.current().fit == [.finalTooSlow(model: "large-v3-turbo-q5_0")])
+    }
+
     @Test func unsetFolderIsUnavailableWithEmptyPath() async throws {
         let f = try await make(downloader: ScriptedDownloader(payload: payload), available: true,
                                configure: { $0.outputFolder = nil; $0.claudePath = nil })

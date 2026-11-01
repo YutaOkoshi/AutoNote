@@ -99,3 +99,47 @@ import AutoNoteCore
         #expect(ReadinessPresentation.actionTitle(.redetectClaude) == "もう一度探す")
     }
 }
+
+@Suite struct ReadinessFitTests {
+    private let home = "/Users/u"
+    private func ready(fit: [FitWarning]) -> Readiness {
+        Readiness(outputFolder: .init(path: "/Users/u/Documents/AutoNote", available: true),
+                  model: .installed("large-v3-turbo-q5_0"), claude: .init(path: "/opt/homebrew/bin/claude", found: true), fit: fit)
+    }
+
+    @Test func noWarningsKeepThreeRows() {
+        #expect(ReadinessPresentation.rows(ready(fit: []), home: home).count == 3)
+        #expect(Readiness.assumedReady.fit.isEmpty)
+    }
+
+    // 警告はモデルの行の直後に 1 行ずつ。完了扱いは変えない（録音はできる）が、帯には出る
+    @Test func warningsAreRowsAfterTheModelAndBands() {
+        let r = ready(fit: [.finalTooSlow(model: "large-v3-turbo-q5_0"), .liveTooSlow(model: "large-v3-turbo-q5_0")])
+        #expect(r.isComplete)
+        let rows = ReadinessPresentation.rows(r, home: home)
+        #expect(rows.map(\.item) == [.outputFolder, .model, .fit(.finalTooSlow(model: "large-v3-turbo-q5_0")),
+                                     .fit(.liveTooSlow(model: "large-v3-turbo-q5_0")), .claude])
+        #expect(rows[2] == ReadinessRow(
+            item: .fit(.finalTooSlow(model: "large-v3-turbo-q5_0")), title: "停止後の処理（whisper large-v3-turbo-q5_0）",
+            status: "録音の 1〜1.3 倍の時間、CPU をほぼ使い切ります", ready: false,
+            band: FitWarningPresentation.message(.finalTooSlow(model: "large-v3-turbo-q5_0")),
+            actions: [.openTranscriptionSettings]))
+        #expect(rows[3].title == "ライブ文字起こし（whisper large-v3-turbo-q5_0）")
+        #expect(rows[3].status == "リアルタイムに追いつきません")
+        #expect(ReadinessPresentation.bands(r, home: home).map(\.item)
+            == [.fit(.finalTooSlow(model: "large-v3-turbo-q5_0")), .fit(.liveTooSlow(model: "large-v3-turbo-q5_0"))])
+        #expect(ReadinessPresentation.actionTitle(.openTranscriptionSettings) == "文字起こしの設定を開く")
+    }
+
+    @Test func messagesNameTheModelAndTheRemedy() {
+        #expect(FitWarningPresentation.message(.finalTooSlow(model: "large-v3-turbo"))
+            == "この Mac（Intel）では whisper large-v3-turbo の確定版の文字起こしに録音と同じ〜1.3 倍の時間がかかり、そのあいだ CPU をほぼ使い切ります。small なら約半分の時間です")
+        #expect(FitWarningPresentation.message(.finalLowMemory(model: "large-v3-turbo"))
+            == "この Mac のメモリでは whisper large-v3-turbo の処理中にメモリが足りず、スワップが増えます（16 GB 以上を推奨）。large-v3-turbo-q5_0 なら同じ精度でメモリは約半分です")
+        #expect(FitWarningPresentation.message(.liveTooSlow(model: "large-v3-turbo-q5_0"))
+            == "この Mac（Intel）では whisper large-v3-turbo-q5_0 のライブ文字起こしがリアルタイムに追いつきません（確定版の 4 スレッドでも録音の 1.31 倍かかった実測があります）。リアルタイムは Apple の音声入力を推奨します")
+        let memoryRow = ReadinessPresentation.rows(ready(fit: [.finalLowMemory(model: "large-v3-turbo")]), home: home)[2]
+        #expect(memoryRow.title == "停止後の処理（whisper large-v3-turbo）")
+        #expect(memoryRow.status == "メモリが足りずスワップが増えます")
+    }
+}
