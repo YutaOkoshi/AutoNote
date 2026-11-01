@@ -1,3 +1,4 @@
+import AppKit
 import AutoNoteCore
 import SwiftUI
 
@@ -9,6 +10,9 @@ struct LiveTranscriptView: View {
 
     @State private var position = ScrollPosition(edge: .bottom)
     @State private var following = true
+    /// The scroll view's own width (it does not depend on the rows, so measuring it feeds nothing back).
+    @State private var outerWidth: Double = 0
+    @State private var legacyScroller = NSScroller.preferredScrollerStyle == .legacy
 
     var body: some View {
         ScrollView {
@@ -18,8 +22,16 @@ struct LiveTranscriptView: View {
                 }
             }
             .padding(12)
+            // The 12:03 crash: with a legacy scroller, rows that overflowed by one wrapped line brought the scroller
+            // in, which narrowed and rewrapped them until they fit, which took it out again, while the bottom anchor
+            // moved the offset each time — one layout pass that never settled. The rows now keep the scroller's room.
+            .frame(width: rowWidth, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
+        }
+        .onGeometryChange(for: Double.self) { Double($0.size.width) } action: { outerWidth = $0 }
+        .onReceive(NotificationCenter.default.publisher(for: NSScroller.preferredScrollerStyleDidChangeNotification)) { _ in
+            legacyScroller = NSScroller.preferredScrollerStyle == .legacy
         }
         .scrollPosition($position)
         .defaultScrollAnchor(follows ? .bottom : .top)
@@ -46,6 +58,12 @@ struct LiveTranscriptView: View {
                 .padding(12)
             }
         }
+    }
+
+    private var rowWidth: CGFloat? {
+        TranscriptLayout.rowWidth(outerWidth: outerWidth,
+                                  scrollerWidth: Double(NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)),
+                                  legacyScroller: legacyScroller).map { CGFloat($0) }
     }
 
     /// The utterances as lines, markers told apart the same way as the live buffer.
