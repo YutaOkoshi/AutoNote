@@ -22,11 +22,14 @@ enum ClaudeProcess {
         }
     }
 
-    /// Runs `claude auth status --json`; throws `.notLoggedIn` unless it reports `"loggedIn": true`.
-    static func checkLoggedIn(claudePath: String, runner: any ProcessRunning, workingDirectory: URL) async throws {
+    /// Runs `claude auth status --json` with the configured environment overrides but never the extra arguments
+    /// (`auth` may reject them, which would read as not logged in); throws `.notLoggedIn` unless it reports
+    /// `"loggedIn": true`.
+    static func checkLoggedIn(claudePath: String, runner: any ProcessRunning, workingDirectory: URL,
+                              environmentOverrides: [String: String] = [:]) async throws {
         let result = try await runner.run(executable: URL(fileURLWithPath: claudePath), arguments: ["auth", "status", "--json"],
                                           stdin: Data(), workingDirectory: workingDirectory,
-                                          environment: environment(claudePath: claudePath),
+                                          environment: environment(claudePath: claudePath, overrides: environmentOverrides),
                                           timeout: ClaudeCodeSummarizer.authTimeout)
         guard ClaudeResultClassifier.isLoggedIn(result) else {
             logger.error("claude auth status: not logged in (exit \(result.exitCode, privacy: .public))")
@@ -34,8 +37,8 @@ enum ClaudeProcess {
         }
     }
 
-    /// The child environment for `claude` (this process's environment with the PATH it needs).
-    static func environment(claudePath: String) -> [String: String] {
-        ClaudeLocator.childEnvironment(claudePath: claudePath, base: ProcessInfo.processInfo.environment)
+    /// The child environment for `claude`: this process's environment with the PATH it needs, then `overrides`.
+    static func environment(claudePath: String, overrides: [String: String]) -> [String: String] {
+        ClaudeLaunch.environment(claudePath: claudePath, base: ProcessInfo.processInfo.environment, overrides: overrides)
     }
 }

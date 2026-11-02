@@ -82,3 +82,43 @@ public enum SettingsNormalizer {
         return out
     }
 }
+
+/// The 一般 tab's 「Claude の起動」: extra arguments as tokens and environment variables as name/value rows.
+/// `validated()` trims the names, drops rows with an empty name and empty arguments, and rejects a name outside
+/// `Settings.isValidEnvironmentName` or one given twice with an error that names its row. Values are kept as typed.
+public struct ClaudeLaunchDraft: Equatable, Sendable {
+    public struct EnvRow: Equatable, Sendable, Identifiable {
+        public var id = UUID()
+        public var name: String
+        public var value: String
+
+        public init(name: String, value: String) { self.name = name; self.value = value }
+    }
+
+    public var arguments: [String]
+    public var environment: [EnvRow]
+
+    public init(_ s: Settings) {
+        arguments = s.claudeArgs
+        environment = s.claudeEnv.sorted { $0.key < $1.key }.map { EnvRow(name: $0.key, value: $0.value) }
+    }
+
+    /// One typed entry is one argument, spaces included; nil when it is blank.
+    public static func token(_ input: String) -> String? {
+        input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : input
+    }
+
+    public func validated() throws(AppCommandError) -> (arguments: [String], environment: [String: String]) {
+        var env: [String: String] = [:]
+        for (index, row) in environment.enumerated() {
+            let name = row.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if name.isEmpty { continue }
+            guard Settings.isValidEnvironmentName(name) else {
+                throw .invalid("環境変数の名前「\(name)」は使えません。英字・数字・_ だけで、数字で始めないでください（\(index + 1) 行目）")
+            }
+            guard env[name] == nil else { throw .invalid("同じ環境変数が 2 回あります（\(index + 1) 行目）") }
+            env[name] = row.value
+        }
+        return (arguments.filter { !$0.isEmpty }, env)
+    }
+}

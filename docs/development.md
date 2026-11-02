@@ -56,6 +56,7 @@ AutoNote をソースからビルドし、テストし、変更を入れるた�
 - 署名は自己署名の `AutoNote Dev`、Bundle ID は `com.yutaokoshi.autonote`。どちらも `scripts/config.sh` が唯一の定義（`AUTONOTE_BUNDLE_ID` と `AUTONOTE_CERT_NAME`。`build-app.sh`・`e2e-check.sh`・`make-dev-cert.sh` などがここを読む。変えるときはここだけを直す）。App Sandbox なし、Hardened Runtime なし
 - 音声・文字起こし・議事録・個人の機材識別子をコミットしない。フィクスチャは架空のデータで作る
 - 音声はローカルから出さない。外部に渡すのは `claude -p` への文字起こしテキストだけ
+- `claude` の起動（引数と子プロセスの環境変数）は `Sources/AutoNoteCore/Minutes/ClaudeLaunch.swift` の 1 か所で組み立てる。議事録とリアルタイム要約は設定の `claude_args` と `claude_env` を、ログイン確認（`claude auth status`）は `claude_env` だけをここで足す
 - TDD で進める（失敗するテストを書く → 実装する → 通す）。ハードウェアが要る部分だけ手動で確認する
 - コミットメッセージは英語の Conventional Commits
 - タスクを完了とする前に `scripts/e2e-check.sh` を回す
