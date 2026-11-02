@@ -105,7 +105,7 @@ private struct MainWindowContent: View {
 
     var body: some View {
         NavigationSplitView {
-            MeetingListView(model: model, selection: selection, onMerge: prepareMerge)
+            MeetingListView(env: env, model: model, selection: selection, unsaved: unsaved, onMerge: prepareMerge)
                 .navigationSplitViewColumnWidth(min: 260, ideal: 300)
         } detail: {
             VStack(spacing: 0) {
