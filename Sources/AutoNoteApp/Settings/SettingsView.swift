@@ -14,37 +14,56 @@ struct SettingsView: View {
 
     var body: some View {
         if let env = shell.env {
-            TabView(selection: $shell.settingsTab) {
-                GeneralTab(env: env)
-                    .tabItem { Label("一般", systemImage: "gearshape") }
-                    .tag(SettingsTab.general)
-                DevicesTab(env: env)
-                    .tabItem { Label("機材", systemImage: "headphones") }
-                    .tag(SettingsTab.devices)
-                TranscriptionTab(env: env)
-                    .tabItem { Label("文字起こし", systemImage: "text.bubble") }
-                    .tag(SettingsTab.transcription)
-                DictionaryTab(env: env)
-                    .tabItem { Label("辞書", systemImage: "character.book.closed") }
-                    .tag(SettingsTab.dictionary)
-                MinutesTab(env: env)
-                    .tabItem { Label("議事録", systemImage: "doc.text") }
-                    .tag(SettingsTab.minutes)
-                AutomationsTab(env: env)
-                    .tabItem { Label("Automations", systemImage: "gearshape.2") }
-                    .tag(SettingsTab.automations)
-                RetentionTab(env: env)
-                    .tabItem { Label("保持", systemImage: "clock.arrow.circlepath") }
-                    .tag(SettingsTab.retention)
-                ShortcutsTab(env: env)
-                    .tabItem { Label("ショートカット", systemImage: "keyboard") }
-                    .tag(SettingsTab.shortcuts)
+            VStack(spacing: 0) {
+                TabView(selection: $shell.settingsTab) {
+                    GeneralTab(env: env)
+                        .tabItem { Label("一般", systemImage: "gearshape") }
+                        .tag(SettingsTab.general)
+                    DevicesTab(env: env)
+                        .tabItem { Label("機材", systemImage: "headphones") }
+                        .tag(SettingsTab.devices)
+                    TranscriptionTab(env: env)
+                        .tabItem { Label("文字起こし", systemImage: "text.bubble") }
+                        .tag(SettingsTab.transcription)
+                    DictionaryTab(env: env)
+                        .tabItem { Label("辞書", systemImage: "character.book.closed") }
+                        .tag(SettingsTab.dictionary)
+                    MinutesTab(env: env)
+                        .tabItem { Label("議事録", systemImage: "doc.text") }
+                        .tag(SettingsTab.minutes)
+                    AutomationsTab(env: env)
+                        .tabItem { Label("Automations", systemImage: "gearshape.2") }
+                        .tag(SettingsTab.automations)
+                    RetentionTab(env: env)
+                        .tabItem { Label("保持", systemImage: "clock.arrow.circlepath") }
+                        .tag(SettingsTab.retention)
+                    ShortcutsTab(env: env)
+                        .tabItem { Label("ショートカット", systemImage: "keyboard") }
+                        .tag(SettingsTab.shortcuts)
+                }
+                // The running version, small, under every tab (so a bug report can name it without the CLI).
+                HStack {
+                    Spacer()
+                    Text(Self.versionCaption)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("settings-version")
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 6)
             }
             .frame(minWidth: 700, idealWidth: 720, minHeight: 560, idealHeight: 620)
         } else {
             ProgressView("起動中…")
                 .frame(minWidth: 480, minHeight: 320)
         }
+    }
+
+    /// 「AutoNote 0.4.0 (7)」: `AutoNoteVersion.current` (what `autonote --version` prints) and the bundle's
+    /// `CFBundleVersion`, which a `swift run` without a bundle does not have.
+    static var versionCaption: String {
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        return "AutoNote \(AutoNoteVersion.current)" + (build.map { " (\($0))" } ?? "")
     }
 }
 
