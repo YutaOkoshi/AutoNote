@@ -299,9 +299,11 @@ private func all<T: Sendable>(_ stream: AsyncStream<T>) async -> [T]? {
         let feed = try #require(await first(feeds) { _ in true })
         #expect(feed.meetingID == id)
         await f.live.handle(.paused(TimelineTime(seconds: 10)))
-        // The marker reached the display, so the same publish already reached the confirmed stream.
+        // The marker reached the display, so the same publish already reached the confirmed stream. The system
+        // track's utterance comes from its own fake task, so on a slow runner it can land after the marker: wait
+        // for the state that holds both finals instead of the first state seen.
         #expect(await first(await f.live.updates()) { $0.contains(where: LiveFeed.isMarker) } != nil)
-        let newest = await first(feed.utterances) { _ in true }
+        let newest = await first(feed.utterances) { $0.count == 2 }
         #expect(newest?.map(\.text) == ["おはようございます", "よろしくお願いします"])
         #expect(newest?.contains(where: LiveFeed.isMarker) == false)
         await f.live.handle(.stopped(m(.recorded), .manual))
