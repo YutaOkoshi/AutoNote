@@ -34,3 +34,16 @@ import Foundation
         #expect(Settings.changedKeys(from: Settings(), to: new) == ["shortcuts.toggle_recording"])
     }
 }
+
+@Suite struct SettingsChangedKeysClaudeLaunchTests {
+    /// Both new keys are reported by name; a variable's name (like its value) never reaches the log.
+    @Test func claudeArgsAndEnvAreReportedWithoutTheirContents() {
+        var new = Settings()
+        new.claudeArgs = ["--settings", "/Fictional/s.json"]
+        new.claudeEnv = ["CLAUDE_CONFIG_DIR": "/Fictional/c"]
+        #expect(Settings.changedKeys(from: Settings(), to: new) == ["claude_args", "claude_env"])
+        var changed = new
+        changed.claudeEnv["CLAUDE_CONFIG_DIR"] = "/Fictional/d"
+        #expect(Settings.changedKeys(from: new, to: changed) == ["claude_env"])
+    }
+}

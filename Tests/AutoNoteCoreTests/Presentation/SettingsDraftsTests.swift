@@ -117,3 +117,47 @@ import AutoNoteCore
         #expect(SettingsNormalizer.normalized(u) == u)
     }
 }
+
+/// The 一般 tab's 「Claude の起動」 arguments and environment rows.
+@Suite struct ClaudeLaunchDraftTests {
+    @Test func loadsTheSettingsWithRowsSortedByName() {
+        var s = Settings()
+        s.claudeArgs = ["--a", "b c"]
+        s.claudeEnv = ["Z": "1", "A": "2"]
+        let d = ClaudeLaunchDraft(s)
+        #expect(d.arguments == ["--a", "b c"])
+        #expect(d.environment.map(\.name) == ["A", "Z"])
+        #expect(d.environment.map(\.value) == ["2", "1"])
+    }
+
+    /// One typed entry is one argument, spaces included; a blank entry adds nothing.
+    @Test func tokenKeepsSpacesAndRejectsBlank() {
+        #expect(ClaudeLaunchDraft.token("--settings /Fictional/a b.json") == "--settings /Fictional/a b.json")
+        #expect(ClaudeLaunchDraft.token("  ") == nil)
+        #expect(ClaudeLaunchDraft.token("") == nil)
+    }
+
+    @Test func validatedDropsEmptyNamesAndKeepsValues() throws {
+        var d = ClaudeLaunchDraft(Settings())
+        d.arguments = ["--x", ""]
+        d.environment = [.init(name: " CLAUDE_CONFIG_DIR ", value: " /Fictional/c "), .init(name: "", value: "ignored"),
+                         .init(name: "EMPTY_OK", value: "")]
+        let v = try d.validated()
+        #expect(v.arguments == ["--x"])
+        #expect(v.environment == ["CLAUDE_CONFIG_DIR": " /Fictional/c ", "EMPTY_OK": ""])
+    }
+
+    @Test func invalidNameIsAnErrorNamingTheRow() {
+        var d = ClaudeLaunchDraft(Settings())
+        d.environment = [.init(name: "OK", value: "1"), .init(name: "1BAD", value: "2")]
+        #expect(throws: AppCommandError.invalid("環境変数の名前「1BAD」は使えません。英字・数字・_ だけで、数字で始めないでください（2 行目）")) {
+            try d.validated()
+        }
+    }
+
+    @Test func duplicateNameIsAnError() {
+        var d = ClaudeLaunchDraft(Settings())
+        d.environment = [.init(name: "A", value: "1"), .init(name: "A", value: "2")]
+        #expect(throws: AppCommandError.invalid("同じ環境変数が 2 回あります（2 行目）")) { try d.validated() }
+    }
+}

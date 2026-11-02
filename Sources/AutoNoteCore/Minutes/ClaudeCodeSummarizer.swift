@@ -14,11 +14,17 @@ public struct ClaudeCodeSummarizer: Summarizer {
     public let runner: any ProcessRunning
     public let timeout: Duration
     public let builder: PromptBuilder
+    /// `Settings.claudeArgs`, after `arguments(model:)` on every `-p` launch (not the login check; see `ClaudeLaunch`).
+    public let extraArguments: [String]
+    /// `Settings.claudeEnv`, over the child environment on every launch (the login check included).
+    public let environmentOverrides: [String: String]
 
     public init(claudePath: String, model: String?, workingDirectory: URL, runner: any ProcessRunning = FoundationProcessRunner(),
-                timeout: Duration = ClaudeCodeSummarizer.defaultTimeout, builder: PromptBuilder = PromptBuilder()) {
+                timeout: Duration = ClaudeCodeSummarizer.defaultTimeout, builder: PromptBuilder = PromptBuilder(),
+                extraArguments: [String] = [], environmentOverrides: [String: String] = [:]) {
         self.claudePath = claudePath; self.model = model; self.workingDirectory = workingDirectory
         self.runner = runner; self.timeout = timeout; self.builder = builder
+        self.extraArguments = extraArguments; self.environmentOverrides = environmentOverrides
     }
 
     /// The spec command line verbatim; only `--model <name>` may be appended.
@@ -38,7 +44,8 @@ public struct ClaudeCodeSummarizer: Summarizer {
     public func summarize(_ input: SummaryInput) async throws -> MinutesOutput {
         try ClaudeProcess.checkExecutable(claudePath)
         try FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
-        try await ClaudeProcess.checkLoggedIn(claudePath: claudePath, runner: runner, workingDirectory: workingDirectory)
+        try await ClaudeProcess.checkLoggedIn(claudePath: claudePath, runner: runner, workingDirectory: workingDirectory,
+                                              environmentOverrides: environmentOverrides)
         try emptyWorkingDirectory()
 
         switch builder.plan(input) {
@@ -72,9 +79,11 @@ public struct ClaudeCodeSummarizer: Summarizer {
     }
 
     private func run(_ prompt: String) async throws -> MinutesOutput {
-        let result = try await runner.run(executable: URL(fileURLWithPath: claudePath), arguments: Self.arguments(model: model),
+        let result = try await runner.run(executable: URL(fileURLWithPath: claudePath),
+                                          arguments: ClaudeLaunch.arguments(base: Self.arguments(model: model), extra: extraArguments),
                                           stdin: Data(prompt.utf8), workingDirectory: workingDirectory,
-                                          environment: ClaudeProcess.environment(claudePath: claudePath), timeout: timeout)
+                                          environment: ClaudeProcess.environment(claudePath: claudePath, overrides: environmentOverrides),
+                                          timeout: timeout)
         switch ClaudeResultClassifier.classify(result) {
         case .success(let output):
             Self.logger.info("claude -p succeeded (exit \(result.exitCode, privacy: .public))")

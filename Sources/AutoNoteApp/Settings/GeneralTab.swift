@@ -3,13 +3,17 @@ import AutoNoteCore
 import ServiceManagement
 import SwiftUI
 
-/// 一般: 保存先 (the output folder), launch at login, `claude`, summarizer, CLI install line, what leaves the Mac.
+/// 一般: 保存先 (the output folder), launch at login, how `claude` is launched (command, arguments, environment),
+/// summarizer, CLI install line, what leaves the Mac.
 struct GeneralTab: View {
     let env: AppEnvironment
 
     @State private var outputFolder = ""
     @State private var launchAtLogin = true
     @State private var claudePath = ""
+    @State private var claudeLaunch = ClaudeLaunchDraft(AutoNoteCore.Settings())
+    /// What is typed into the arguments field before Enter adds it as one token.
+    @State private var argumentInput = ""
     @State private var claudeModel = ""
     @State private var summarizerKind: SummarizerKind = .claudeCode
     @State private var liveSummaryEnabled = false
@@ -60,14 +64,23 @@ struct GeneralTab: View {
                         Button("システム設定で許可してください") { SMAppService.openSystemSettingsLoginItems() }
                     }
                 }
-                Section("Claude Code") {
+                Section {
                     HStack {
-                        TextField("claude のパス", text: $claudePath, prompt: Text("/opt/homebrew/bin/claude"))
+                        TextField("コマンド", text: $claudePath, prompt: Text("/opt/homebrew/bin/claude"))
                         Button("探す") { findClaude() }.disabled(searchingClaude)
                     }
                     if let claudeSearchMessage {
                         Text(claudeSearchMessage).font(.caption).foregroundStyle(.secondary)
                     }
+                    argumentsEditor
+                    environmentEditor
+                } header: {
+                    Text("Claude の起動")
+                } footer: {
+                    Text("引数は claude の既定の引数の後ろに付けます。環境変数は AutoNote が組み立てる PATH より優先します。引数は議事録の作成とリアルタイム要約に、環境変数はそれに加えてログインの確認にも使います。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Claude Code") {
                     TextField("モデル", text: $claudeModel, prompt: Text("空なら Claude Code の既定"))
                     Picker("要約器", selection: $summarizerKind) {
                         Text("Claude Code").tag(SummarizerKind.claudeCode)
@@ -103,6 +116,55 @@ struct GeneralTab: View {
         .task { await load() }
     }
 
+    /// Tokens with × each, then a field that adds one token on Enter (spaces stay inside the token).
+    private var argumentsEditor: some View {
+        LabeledContent("引数") {
+            VStack(alignment: .trailing, spacing: 6) {
+                if !claudeLaunch.arguments.isEmpty {
+                    FlowLayout {
+                        ForEach(Array(claudeLaunch.arguments.enumerated()), id: \.offset) { index, argument in
+                            ArgumentToken(text: argument) { claudeLaunch.arguments.remove(at: index) }
+                        }
+                    }
+                }
+                TextField("引数", text: $argumentInput, prompt: Text("引数を入れて Enter（例: --settings）"))
+                    .labelsHidden()
+                    .onSubmit { addArgument() }
+            }
+        }
+    }
+
+    /// Name = value rows, − on each row and + below.
+    private var environmentEditor: some View {
+        LabeledContent("環境変数") {
+            VStack(alignment: .trailing, spacing: 6) {
+                ForEach($claudeLaunch.environment) { $row in
+                    HStack {
+                        TextField("名前", text: $row.name, prompt: Text("名前（例: CLAUDE_CONFIG_DIR）"))
+                            .labelsHidden()
+                            .frame(minWidth: 240)
+                        Text("=").foregroundStyle(.secondary)
+                        TextField("値", text: $row.value, prompt: Text("値")).labelsHidden()
+                        Button("削除", systemImage: "minus.circle") {
+                            claudeLaunch.environment.removeAll { $0.id == row.id }
+                        }
+                        .labelStyle(.iconOnly).buttonStyle(.borderless)
+                    }
+                }
+                Button("環境変数を追加", systemImage: "plus") {
+                    claudeLaunch.environment.append(.init(name: "", value: ""))
+                }
+                .labelStyle(.iconOnly).buttonStyle(.borderless)
+            }
+        }
+    }
+
+    private func addArgument() {
+        guard let token = ClaudeLaunchDraft.token(argumentInput) else { return }
+        claudeLaunch.arguments.append(token)
+        argumentInput = ""
+    }
+
     private func load() async {
         guard let s = try? await env.settings.load() else {
             saveState = .failed("settings.json を読めません")
@@ -111,6 +173,8 @@ struct GeneralTab: View {
         outputFolder = s.outputFolder ?? ""
         launchAtLogin = s.launchAtLogin
         claudePath = s.claudePath ?? ""
+        claudeLaunch = ClaudeLaunchDraft(s)
+        argumentInput = ""
         claudeModel = s.claudeModel ?? ""
         summarizerKind = s.summarizerKind
         liveSummaryEnabled = s.liveSummaryEnabled
@@ -138,6 +202,16 @@ struct GeneralTab: View {
         let folder = FirstRunDefaults.outputFolder(
             forInput: outputFolder, paths: env.paths, isDataDirectoryOverridden: env.isDataDirectoryOverridden)
         let path = Self.nilIfBlank(claudePath), model = Self.nilIfBlank(claudeModel)
+        // Text left in the arguments field without Enter is still one argument.
+        addArgument()
+        let launch: (arguments: [String], environment: [String: String])
+        do {
+            launch = try claudeLaunch.validated()
+        } catch {
+            saveState = .failed(SettingsSaving.message(error))
+            return
+        }
+        let claudeArgs = launch.arguments, claudeEnv = launch.environment
         let login = launchAtLogin, kind = summarizerKind
         let liveOn = liveSummaryEnabled, liveInterval = liveSummaryInterval
         let liveModel = Self.nilIfBlank(liveSummaryModel) ?? Settings.defaultLiveSummaryModel
@@ -154,6 +228,8 @@ struct GeneralTab: View {
                     $0.outputFolder = folder
                     $0.launchAtLogin = login
                     $0.claudePath = path
+                    $0.claudeArgs = claudeArgs
+                    $0.claudeEnv = claudeEnv
                     $0.claudeModel = model
                     $0.summarizerKind = kind
                     $0.liveSummaryEnabled = liveOn
@@ -162,6 +238,7 @@ struct GeneralTab: View {
                 }
                 outputFolder = saved.outputFolder ?? ""
                 liveSummaryModel = saved.liveSummaryModel
+                claudeLaunch = ClaudeLaunchDraft(saved)
                 saveState = .saved
                 let toggledOn = login && !savedLaunchAtLogin
                 savedLaunchAtLogin = saved.launchAtLogin
@@ -228,5 +305,22 @@ struct GeneralTab: View {
     static func nilIfBlank(_ s: String) -> String? {
         let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
         return t.isEmpty ? nil : t
+    }
+}
+
+/// One argument of 「Claude の起動」 as a chip with its ×.
+private struct ArgumentToken: View {
+    let text: String
+    let remove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(text).font(.system(.callout, design: .monospaced)).lineLimit(1)
+            Button("削除", systemImage: "xmark.circle.fill", action: remove)
+                .labelStyle(.iconOnly).buttonStyle(.borderless).foregroundStyle(.secondary)
+                .accessibilityLabel("引数 \(text) を削除")
+        }
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        .background(.quaternary, in: Capsule())
     }
 }

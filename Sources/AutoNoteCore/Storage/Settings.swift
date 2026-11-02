@@ -25,6 +25,12 @@ public struct Shortcuts: Codable, Equatable, Sendable {
 public struct Settings: Codable, Equatable, Sendable {
     public var outputFolder: String? = nil
     public var claudePath: String? = nil
+    /// Extra arguments put after AutoNote's own on every `claude` launch (minutes, live summary, login check).
+    /// JSON `claude_args`.
+    public var claudeArgs: [String] = []
+    /// Environment variables for every `claude` launch, over the environment AutoNote builds (its PATH included).
+    /// Names follow `isValidEnvironmentName`. JSON `claude_env`.
+    public var claudeEnv: [String: String] = [:]
     public var claudeModel: String? = nil
     public var summarizerKind: SummarizerKind = .claudeCode
     public var launchAtLogin: Bool = true
@@ -59,6 +65,14 @@ public struct Settings: Codable, Equatable, Sendable {
 
     public init() {}
 
+    /// `^[A-Za-z_][A-Za-z0-9_]*$`: the names `claude_env` accepts.
+    public static func isValidEnvironmentName(_ name: String) -> Bool {
+        name.wholeMatch(of: /[A-Za-z_][A-Za-z0-9_]*/) != nil
+    }
+
+    /// Keys logged by name only: their contents (variable names included) never reach the log.
+    private static let opaqueKeys: Set<String> = ["claude_env"]
+
     /// The `settings.json` key names whose values differ between `old` and `new`, sorted; a nested object names the
     /// inner key (`shortcuts.toggle_recording`). For the log of a settings save, which never shows the values.
     public static func changedKeys(from old: Settings, to new: Settings) -> [String] {
@@ -71,7 +85,8 @@ public struct Settings: Codable, Equatable, Sendable {
             Set(a.keys).union(b.keys).flatMap { key -> [String] in
                 let name = prefix + key
                 switch (a[key], b[key]) {
-                case (let x as [String: Any], let y as [String: Any]): return diff(x, y, prefix: name + ".")
+                case (let x as [String: Any], let y as [String: Any]) where !opaqueKeys.contains(name):
+                    return diff(x, y, prefix: name + ".")
                 case (let x as NSObject, let y as NSObject): return x.isEqual(y) ? [] : [name]
                 case (nil, nil): return []
                 default: return [name]
@@ -93,6 +108,9 @@ public struct Settings: Codable, Equatable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         outputFolder = try c.decodeIfPresent(String.self, forKey: .outputFolder)
         claudePath = try c.decodeIfPresent(String.self, forKey: .claudePath)
+        claudeArgs = try c.decodeIfPresent([String].self, forKey: .claudeArgs) ?? []
+        claudeEnv = (try c.decodeIfPresent([String: String].self, forKey: .claudeEnv) ?? [:])
+            .filter { Self.isValidEnvironmentName($0.key) }
         claudeModel = try c.decodeIfPresent(String.self, forKey: .claudeModel)
         summarizerKind = try c.decodeIfPresent(SummarizerKind.self, forKey: .summarizerKind) ?? summarizerKind
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? launchAtLogin

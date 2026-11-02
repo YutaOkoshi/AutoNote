@@ -19,11 +19,17 @@ public struct ClaudeLiveSummarizer: LiveSummarizer {
     public let workingDirectory: URL
     let runner: any ProcessRunning
     let timeout: Duration
+    /// `Settings.claudeArgs`, after `arguments(model:)` on every `-p` launch (not the login check; see `ClaudeLaunch`).
+    public let extraArguments: [String]
+    /// `Settings.claudeEnv`, over the child environment on every launch (the login check included).
+    public let environmentOverrides: [String: String]
 
     public init(claudePath: String, model: String, workingDirectory: URL,
-                runner: any ProcessRunning = FoundationProcessRunner(), timeout: Duration = defaultTimeout) {
+                runner: any ProcessRunning = FoundationProcessRunner(), timeout: Duration = defaultTimeout,
+                extraArguments: [String] = [], environmentOverrides: [String: String] = [:]) {
         self.claudePath = claudePath; self.model = model; self.workingDirectory = workingDirectory
         self.runner = runner; self.timeout = timeout
+        self.extraArguments = extraArguments; self.environmentOverrides = environmentOverrides
     }
 
     /// The minutes command line with the live schema and `--model <model>`.
@@ -34,15 +40,18 @@ public struct ClaudeLiveSummarizer: LiveSummarizer {
     public func checkReady() async throws {
         try ClaudeProcess.checkExecutable(claudePath)
         try FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
-        try await ClaudeProcess.checkLoggedIn(claudePath: claudePath, runner: runner, workingDirectory: workingDirectory)
+        try await ClaudeProcess.checkLoggedIn(claudePath: claudePath, runner: runner, workingDirectory: workingDirectory,
+                                              environmentOverrides: environmentOverrides)
     }
 
     /// Does not check the login (`checkReady` does that once per recording).
     public func summarize(_ r: LiveSummaryRequest) async throws -> LiveSummaryOutput {
         try FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
-        let result = try await runner.run(executable: URL(fileURLWithPath: claudePath), arguments: Self.arguments(model: model),
+        let result = try await runner.run(executable: URL(fileURLWithPath: claudePath),
+                                          arguments: ClaudeLaunch.arguments(base: Self.arguments(model: model), extra: extraArguments),
                                           stdin: Data(LiveSummaryInputBuilder.prompt(r).utf8), workingDirectory: workingDirectory,
-                                          environment: ClaudeProcess.environment(claudePath: claudePath), timeout: timeout)
+                                          environment: ClaudeProcess.environment(claudePath: claudePath, overrides: environmentOverrides),
+                                          timeout: timeout)
         switch ClaudeResultClassifier.classify(result, as: LiveSummaryOutput.self) {
         case .success(let output):
             Self.logger.info("live claude -p succeeded (exit \(result.exitCode, privacy: .public))")
@@ -60,7 +69,8 @@ public enum LiveSummarizerFactory {
                             locate: @Sendable () async -> String? = { await ClaudeLocator.locate() }) async throws -> any LiveSummarizer {
         let claudePath = try await ClaudeProcess.resolvePath(configured: settings.claudePath, locate: locate)
         return ClaudeLiveSummarizer(claudePath: claudePath, model: settings.liveSummaryModel,
-                                    workingDirectory: paths.liveSummaryWorkingDirectory)
+                                    workingDirectory: paths.liveSummaryWorkingDirectory,
+                                    extraArguments: settings.claudeArgs, environmentOverrides: settings.claudeEnv)
     }
 }
 
