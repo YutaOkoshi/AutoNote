@@ -52,22 +52,24 @@ struct FailureBand: View {
     }
 }
 
-/// The one confirmation before a meeting is deleted (the completed view and the failure band), then the delete.
+/// The one confirmation before a meeting is deleted (the completed view, the failure band and the meeting list's
+/// context menu), then the delete. Shown while `target` is set; the delete is for the meeting it was shown for.
 struct DeleteMeetingConfirmation: ViewModifier {
-    let id: MeetingID
     let model: AppModel
-    @Binding var isPresented: Bool
+    @Binding var target: MeetingID?
 
     func body(content: Content) -> some View {
-        content.alert("この会議を削除しますか？", isPresented: $isPresented) {
-            Button("削除", role: .destructive) { Task { await delete() } }
+        content.alert("この会議を削除しますか？",
+                      isPresented: Binding(get: { target != nil }, set: { if !$0 { target = nil } }),
+                      presenting: target) { id in
+            Button("削除", role: .destructive) { Task { await delete(id) } }
             Button("キャンセル", role: .cancel) {}
-        } message: {
+        } message: { _ in
             Text("音声、アプリ内のデータ、Vault の会議ファイル、_index.md の行をまとめて削除します。元に戻せません。")
         }
     }
 
-    private func delete() async {
+    private func delete(_ id: MeetingID) async {
         await model.perform(.delete(id))
         if model.lastError == nil, model.selectedMeetingID == id { model.selectedMeetingID = nil }
         await model.refresh()
@@ -76,6 +78,12 @@ struct DeleteMeetingConfirmation: ViewModifier {
 
 extension View {
     func confirmDeleteMeeting(_ id: MeetingID, model: AppModel, isPresented: Binding<Bool>) -> some View {
-        modifier(DeleteMeetingConfirmation(id: id, model: model, isPresented: isPresented))
+        modifier(DeleteMeetingConfirmation(model: model, target: Binding(get: { isPresented.wrappedValue ? id : nil },
+                                                                         set: { isPresented.wrappedValue = $0 != nil })))
+    }
+
+    /// The meeting list's form: one confirmation for whichever meeting `target` names.
+    func confirmDeleteMeeting(target: Binding<MeetingID?>, model: AppModel) -> some View {
+        modifier(DeleteMeetingConfirmation(model: model, target: target))
     }
 }

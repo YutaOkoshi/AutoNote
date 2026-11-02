@@ -1,12 +1,19 @@
+import AppKit
 import AutoNoteCore
 import SwiftUI
 
 /// The left column: `model.meetings` with the same state words as the menu and the CLI. ⌘/⇧-click selects several
-/// meetings; the context menu of two or more offers 「1 つの会議に統合」 (`onMerge`).
+/// meetings. The context menu (`MeetingContextMenu`) offers 「1 つの会議に統合」 (`onMerge`) for two or more, and
+/// for one meeting the reruns of its failed automations, 再生成, 「Finder で表示」 and 削除 as the detail view does.
 struct MeetingListView: View {
+    let env: AppEnvironment
     let model: AppModel
     @Binding var selection: Set<String>
+    /// The open editor's unsaved-edits question; 再生成 of the meeting shown in the detail asks it first (I5).
+    let unsaved: UnsavedEditsGuard
     let onMerge: ([MeetingID]) -> Void
+    /// The meeting 削除 was chosen for, while its confirmation is shown.
+    @State private var deleteTarget: MeetingID?
 
     var body: some View {
         List(selection: $selection) {
@@ -16,19 +23,15 @@ struct MeetingListView: View {
             }
         }
         .contextMenu(forSelectionType: String.self) { ids in
-            if ids.count >= 2 {
-                Button("1 つの会議に統合", systemImage: "rectangle.stack.badge.plus") {
-                    onMerge(ids.sorted().map { MeetingID(rawValue: $0) })
+            ForEach(MeetingContextMenu.actions(selected: ids, rows: model.meetings, automationFailures: model.automationFailures),
+                    id: \.self) { action in
+                Button(action.title, systemImage: action.systemImage, role: action.isDestructive ? .destructive : nil) {
+                    run(action, on: ids)
                 }
-            } else if let id = ids.first {
-                // §14.5: a failed automation can be run again from the window too.
-                ForEach(failures(of: id), id: \.self) { name in
-                    Button("再実行: \(name)", systemImage: "arrow.clockwise") {
-                        Task { await model.perform(.rerunAutomation(name: name, meetingID: MeetingID(rawValue: id))) }
-                    }
-                }
+                .accessibilityLabel(action.title)
             }
         }
+        .confirmDeleteMeeting(target: $deleteTarget, model: model)
         .overlay {
             if model.meetings.isEmpty {
                 ContentUnavailableView("会議はまだありません", systemImage: "waveform")
@@ -40,6 +43,30 @@ struct MeetingListView: View {
 extension MeetingListView {
     private func failures(of id: String) -> [String] {
         model.automationFailures.filter { $0.meetingID == id }.map(\.name)
+    }
+
+    private func run(_ action: MeetingContextAction, on ids: Set<String>) {
+        // Every action but 統合 is offered for exactly one meeting.
+        let id = MeetingID(rawValue: ids.first ?? "")
+        switch action {
+        case .merge:
+            onMerge(ids.sorted().map { MeetingID(rawValue: $0) })
+        case .rerunAutomation(let name):
+            // §14.5: a failed automation can be run again from the window too.
+            Task { await model.perform(.rerunAutomation(name: name, meetingID: id)) }
+        case .regenerate:
+            Task { @MainActor in
+                // Only the meeting shown in the detail can hold unsaved edits.
+                if model.selectedMeetingID == id { guard await unsaved.mayLeave() else { return } }
+                await model.perform(.regenerate(id))
+            }
+        case .revealInFinder:
+            let row = model.meetings.first { $0.id == id.rawValue }
+            let url = MeetingContextMenu.revealURL(for: row, tracksDirectory: env.paths.tracksDirectory(id))
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        case .delete:
+            deleteTarget = id
+        }
     }
 }
 
