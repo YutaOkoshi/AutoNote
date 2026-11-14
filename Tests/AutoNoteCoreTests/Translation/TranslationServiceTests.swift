@@ -132,7 +132,10 @@ func pollTranslation(_ timeout: Duration = .seconds(2), _ condition: () async ->
     @Test func theUnavailableRuntimeFailsCleanly() async {
         let runtime = TranslationRuntime(completer: UnavailableTextCompleter())
         await #expect(throws: TranslationError.runtimeUnavailable) { try await runtime.withModel(URL(filePath: "/m")) { _ in } }
-        #expect(TranslationRuntimeFactory.makeOnDevice() == nil)
+    }
+
+    @Test func theOnDeviceRuntimeIsLlama() {
+        #expect(TranslationRuntimeFactory.makeOnDevice() is LlamaTextCompleter)
     }
 }
 
@@ -315,6 +318,64 @@ func pollTranslation(_ timeout: Duration = .seconds(2), _ condition: () async ->
         #expect(f.store.load(f.id)?.complete == true)
         #expect(fake.snapshot.prompts.count == 4)
         #expect(fake.snapshot.loads.count == 2)
+    }
+
+    @Test func pausesWhileTheQueueMakesAFinalTranscriptButNotForTheMinutes() async throws {
+        let f = try TranslationFixture()
+        let other = "20261114-1100-bbbb"
+        let (stream, continuation) = AsyncStream<QueueStatus>.makeStream()
+        // Another meeting's final transcription starts while the second utterance is being translated.
+        let fake = FakeTextCompleter(onCall: { n in
+            if n == 2 { continuation.yield(QueueStatus(items: [QueueItemDTO(meetingID: other, stage: StageName.transcribe, state: "running")])) }
+        })
+        let service = TranslationService(f.deps(fake))
+        let follower = Task { await service.follow(queue: stream) }
+        try await service.translate(f.id)
+        #expect(await pollTranslation {
+            if case .waitingForTranscription(let p) = await service.state(f.id) { p.done == 2 } else { false }
+        })
+        #expect(fake.snapshot.loaded == nil)   // the model is released for Whisper
+        #expect(f.store.load(f.id)?.processed == 2)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(fake.snapshot.prompts.count == 2)
+
+        // The other meeting moves on to its minutes (claude): translation continues meanwhile.
+        continuation.yield(QueueStatus(items: [QueueItemDTO(meetingID: other, stage: StageName.summarize, state: "running")]))
+        await service.waitForJob(f.id)
+        #expect(f.store.load(f.id)?.complete == true)
+        #expect(fake.snapshot.prompts.count == 4 && fake.snapshot.loads.count == 2)
+        continuation.finish()
+        await follower.value
+    }
+
+    @Test func aJobWaitingInTranscribeDoesNotHoldTranslationBack() {
+        func status(_ stage: String, _ state: JobState) -> QueueStatus {
+            QueueStatus(items: [QueueItemDTO(meetingID: "x", stage: stage, state: state.rawValue)])
+        }
+        #expect(TranslationService.isTranscribing(status(StageName.transcribe, .running)))
+        #expect(TranslationService.isTranscribing(status(StageName.transcribe, .pending)))
+        #expect(!TranslationService.isTranscribing(status(StageName.transcribe, .waiting)))
+        #expect(!TranslationService.isTranscribing(status(StageName.transcribe, .failed)))
+        #expect(!TranslationService.isTranscribing(status(StageName.summarize, .running)))
+        #expect(!TranslationService.isTranscribing(.empty))
+    }
+
+    @Test func theWaitingReasonFollowsWhatIsLeft() async throws {
+        let f = try TranslationFixture()
+        let service = TranslationService(f.deps(FakeTextCompleter()))
+        await service.setRecording(true)
+        await service.setTranscribing(true)
+        try await service.translate(f.id)
+        #expect(await pollTranslation {
+            if case .waitingForRecording = await service.state(f.id) { true } else { false }
+        })
+        await service.setRecording(false)   // the recording ended; its final transcription still runs
+        #expect(await pollTranslation {
+            if case .waitingForTranscription = await service.state(f.id) { true } else { false }
+        })
+        await service.setTranscribing(false)
+        await service.waitForJob(f.id)
+        #expect(f.store.load(f.id)?.complete == true)
     }
 
     @Test func completingTheFinalTranslationRemovesTheLiveOne() async throws {

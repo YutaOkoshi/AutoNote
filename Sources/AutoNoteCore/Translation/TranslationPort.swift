@@ -8,6 +8,8 @@ public enum TranslationJobState: Equatable, Sendable {
     case running(TranslationProgress)
     /// Paused while a recording runs; it continues after the stop.
     case waitingForRecording(TranslationProgress)
+    /// Paused while the post-processing queue makes a final transcript (Whisper batch); it continues after.
+    case waitingForTranscription(TranslationProgress)
     /// The run failed; the meeting itself is untouched (spec 6). 「再試行」 starts it again.
     case failed(String)
 }

@@ -1,4 +1,7 @@
 import Foundation
+import os
+
+private let logger = Logger(subsystem: "com.yutaokoshi.autonote", category: "UtteranceTranslator")
 
 /// One utterance to translate and its direction.
 public struct TranslationItem: Equatable, Sendable {
@@ -33,13 +36,26 @@ public struct UtteranceTranslator: Sendable {
 
     public init(completer: any TextCompleting) { self.completer = completer }
 
-    /// The cleaned translation; empty when the model produced nothing usable.
+    /// The cleaned translation; empty when the model produced nothing usable. A prompt longer than the model's
+    /// context (`LlamaError.promptTooLong`) is retried with fewer history pairs, oldest dropped first; an utterance
+    /// too long even alone is left untranslated (empty) rather than failing the whole run.
     public func translate(_ text: String, from source: TranslationLanguage, to target: TranslationLanguage,
                           history: [TranslationPair]) async throws -> String {
-        let prompt = PlamoPrompt.build(text: text, source: source, target: target, history: history)
-        let raw = try await completer.complete(prompt: prompt, stop: PlamoPrompt.stopStrings,
-                                               maxTokens: PlamoPrompt.maxTokens(for: text))
-        return PlamoPrompt.cleaned(raw)
+        var history = Array(history.suffix(PlamoPrompt.historyLimit))
+        while true {
+            let prompt = PlamoPrompt.build(text: text, source: source, target: target, history: history)
+            do {
+                let raw = try await completer.complete(prompt: prompt, stop: PlamoPrompt.stopStrings,
+                                                       maxTokens: PlamoPrompt.maxTokens(for: text))
+                return PlamoPrompt.cleaned(raw)
+            } catch LlamaError.promptTooLong(let tokens, let limit) {
+                guard !history.isEmpty else {
+                    logger.notice("utterance left untranslated: \(tokens, privacy: .public) tokens > \(limit, privacy: .public)")
+                    return ""
+                }
+                history.removeFirst()
+            }
+        }
     }
 }
 

@@ -306,16 +306,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 logger.error("translation runtime did not unload in time")
             }
         }
-        guard let server = env?.server else { return }
-        // The socket file must be gone when the process exits (E2E 06.6); wait briefly for the actor.
-        let done = DispatchSemaphore(value: 0)
-        Task.detached {
-            await server.stop()
-            done.signal()
+        if let server = env?.server {
+            // The socket file must be gone when the process exits (E2E 06.6); wait briefly for the actor.
+            let done = DispatchSemaphore(value: 0)
+            Task.detached {
+                await server.stop()
+                done.signal()
+            }
+            if done.wait(timeout: .now() + 2) == .timedOut {
+                logger.error("socket server did not stop in time")
+            }
         }
-        if done.wait(timeout: .now() + 2) == .timedOut {
-            logger.error("socket server did not stop in time")
-        }
+        // Last, after the recording and the socket: free every llama model synchronously even if the unload above
+        // timed out, and refuse later loads, so ggml's Metal device finds no buffer left at exit (it aborts then).
+        LlamaRuntime.shutdown()
     }
 
     /// SIGTERM (default handling ignored, then caught) and power-off both quit with `reason = .powerOff`.

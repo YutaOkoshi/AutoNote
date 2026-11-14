@@ -67,6 +67,10 @@ import Testing
         let waiting = TranslationPresentation.controls(job: .waitingForRecording(.init(done: 1, total: 4)), translation: none,
                                                        hasTranscript: true, available: true)
         #expect(waiting.button == nil && waiting.status?.hasPrefix("録音中は翻訳を止めています") == true)
+        let finalizing = TranslationPresentation.controls(job: .waitingForTranscription(.init(done: 1, total: 4)),
+                                                          translation: none, hasTranscript: true, available: true)
+        #expect(finalizing.button == nil && finalizing.status?.hasPrefix("文字起こしの確定を先にするため") == true)
+        #expect(finalizing.progress == 0.25)
         let failed = TranslationPresentation.controls(job: .failed("翻訳できませんでした（x）"), translation: none,
                                                       hasTranscript: true, available: true)
         #expect(failed.button == "再試行" && failed.isFailure && failed.status == "翻訳できませんでした（x）")

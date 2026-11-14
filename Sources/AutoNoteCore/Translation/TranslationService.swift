@@ -44,7 +44,8 @@ public struct TranslationDependencies: Sendable {
 /// The post-recording translation (spec 6) and the port the window uses. A job runs beside the minutes pipeline,
 /// never inside it: the queue is only observed, so translation neither waits for the minutes nor makes them wait,
 /// and nothing here changes a manifest or a transcript. Jobs pause while a recording runs (the live side and the
-/// live transcription come first) and continue after the stop.
+/// live transcription come first) and while the queue makes a final transcript (Whisper's batch run must not share
+/// the machine with the model), releasing the model, and continue after. The minutes (claude) do not pause them.
 public actor TranslationService: TranslationPort {
     private let deps: TranslationDependencies
     private let broadcaster: TranslationBroadcaster
@@ -55,7 +56,9 @@ public actor TranslationService: TranslationPort {
     /// Final transcripts (by `final.json` modification date) already translated automatically in this launch.
     private var autoAttempted: [MeetingID: Date] = [:]
     private var recording = false
-    private var recordingWaiters: [CheckedContinuation<Void, Never>] = []
+    /// A queue job is making a final transcript (stage `transcribe`, running or about to).
+    private var transcribing = false
+    private var pauseWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// How many utterances between two saves of a running `translation.json`.
     static let saveEvery = 20
@@ -108,6 +111,7 @@ public actor TranslationService: TranslationPort {
     public func follow(queue: AsyncStream<QueueStatus>) async {
         var tracked: Set<String> = []
         for await status in queue {
+            setTranscribing(Self.isTranscribing(status))
             let items = Dictionary(status.items.map { ($0.meetingID, $0) }, uniquingKeysWith: { _, new in new })
             tracked.formUnion(items.keys)
             for raw in tracked {
@@ -124,11 +128,32 @@ public actor TranslationService: TranslationPort {
     }
 
     func setRecording(_ value: Bool) {
+        guard recording != value else { return }
         recording = value
-        guard !value else { return }
-        let waiters = recordingWaiters
-        recordingWaiters.removeAll()
-        for w in waiters { w.resume() }
+        wakePaused()   // parked jobs resume, or show the reason that is left
+    }
+
+    func setTranscribing(_ value: Bool) {
+        guard transcribing != value else { return }
+        transcribing = value
+        wakePaused()
+    }
+
+    /// Whether the queue is making (or about to make) a final transcript: a job in `transcribe` that is running or
+    /// pending. A job waiting for a retry or a confirmation does not hold translation back.
+    static func isTranscribing(_ status: QueueStatus) -> Bool {
+        status.items.contains {
+            $0.stage == StageName.transcribe
+                && ($0.state == JobState.running.rawValue || $0.state == JobState.pending.rawValue)
+        }
+    }
+
+    private enum PauseReason { case recording, transcription }
+
+    private var pauseReason: PauseReason? {
+        if recording { return .recording }
+        if transcribing { return .transcription }
+        return nil
     }
 
     func startAutomaticallyIfDue(_ id: MeetingID) async {
@@ -208,7 +233,7 @@ public actor TranslationService: TranslationPort {
         try deps.store.save(document, for: id)
 
         while true {
-            await waitWhileRecording(id, document)
+            await waitWhilePaused(id, document)
             try Task.checkCancellation()
             publish(id, .running(TranslationProgress(done: document.processed, total: document.total)))
             let start = document
@@ -242,11 +267,12 @@ public actor TranslationService: TranslationPort {
                             createdAt: now, sourceDigest: digest, total: total, complete: false, entries: [])
     }
 
-    /// After each utterance: progress, a save every `saveEvery`, and a pause when a recording started.
+    /// After each utterance: progress, a save every `saveEvery`, and a pause when a recording or a final
+    /// transcription started.
     private func checkpoint(_ id: MeetingID, _ document: TranslationDocument) -> TranscriptTranslation.Checkpoint {
         publish(id, .running(TranslationProgress(done: document.processed, total: document.total)))
         if document.processed % Self.saveEvery == 0 { saveQuietly(document, id) }
-        return recording ? .suspend : .proceed
+        return pauseReason == nil ? .proceed : .suspend
     }
 
     private func saveQuietly(_ document: TranslationDocument, _ id: MeetingID) {
@@ -257,24 +283,25 @@ public actor TranslationService: TranslationPort {
         }
     }
 
-    private func waitWhileRecording(_ id: MeetingID, _ document: TranslationDocument) async {
-        guard recording else { return }
-        publish(id, .waitingForRecording(TranslationProgress(done: document.processed, total: document.total)))
-        while recording && !Task.isCancelled {
+    /// Parks the job (the model released) while a recording or a final transcription runs; the state says which.
+    private func waitWhilePaused(_ id: MeetingID, _ document: TranslationDocument) async {
+        while let reason = pauseReason, !Task.isCancelled {
+            let p = TranslationProgress(done: document.processed, total: document.total)
+            publish(id, reason == .recording ? .waitingForRecording(p) : .waitingForTranscription(p))
             await withTaskCancellationHandler {
                 await withCheckedContinuation { c in
-                    if recording && !Task.isCancelled { recordingWaiters.append(c) } else { c.resume() }
+                    if pauseReason != nil && !Task.isCancelled { pauseWaiters.append(c) } else { c.resume() }
                 }
             } onCancel: {
-                Task { await self.setRecordingWaitersFree() }
+                Task { await self.wakePaused() }
             }
         }
     }
 
-    /// A cancelled job must not stay parked: wake every waiter (the others check `recording` again).
-    private func setRecordingWaitersFree() {
-        let waiters = recordingWaiters
-        recordingWaiters.removeAll()
+    /// Wakes every parked job; each checks `pauseReason` again (a cancelled job must not stay parked either).
+    private func wakePaused() {
+        let waiters = pauseWaiters
+        pauseWaiters.removeAll()
         for w in waiters { w.resume() }
     }
 

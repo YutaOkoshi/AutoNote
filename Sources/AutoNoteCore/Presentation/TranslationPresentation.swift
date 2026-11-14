@@ -61,6 +61,9 @@ public enum TranslationPresentation {
         case .waitingForRecording(let p):
             return Controls(status: "録音中は翻訳を止めています（\(p.done) / \(p.total)）。停止すると続けます",
                             progress: fraction(p), showsToggle: hasLines)
+        case .waitingForTranscription(let p):
+            return Controls(status: "文字起こしの確定を先にするため翻訳を止めています（\(p.done) / \(p.total)）。終わると続けます",
+                            progress: fraction(p), showsToggle: hasLines)
         case .failed(let message):
             return Controls(button: available && hasTranscript ? "再試行" : nil, status: message, isFailure: true,
                             showsToggle: hasLines)

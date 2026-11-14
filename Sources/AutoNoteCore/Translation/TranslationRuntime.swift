@@ -76,11 +76,11 @@ public actor TranslationRuntime {
     }
 }
 
-/// The one place the real runtime (llama.cpp, built by the other half of the feature) is plugged in. The app and
-/// `autonote dev translate --model` both ask here; nil means this build has no runtime.
+/// The one place the real runtime (llama.cpp through `LlamaTextCompleter`) is plugged in. The app and
+/// `autonote dev translate --model` both ask here; nil would mean this build has no runtime.
 public enum TranslationRuntimeFactory {
     public static func makeOnDevice() -> (any TextCompleting)? {
-        nil
+        LlamaTextCompleter()
     }
 }
 

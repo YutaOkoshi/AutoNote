@@ -101,6 +101,41 @@ private func document(_ utterances: [Utterance], target: TranslationTarget = .au
         #expect(fake.snapshot.prompts.count == 2)
     }
 
+    @Test func aPromptTooLongIsRetriedWithFewerHistoryPairs() async throws {
+        let history = (0..<3).map { i in
+            TranslationPair(source: "Line \(i) " + String(repeating: "x", count: 100), sourceLanguage: .en,
+                            translation: "行 \(i)", targetLanguage: .ja)
+        }
+        let alone = PlamoPrompt.build(text: "Put me down.", source: .en, target: .ja).count
+        let withOne = PlamoPrompt.build(text: "Put me down.", source: .en, target: .ja, history: [history[2]]).count
+        // Room for the newest pair only: two retries drop the two oldest.
+        let fake = FakeTextCompleter(promptLimit: withOne)
+        let text = try await UtteranceTranslator(completer: fake)
+            .translate("Put me down.", from: .en, to: .ja, history: history)
+        #expect(text == "JA: Put me down.")
+        let prompts = fake.snapshot.prompts
+        #expect(prompts.count == 3)
+        #expect(prompts[2].contains("Line 2") && !prompts[2].contains("Line 1"))
+
+        // Too long even without history: left untranslated, no error.
+        let tight = FakeTextCompleter(promptLimit: alone - 1)
+        #expect(try await UtteranceTranslator(completer: tight)
+            .translate("Put me down.", from: .en, to: .ja, history: history) == "")
+        #expect(tight.snapshot.prompts.count == 4)
+    }
+
+    @Test func aLineTooLongForTheModelDoesNotStopTheRun() async throws {
+        let long = String(repeating: "Very long line. ", count: 40)
+        let lines = [utterance(0, "Hello there."), utterance(3, long), utterance(6, "See you.")]
+        let fake = FakeTextCompleter(promptLimit: 400)
+        let plan = TranscriptTranslation.plan(lines, target: .auto)
+        var doc = document(lines, total: plan.count)
+        let finished = try await TranscriptTranslation.run(&doc, utterances: lines, plan: plan,
+                                                           translator: UtteranceTranslator(completer: fake)) { _ in .proceed }
+        #expect(finished && doc.complete && doc.processed == 3)
+        #expect(doc.entries.map(\.index) == [0, 2])
+    }
+
     @Test func aRuntimeErrorIsPassedOn() async {
         let fake = FakeTextCompleter(failOnCall: 2)
         let plan = TranscriptTranslation.plan(utterances, target: .auto)
