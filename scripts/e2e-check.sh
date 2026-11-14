@@ -982,7 +982,8 @@ check_dev_live_summary_shape() {
     [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
     [[ "$(wc -l <"${out}" | tr -d ' ')" -eq 1 ]] || { LAST_LOG="${out}"; fail "出力が 1 行でない"; return; }
     jq -e '(.now|type=="string") and (.decisions|type=="array") and (.todos|type=="array")
-           and (.todos[0]|has("text") and has("owner")) and .consumed_through == 85 and (.updated_at|type=="string")' \
+           and (.todos[0]|has("text") and has("owner")) and .todos[0].side == "self"
+           and .consumed_through == 85 and (.updated_at|type=="string") and (has("asked_question_ids")|not)' \
         "${out}" >/dev/null || { LAST_LOG="${out}"; fail "状態の形が違う: $(cat "${out}")"; return; }
     pass "consumed_through 85"
 }
@@ -1005,6 +1006,33 @@ check_dev_live_summary_accumulates() {
     jq -e --slurpfile prev "${out}" '. == $prev[0]' "${again}" >/dev/null \
         || { LAST_LOG="${again}"; fail "新しい発話が無いのに状態が変わった: $(cat "${again}")"; return; }
     pass "決定 2 件・宿題 2 件、consumed_through 130、新しい発話なしで不変"
+}
+
+check_dev_live_summary_questions() {
+    CURRENT="09.4 dev live-summary --questions が聞けた項目を印し、2 回目には聞けた項目を渡さない"
+    command -v jq >/dev/null 2>&1 || { skip "jq が無い"; return; }
+    cli_or_skip || return
+    write_dev_live_summary_inputs
+    # 架空の聞きたいこと 2 件。偽の要約器は渡された未確定の先頭 1 件を「聞けた」にする
+    cat >"${WORK}/q-1.json" <<'JSON'
+{"items":[{"id":"q1","text":"会場のキャパシティ"},{"id":"q2","text":"入館証の締め切り","asked":false,"asked_by":null}]}
+JSON
+    local first="${WORK}/lq-1.json" second="${WORK}/lq-2.json" code
+    run_timeout 30 sh -c '"$1" dev live-summary "$2" --questions "$3" >"$4"' _ "${AUTONOTE_CLI}" \
+        "${WORK}/live-1.json" "${WORK}/q-1.json" "${first}"; code=$?
+    [[ ${code} -eq 0 ]] || { fail "1 回目: exit ${code}（期待 0）"; return; }
+    jq -e '.todos[0].side == "self" and .sent_question_ids == ["q1","q2"] and .asked_question_ids == ["q1"]
+           and .questions.items[0].asked == true and .questions.items[0].asked_by == "model"
+           and .questions.items[1].asked == false and .questions.items[1].text == "入館証の締め切り"' "${first}" >/dev/null \
+        || { LAST_LOG="${first}"; fail "1 回目の形が違う: $(cat "${first}")"; return; }
+    jq '.questions' "${first}" >"${WORK}/q-2.json"
+    run_timeout 30 sh -c '"$1" dev live-summary "$2" --state "$3" --questions "$4" >"$5"' _ "${AUTONOTE_CLI}" \
+        "${WORK}/live-2.json" "${first}" "${WORK}/q-2.json" "${second}"; code=$?
+    [[ ${code} -eq 0 ]] || { fail "2 回目: exit ${code}（期待 0）"; return; }
+    jq -e '.sent_question_ids == ["q2"] and .asked_question_ids == ["q2"]
+           and ([.questions.items[] | select(.asked)] | length) == 2 and .consumed_through == 130' "${second}" >/dev/null \
+        || { LAST_LOG="${second}"; fail "2 回目に聞けた項目が渡った、または形が違う: $(cat "${second}")"; return; }
+    pass "1 回目 q1・q2 を渡して q1、2 回目 q2 だけを渡して q2"
 }
 
 # ---------------------------------------------------------------- 実行
@@ -1053,6 +1081,7 @@ CHECKS=(
     check_dev_summarize_failure
     check_dev_live_summary_shape
     check_dev_live_summary_accumulates
+    check_dev_live_summary_questions
 )
 
 ensure_whisper_xcframework   # 失敗しても続ける（swift test などの項目が FAIL を出す）

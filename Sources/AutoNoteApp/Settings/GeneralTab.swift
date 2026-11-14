@@ -92,7 +92,7 @@ struct GeneralTab: View {
                         LabeledContent("更新間隔", value: "\(liveSummaryInterval) 秒")
                     }
                     TextField("モデル", text: $liveSummaryModel, prompt: Text(Settings.defaultLiveSummaryModel))
-                    Text("オンにすると、録音中に確定した発話のテキストを更新間隔ごとに Claude Code へ送り、いまの話題・決定事項・宿題を録音画面に出します。議事録の作成と同じ Claude の利用枠を使います。")
+                    Text(PrivacyCopy.liveSummaryNote)
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("コマンドライン（autonote）") {

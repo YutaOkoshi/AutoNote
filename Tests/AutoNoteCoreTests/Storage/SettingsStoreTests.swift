@@ -56,6 +56,16 @@ import AutoNoteTestSupport
     #expect(try await store.load().firstRunCompleted)
 }
 
+@Test func legacyLiveSummaryCardCollapsedIsIgnoredAndNotWritten() async throws {
+    // 旧キー live_summary_card_collapsed（カード全体の折りたたみ）は廃止。読めて、無視され、書き戻されない
+    let p = AppPaths(root: try TemporaryDirectory.make()); try p.createBaseDirectories()
+    let store = SettingsStore(paths: p)
+    try Data(#"{"live_summary_card_collapsed":true,"live_summary_enabled":true}"#.utf8).write(to: p.settingsFile)
+    #expect(try await store.load().liveSummaryEnabled)
+    _ = try await store.update { $0.audioRetentionDays = 7 }
+    #expect(!(try String(contentsOf: p.settingsFile, encoding: .utf8)).contains("live_summary_card_collapsed"))
+}
+
 @Test func liveSummaryDefaultsOff() throws {
     let s = Settings()
     #expect(!s.liveSummaryEnabled && s.liveSummaryIntervalSeconds == 20 && s.liveSummaryModel == "haiku")

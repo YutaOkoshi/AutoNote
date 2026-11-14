@@ -16,7 +16,7 @@ macOS のメニューバーに常駐して会議を録音し、手元で文字�
 ## プライバシー
 
 - 音声はこの Mac から出ない。録音・文字起こしはすべてローカルで行う
-- 外に渡るのは、議事録（とリアルタイム要約）を作るために Claude Code（`claude -p`）へ渡す文字起こしのテキストだけ
+- 外に渡るのは、議事録（とリアルタイム要約）を作るために Claude Code（`claude -p`）へ渡す文字起こしのテキストだけ（リアルタイム要約がオンのときは、書いておいた「聞きたいこと」も）
 - 根拠: [要件書](docs/superpowers/specs/2026-10-24-autonote-design.md) のゴール G9
 
 ## 動作環境
@@ -53,6 +53,7 @@ macOS のメニューバーに常駐して会議を録音し、手元で文字�
 | [初回起動から議事録が開くまで](docs/superpowers/specs/2026-10-27-first-run-to-minutes-design.md) | 準備カード、空状態、失敗の説明など初回体験の設計 |
 | [停止後の文字起こしを窓で流す](docs/superpowers/specs/2026-10-28-windowed-batch-transcription-design.md) | 長時間録音でもメモリを抑える確定版文字起こしの設計 |
 | [録音中のリアルタイム要約](docs/superpowers/specs/2026-10-28-live-summary-design.md) | 録音中に要約を更新する機能の設計 |
+| [要約を右ペインに置き「聞きたいこと」を足す](docs/superpowers/specs/2026-11-14-live-summary-side-pane-design.md) | 上の表示と入出力を置き換えた設計 |
 
 調査記録（`docs/superpowers/research/`）:
 
