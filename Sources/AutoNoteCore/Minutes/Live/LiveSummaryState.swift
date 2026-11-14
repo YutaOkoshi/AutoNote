@@ -1,23 +1,67 @@
 import Foundation
 
-/// One homework item of the live summary. `owner` is nil unless the utterances named one.
-public struct LiveSummaryTodo: Codable, Equatable, Sendable {
-    public var text: String
-    public var owner: String?
+/// Which side took a homework item on, from the speaker labels (自分 / 相手). JSON `self` / `other` / `unknown`.
+public enum LiveTodoSide: String, Codable, CaseIterable, Sendable {
+    case me = "self"
+    case other
+    case unknown
 
-    public init(text: String, owner: String?) {
-        self.text = text; self.owner = owner
+    /// Anything else (a value from a later version) reads as `unknown`.
+    public init(from decoder: any Decoder) throws {
+        self = LiveTodoSide(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
     }
 }
 
-/// What the model returns (the same shape as `LiveSummarySchema.json`).
+/// One homework item of the live summary. `owner` is nil unless the utterances named one; `side` is `unknown` in a
+/// `live-summary.json` written before it existed.
+public struct LiveSummaryTodo: Codable, Equatable, Sendable {
+    public var text: String
+    public var owner: String?
+    public var side: LiveTodoSide
+
+    public init(text: String, owner: String?, side: LiveTodoSide = .unknown) {
+        self.text = text; self.owner = owner; self.side = side
+    }
+
+    private enum CodingKeys: String, CodingKey { case text, owner, side }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        text = try c.decode(String.self, forKey: .text)
+        owner = try c.decodeIfPresent(String.self, forKey: .owner)
+        side = try c.decodeIfPresent(LiveTodoSide.self, forKey: .side) ?? .unknown
+    }
+
+    /// `owner` is always written (null when absent), as the schema requires it.
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(text, forKey: .text)
+        try c.encode(owner, forKey: .owner)
+        try c.encode(side, forKey: .side)
+    }
+}
+
+/// What the model returns (the same shape as `LiveSummarySchema.json`). `askedQuestionIDs` are the ids of the
+/// questions sent in the call that the utterances answered (JSON `asked_question_ids`; empty when missing).
 public struct LiveSummaryOutput: Codable, Equatable, Sendable {
     public var now: String
     public var decisions: [String]
     public var todos: [LiveSummaryTodo]
+    public var askedQuestionIDs: [String]
 
-    public init(now: String, decisions: [String], todos: [LiveSummaryTodo]) {
-        self.now = now; self.decisions = decisions; self.todos = todos
+    public init(now: String, decisions: [String], todos: [LiveSummaryTodo], askedQuestionIDs: [String] = []) {
+        self.now = now; self.decisions = decisions; self.todos = todos; self.askedQuestionIDs = askedQuestionIDs
+    }
+
+    /// `askedQuestionIds` so the snake-case strategies map it to `asked_question_ids` (not `asked_question_i_ds`).
+    private enum CodingKeys: String, CodingKey { case now, decisions, todos, askedQuestionIDs = "askedQuestionIds" }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        now = try c.decode(String.self, forKey: .now)
+        decisions = try c.decode([String].self, forKey: .decisions)
+        todos = try c.decode([LiveSummaryTodo].self, forKey: .todos)
+        askedQuestionIDs = try c.decodeIfPresent([String].self, forKey: .askedQuestionIDs) ?? []
     }
 }
 
@@ -52,7 +96,7 @@ public struct LiveSummaryState: Codable, Equatable, Sendable {
             let text = Self.trim(t.text)
             guard !text.isEmpty, seenTodos.insert(text).inserted else { return nil }
             let owner = t.owner.map(Self.trim).flatMap { $0.isEmpty ? nil : $0 }
-            return LiveSummaryTodo(text: text, owner: owner)
+            return LiveSummaryTodo(text: text, owner: owner, side: t.side)
         }
         return LiveSummaryState(now: String(Self.trim(output.now).prefix(Self.nowLimit)),
                                 decisions: Array(decisions.suffix(Self.listLimit)),

@@ -24,6 +24,10 @@ private struct Harness {
     let logs = SharedValue<[String]>([])
     let received = SharedValue<[LiveSummaryUpdate]>([])
     let inner = SharedValue<[MeetingID: AsyncStream<[Utterance]>.Continuation]>([:])
+    /// The questions each meeting has, and the ids the scheduler marked asked (in order).
+    let questions = SharedValue<[MeetingID: [LiveQuestionPrompt]]>([:])
+    let questionReads = SharedValue<[MeetingID]>([])
+    let marked = SharedValue<[(MeetingID, [String])]>([])
     /// True between `hold()` and `release()`: a parked call then counts as a settled `.calling` phase.
     let holding = SharedValue(false)
     let scheduler: LiveSummaryScheduler
@@ -41,13 +45,19 @@ private struct Harness {
         self.summarizer = summarizer
         self.settings = SharedValue(settings)
         let (settingsBox, queueBox, savedBox, logsBox) = (self.settings, queueRateLimited, saved, logs)
+        let (questionsBox, readsBox, markedBox) = (questions, questionReads, marked)
         scheduler = LiveSummaryScheduler(.init(
             settings: { settingsBox.value },
             makeSummarizer: { _ in summarizer },
             queueInRateLimitWait: { queueBox.value },
             save: { id, state in savedBox.mutate { $0.append((id, state)) } },
             log: { line in logsBox.mutate { $0.append(line) } },
-            clock: clock))
+            clock: clock,
+            questions: { id in
+                readsBox.mutate { $0.append(id) }
+                return questionsBox.value[id] ?? []
+            },
+            markAsked: { id, ids in markedBox.mutate { $0.append((id, ids)) } }))
         let (stream, continuation) = AsyncStream<LiveConfirmedFeed>.makeStream()
         feeds = continuation
         let scheduler = self.scheduler
@@ -589,5 +599,77 @@ private struct Harness {
         #expect(await h.latest(a)?.state?.consumedThrough == 25)
         #expect(await h.latest(b)?.state?.consumedThrough == 3)
         #expect(await h.scheduler.activeMeetings == [b])
+    }
+
+    // MARK: - Questions
+
+    /// Each call carries the meeting's undecided questions as they are at that call; the ids the model returns that
+    /// were sent are marked, unknown ones are not.
+    @Test func callsCarryTheQuestionsAndMarkTheAskedOnes() async throws {
+        let summarizer = ScriptedLiveSummarizer(results: [
+            .success(LiveSummaryOutput(now: "一", decisions: [], todos: [], askedQuestionIDs: ["q1", "zzz"])),
+            .success(LiveSummaryOutput(now: "二", decisions: [], todos: [], askedQuestionIDs: []))])
+        let h = await Harness(summarizer: summarizer)
+        defer { h.stop() }
+        h.questions.set([a: [.init(id: "q1", text: "会場のキャパシティ"), .init(id: "q2", text: "入館証の締め切り")]])
+        try await h.start(a)
+        try await h.say(a, lines(1))
+        try await h.advance(a, 20)
+        #expect(await summarizer.requests.first?.questions.map(\.id) == ["q1", "q2"])
+        try await waitUntil { h.marked.value.count == 1 }
+        #expect(h.marked.value.first?.0 == a && h.marked.value.first?.1 == ["q1"])
+        // The next call reads them again (here the store no longer has q1 pending).
+        h.questions.set([a: [.init(id: "q2", text: "入館証の締め切り")]])
+        try await h.say(a, lines(2))
+        try await h.advance(a, 20)
+        #expect(await summarizer.requests.last?.questions.map(\.id) == ["q2"])
+        try await waitUntil { await h.latest(a)?.state?.now == "二" }
+        #expect(h.marked.value.count == 1)          // nothing asked, nothing marked
+    }
+
+    /// No new utterance, no call: adding a question alone never triggers one.
+    @Test func questionsAloneDoNotCall() async throws {
+        let h = await Harness()
+        defer { h.stop() }
+        try await h.start(a)
+        try await h.say(a, lines(1))
+        try await h.advance(a, 20)
+        #expect(await h.requests() == 1)
+        h.questions.set([a: [.init(id: "q1", text: "新しい問い")]])
+        try await h.advance(a, 20)
+        try await h.advance(a, 20)
+        #expect(await h.requests() == 1)
+    }
+
+    /// With live summaries off, the questions are never even read (so never sent to Claude).
+    @Test func offNeverReadsTheQuestions() async throws {
+        let h = await Harness(settings: Settings())
+        defer { h.stop() }
+        h.questions.set([a: [.init(id: "q1", text: "秘密の問い")]])
+        try await h.start(a)
+        try await h.say(a, lines(3))
+        try await h.advance(a, 60)
+        h.finish(a)
+        try await waitUntil { await h.scheduler.phase(a) == .ended }
+        #expect(h.questionReads.value.isEmpty)
+        #expect(await h.requests() == 0)
+    }
+
+    @Test func finalCallCarriesTheQuestionsToo() async throws {
+        let summarizer = ScriptedLiveSummarizer(results: [
+            .success(LiveSummaryOutput(now: "一", decisions: [], todos: [], askedQuestionIDs: [])),
+            .success(LiveSummaryOutput(now: "最後", decisions: [], todos: [], askedQuestionIDs: ["q1"]))])
+        let h = await Harness(summarizer: summarizer)
+        defer { h.stop() }
+        h.questions.set([a: [.init(id: "q1", text: "録画の公開範囲")]])
+        try await h.start(a)
+        try await h.say(a, lines(1))
+        try await h.advance(a, 20)
+        try await h.say(a, lines(2))
+        h.finish(a)
+        try await waitUntil { await h.scheduler.phase(a) == .ended }
+        #expect(await summarizer.requests.count == 2)
+        #expect(await summarizer.requests.last?.questions.map(\.id) == ["q1"])
+        #expect(h.marked.value.map(\.1) == [["q1"]])
     }
 }

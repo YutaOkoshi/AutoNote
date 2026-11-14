@@ -34,6 +34,8 @@ public struct AppPaths: Sendable, Equatable {
     public var vaultStateDirectory: URL { root.appending(path: "vault-state", directoryHint: .isDirectory) }
     public var modelsDirectory: URL { root.appending(path: "models", directoryHint: .isDirectory) }
     public var socketFile: URL { root.appending(path: "autonote.sock") }
+    /// The questions written before a recording starts (moved into the meeting's `questions.json` on start).
+    public var pendingQuestionsFile: URL { root.appending(path: "pending-questions.json") }
 
     public func meetingDirectory(_ id: MeetingID) -> URL {
         recordingsDirectory.appending(path: id.rawValue, directoryHint: .isDirectory)
@@ -48,6 +50,8 @@ public struct AppPaths: Sendable, Equatable {
     }
     public func minutesFile(_ id: MeetingID) -> URL { transcriptsDirectory(id).appending(path: "minutes.json") }
     public func liveSummaryFile(_ id: MeetingID) -> URL { transcriptsDirectory(id).appending(path: "live-summary.json") }
+    /// The person's questions for the meeting, next to `live-summary.json` (a separate file so neither write undoes the other).
+    public func questionsFile(_ id: MeetingID) -> URL { transcriptsDirectory(id).appending(path: "questions.json") }
     public func vaultStateFile(_ id: MeetingID) -> URL { vaultStateDirectory.appending(path: "\(id.rawValue).json") }
 
     public func createBaseDirectories() throws {
