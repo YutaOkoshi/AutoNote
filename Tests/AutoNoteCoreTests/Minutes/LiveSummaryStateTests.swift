@@ -54,6 +54,18 @@ import AutoNoteTestSupport
         #expect(encoded["asked_question_ids"] as? [String] == ["q1", "q2"])
     }
 
+    /// A speaker label is not an owner (the side already says which side): 自分 / 相手 / 不明 and the side values drop to nil.
+    @Test func applyingDropsSpeakerLabelOwners() {
+        let labels = ["自分", "相手", "不明", "self", "other", "unknown", "me", " 相手 ", "Self"]
+        let out = LiveSummaryOutput(now: "x", decisions: [],
+                                    todos: labels.enumerated().map { .init(text: "t\($0.offset)", owner: $0.element, side: .other) }
+                                        + [.init(text: "名前あり", owner: "佐藤", side: .other),
+                                           .init(text: "役割名", owner: "広報担当", side: .me)])
+        let s = LiveSummaryState.empty.applying(out, consumedThrough: 1, at: Samples.start)
+        #expect(s.todos.prefix(labels.count).allSatisfy { $0.owner == nil })
+        #expect(s.todos.suffix(2).map(\.owner) == ["佐藤", "広報担当"])
+    }
+
     @Test func applyingKeepsTheSide() {
         let out = LiveSummaryOutput(now: "x", decisions: [],
                                     todos: [.init(text: " 送る ", owner: nil, side: .other), .init(text: "送る", owner: nil, side: .me)])

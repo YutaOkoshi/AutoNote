@@ -95,7 +95,7 @@ public struct LiveSummaryState: Codable, Equatable, Sendable {
         let todos = output.todos.compactMap { t -> LiveSummaryTodo? in
             let text = Self.trim(t.text)
             guard !text.isEmpty, seenTodos.insert(text).inserted else { return nil }
-            let owner = t.owner.map(Self.trim).flatMap { $0.isEmpty ? nil : $0 }
+            let owner = t.owner.map(Self.trim).flatMap { $0.isEmpty || Self.isSpeakerLabel($0) ? nil : $0 }
             return LiveSummaryTodo(text: text, owner: owner, side: t.side)
         }
         return LiveSummaryState(now: String(Self.trim(output.now).prefix(Self.nowLimit)),
@@ -106,6 +106,12 @@ public struct LiveSummaryState: Codable, Equatable, Sendable {
     }
 
     private static func trim(_ s: String) -> String { s.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// 自分 / 相手 / 不明 (the transcript's speaker labels) and the side values: never an owner (`side` says the side).
+    static let speakerLabels: Set<String> = Set(
+        [Speaker.me, .other, .unknown].map(\.displayName) + LiveTodoSide.allCases.map(\.rawValue) + ["me"])
+
+    static func isSpeakerLabel(_ owner: String) -> Bool { speakerLabels.contains(owner.lowercased()) }
 }
 
 /// Reads and writes `transcripts/<id>/live-summary.json`.
