@@ -23,6 +23,7 @@ struct CompletedDetailView: View {
     @State private var transcript: [LiveLine] = []
     @State private var utterances: [Utterance] = []
     @State private var tab: DetailTab = .summary
+    @State private var translation = MeetingTranslation.empty
     /// The transcript line a summary row's time asked for; the 文字起こし tab scrolls to it and highlights it.
     @State private var jump: TranscriptJump?
     @State private var renameFile = false
@@ -68,6 +69,12 @@ struct CompletedDetailView: View {
             }
         }
         .task(id: row.id) { await load() }
+        .task(id: TranslationLoadKey(id: row.id, revision: model.translationRevisions[id] ?? 0)) {
+            translation = .empty
+            let loaded = await env.ports.translation.meetingTranslation(id)
+            guard !Task.isCancelled else { return }
+            translation = loaded
+        }
         .onAppear { unsaved.register(guardToken, isDirty: { isDirty }) { await confirmLeave() } }
         .onDisappear { unsaved.unregister(guardToken) }
         // 「保存しました」 is about the saved state only.
@@ -120,8 +127,13 @@ struct CompletedDetailView: View {
                         }
                     }
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("文字起こし（確定版）").font(.headline)
-                        TranscriptList(lines: transcript, highlighted: jump?.index)
+                        HStack(spacing: 12) {
+                            Text("文字起こし（確定版）").font(.headline)
+                            TranslationControls(model: model, id: id, translation: translation)
+                        }
+                        TranscriptList(lines: transcript, highlighted: jump?.index,
+                                       translations: TranslationPresentation.finalTranslations(
+                                           transcript, translation, shown: model.translationShown))
                     }
                 }
                 .padding(16)
@@ -303,8 +315,10 @@ struct MinutesMissingView: View {
     @State private var transcript: [LiveLine] = []
     /// The stored live summary, kept read-only after the stop.
     @State private var stored: LiveSummaryState?
+    @State private var translation = MeetingTranslation.empty
 
     var body: some View {
+        let id = MeetingID(rawValue: row.id)
         VStack(spacing: 0) {
             FailureBand(env: env, model: model, shell: shell, row: row, item: queueItem)
             StoredLiveSummary(model: model, id: MeetingID(rawValue: row.id), stored: stored)
@@ -316,9 +330,20 @@ struct MinutesMissingView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
+                TranslationControls(model: model, id: id, translation: translation)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
                 Divider()
-                LiveTranscriptView(lines: transcript, follows: false)
+                LiveTranscriptView(lines: transcript, follows: false,
+                                   translations: TranslationPresentation.finalTranslations(
+                                       transcript, translation, shown: model.translationShown))
             }
+        }
+        .task(id: TranslationLoadKey(id: row.id, revision: model.translationRevisions[id] ?? 0)) {
+            translation = .empty
+            let loaded = await env.ports.translation.meetingTranslation(id)
+            guard !Task.isCancelled else { return }
+            translation = loaded
         }
         .task(id: row.id) {
             let id = MeetingID(rawValue: row.id)
@@ -348,6 +373,7 @@ struct TranscriptJump: Equatable {
 private struct TranscriptList: View {
     let lines: [LiveLine]
     var highlighted: Int?
+    var translations: [String?] = []
 
     static func rowID(_ index: Int) -> String { "transcript.\(index)" }
 
@@ -357,7 +383,7 @@ private struct TranscriptList: View {
         } else {
             LazyVStack(alignment: .leading, spacing: 6) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                    TranscriptLineView(line: line)
+                    TranscriptLineView(line: line, translation: translations.indices.contains(index) ? translations[index] : nil)
                         .padding(.horizontal, 4)
                         .background(RoundedRectangle(cornerRadius: 4)
                             .fill(index == highlighted ? Color.accentColor.opacity(0.18) : Color.clear))

@@ -7,6 +7,8 @@ import SwiftUI
 struct LiveTranscriptView: View {
     let lines: [LiveLine]
     var follows = true
+    /// The translation under each line (index-aligned with `lines`; shorter or empty means none).
+    var translations: [String?] = []
 
     @State private var position = ScrollPosition(edge: .bottom)
     @State private var following = true
@@ -17,8 +19,8 @@ struct LiveTranscriptView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    TranscriptLineView(line: line)
+                ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                    TranscriptLineView(line: line, translation: translations.indices.contains(index) ? translations[index] : nil)
                 }
             }
             .padding(12)
@@ -78,8 +80,12 @@ private struct ScrollState: Equatable {
     var atBottom: Bool
 }
 
+/// One transcript line. With a translation, the original shrinks to caption size in the secondary colour and the
+/// translation takes the body size underneath it (time and speaker stay at the start of the line); without one the
+/// line is exactly as before.
 struct TranscriptLineView: View {
     let line: LiveLine
+    var translation: String?
 
     var body: some View {
         switch line {
@@ -91,9 +97,21 @@ struct TranscriptLineView: View {
                 Text(u.speaker.displayName)
                     .font(.caption.bold())
                     .frame(width: 36, alignment: .leading)
-                Text(u.text)
-                    .foregroundStyle(u.isFinal ? .primary : .secondary)
+                if let translation {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(u.text)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(translation)
+                    }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(TranslationPresentation.accessibilityLabel(original: u.text, translation: translation))
+                } else {
+                    Text(u.text)
+                        .foregroundStyle(u.isFinal ? .primary : .secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         case .marker(let u):
             HStack(spacing: 6) {

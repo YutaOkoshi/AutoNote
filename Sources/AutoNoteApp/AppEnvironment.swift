@@ -24,6 +24,14 @@ final class AppEnvironment {
     let live: LiveTranscriptionWiring
     /// The live summary of each recording, fed by `live.confirmedFeeds()` (`runLiveSummary()`).
     let liveSummary: LiveSummaryScheduler
+    /// The post-recording translation and the port the window uses (spec: transcript translation).
+    let translation: TranslationService
+    /// The translation while recording, fed by `live.confirmedFeeds()` (`runTranslation()`).
+    let liveTranslation: LiveTranslator
+    /// Translation model downloads (refused before the license is accepted).
+    let translationModels: TranslationModelInstaller
+    /// False while this build has no on-device runtime (`TranslationRuntimeFactory`).
+    let translationRuntimeAvailable: Bool
     let crashRecovery: CrashRecovery
     let catalog: EngineCatalog
     let models: ModelManager
@@ -57,7 +65,9 @@ final class AppEnvironment {
     private init(environment: [String: String], paths: AppPaths, settings: SettingsStore, manifests: ManifestStore,
                  output: OutputFolderServices, session: RecordingSession, coordinator: AutoRecordCoordinator,
                  registry: DeviceRegistry, monitor: DeviceMonitor, queue: QueueHolder, wiring: AppWiring,
-                 live: LiveTranscriptionWiring, liveSummary: LiveSummaryScheduler, crashRecovery: CrashRecovery,
+                 live: LiveTranscriptionWiring, liveSummary: LiveSummaryScheduler, translation: TranslationService,
+                 liveTranslation: LiveTranslator, translationModels: TranslationModelInstaller,
+                 translationRuntimeAvailable: Bool, crashRecovery: CrashRecovery,
                  catalog: EngineCatalog, models: ModelManager,
                  automationsFile: AutomationsFile, retention: Retention, retentionScheduler: RetentionScheduler,
                  ports: AppPorts, readiness: LiveReadinessPort, model: AppModel, notifier: SystemUserNotifier,
@@ -75,6 +85,10 @@ final class AppEnvironment {
         self.wiring = wiring
         self.live = live
         self.liveSummary = liveSummary
+        self.translation = translation
+        self.liveTranslation = liveTranslation
+        self.translationModels = translationModels
+        self.translationRuntimeAvailable = translationRuntimeAvailable
         self.crashRecovery = crashRecovery
         self.catalog = catalog
         self.models = models
@@ -180,6 +194,30 @@ final class AppEnvironment {
             questions: { await questions.pendingForModel($0) },
             markAsked: { id, ids in await questions.markAskedByModel(ids, in: id) }))
 
+        // 8c. Translation (on-device only). The real runtime comes from `TranslationRuntimeFactory`, the one place
+        // it is plugged in; without it every translation fails cleanly and the meeting screens offer nothing.
+        let onDevice = TranslationRuntimeFactory.makeOnDevice()
+        let translationModels = TranslationModelInstaller(
+            manager: TranslationModelManager(paths: paths),
+            settings: { (try? await settings.load()) ?? AutoNoteCore.Settings() })
+        let translationDeps = TranslationDependencies(
+            settings: { (try? await settings.load()) ?? AutoNoteCore.Settings() },
+            saveShown: { shown in
+                do {
+                    _ = try await settings.change { $0.translationShown = shown }
+                } catch {
+                    logger.error("translation_shown not saved (\(String(describing: type(of: error)), privacy: .public))")
+                }
+            },
+            store: TranslationStore(paths: paths),
+            runtime: TranslationRuntime(completer: onDevice ?? UnavailableTextCompleter()),
+            runtimeAvailable: onDevice != nil,
+            installedModel: { await translationModels.fileURL($0) },
+            profile: MachineProfile.current())
+        let translationBroadcaster = TranslationBroadcaster()
+        let translation = TranslationService(translationDeps, broadcaster: translationBroadcaster)
+        let liveTranslation = LiveTranslator(translationDeps, broadcaster: translationBroadcaster)
+
         // 9. App-wide wiring. A queue-input change re-registers the stages on the same queue (ruling X19).
         let trigger = RecordingAutomationTrigger(dispatcher: dispatcher, manifests: manifests)
         let wiring = AppWiring(
@@ -217,7 +255,8 @@ final class AppEnvironment {
             opener: WorkspaceOpener(),
             readiness: readiness,
             liveSummary: liveSummary,
-            questions: questions)
+            questions: questions,
+            translation: translation)
         let model = AppModel(ports: ports)
         model.withdrawNotice = { [notifier] id in await notifier.withdraw(id: id) }
         routing.model = model
@@ -230,7 +269,9 @@ final class AppEnvironment {
         return AppEnvironment(
             environment: environment, paths: paths, settings: settings, manifests: manifests, output: output,
             session: session, coordinator: coordinator, registry: registry, monitor: monitor, queue: queue,
-            wiring: wiring, live: live, liveSummary: liveSummary, crashRecovery: crashRecovery, catalog: catalog,
+            wiring: wiring, live: live, liveSummary: liveSummary, translation: translation,
+            liveTranslation: liveTranslation, translationModels: translationModels,
+            translationRuntimeAvailable: onDevice != nil, crashRecovery: crashRecovery, catalog: catalog,
             models: models,
             automationsFile: automationsFile, retention: retention, retentionScheduler: retentionScheduler,
             ports: ports, readiness: readiness, model: model, notifier: notifier, server: server, routing: routing)
@@ -253,6 +294,7 @@ final class AppEnvironment {
         await model.refresh()
         model.shortcuts = new.shortcuts
         model.liveSummaryEnabled = new.liveSummaryEnabled
+        model.translationShown = new.translationShown
         let hotKeys = shortcutsChanged(new.shortcuts)
         let loginItem = reconcileLoginItem(launchAtLogin: new.launchAtLogin)
         logger.notice("settings save applied: hot keys re-registered (\(hotKeys.count, privacy: .public)), login item \(String(describing: loginItem), privacy: .public)")
@@ -273,6 +315,18 @@ final class AppEnvironment {
     /// Launch item 2: one live summary session per recording, until the app quits (AppDelegate cancels it).
     func runLiveSummary() async {
         await liveSummary.run(feeds: await live.confirmedFeeds())
+    }
+
+    /// Launch item 2: the live translation of each recording, the post-recording translation following the queue,
+    /// and the pause while recording. Never on the recording's or the queue's path (they are only observed).
+    func runTranslation() async {
+        let translation = translation, liveTranslation = liveTranslation, live = live, ports = ports
+        let activity = RecordingSessionActivity(session: session)
+        await withDiscardingTaskGroup { group in
+            group.addTask { await liveTranslation.run(feeds: await live.confirmedFeeds()) }
+            group.addTask { await translation.follow(queue: await ports.queue.updates()) }
+            group.addTask { await translation.follow(recording: await activity.isRecordingUpdates()) }
+        }
     }
 
     // MARK: - Notice loops (launch item 2)

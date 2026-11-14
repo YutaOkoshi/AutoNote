@@ -9,6 +9,10 @@ public enum UserAction: Equatable, Sendable {
     case merge([MeetingID])
     /// A change to the questions to ask (the draft or a meeting's).
     case editQuestion(LiveQuestionEdit, in: LiveQuestionScope)
+    /// 「翻訳する」 / 「訳し直す」 / 「再試行」 of a meeting's transcript.
+    case translate(MeetingID)
+    /// The 「訳文」 switch (app-wide, saved in the settings).
+    case setTranslationShown(Bool)
 }
 
 /// Everything the menu bar and the window show, gathered from the app's ports.
@@ -68,6 +72,16 @@ public enum UserAction: Equatable, Sendable {
     /// `UserNotifier.withdraw(id:)`), so Notification Center keeps no stale buttons.
     /// True while the window's minutes editor holds unsaved edits (the app wires it to the editor). A stop does not
     /// move the selection away from them.
+    /// Each meeting's post-recording translation job while one runs or failed (`TranslationPort.updates()`).
+    public private(set) var translationJobs: [MeetingID: TranslationJobState] = [:]
+    /// Grows with each finished translation of a meeting, so its views re-read the stored translation.
+    public private(set) var translationRevisions: [MeetingID: Int] = [:]
+    /// The recording meeting's live translations by `TranslationKey.live`; cleared when a recording starts.
+    public private(set) var liveTranslations: [String: LiveTranslatedLine] = [:]
+    /// Whether the meeting screens may offer 「翻訳する」 (re-read with `refresh()`).
+    public private(set) var translationAvailability: TranslationAvailability = .runtimeUnavailable
+    /// The 「訳文」 switch. The app sets it at launch and after a settings save; `.setTranslationShown` changes it.
+    public var translationShown = true
     @ObservationIgnored public var hasUnsavedEdits: @MainActor () -> Bool = { false }
     @ObservationIgnored public var withdrawNotice: (@MainActor (String) async -> Void)?
 
@@ -81,7 +95,7 @@ public enum UserAction: Equatable, Sendable {
     @ObservationIgnored private var levelTracker = InputLevelTracker()
     @ObservationIgnored private let bandDuration: Duration
 
-    private static let streamCount = 8
+    private static let streamCount = 9
     private static let refreshInterval: Duration = .seconds(30)
     private static let tickInterval: Duration = .seconds(1)
 
@@ -102,6 +116,7 @@ public enum UserAction: Equatable, Sendable {
         queueKey = Self.key(queue)
         syncOverwritePrompts()
         readiness = await ports.readiness.current()
+        translationAvailability = await ports.translation.availability()
         await refreshRows()
         await loadQuestions(.draft)
 
@@ -115,6 +130,7 @@ public enum UserAction: Equatable, Sendable {
             group.addTask { await self.consume(await ports.readiness.updates()) { await self.applyModel($0) } }
             group.addTask { await self.consume(await ports.liveSummary.updates()) { await self.applyLiveSummary($0) } }
             group.addTask { await self.consume(await ports.questions.updates()) { await self.applyQuestions($0) } }
+            group.addTask { await self.consume(await ports.translation.updates()) { await self.applyTranslation($0) } }
             group.addTask { await self.every(Self.refreshInterval) { await self.refresh() } }
             group.addTask { await self.every(Self.tickInterval) { await self.updateElapsed() } }
         }
@@ -125,6 +141,7 @@ public enum UserAction: Equatable, Sendable {
     public func refresh() async {
         let fresh = await ports.readiness.current()
         readiness = Readiness(outputFolder: fresh.outputFolder, model: readiness.model, claude: fresh.claude, fit: fresh.fit)
+        translationAvailability = await ports.translation.availability()
         await refreshRows()
     }
 
@@ -277,6 +294,11 @@ public enum UserAction: Equatable, Sendable {
         case .editQuestion(let edit, let scope):
             // The change comes back through `updates()` in order with the live summary's marks.
             await ports.questions.apply(edit, to: scope)
+        case .translate(let id):
+            try await ports.translation.translate(id)
+        case .setTranslationShown(let shown):
+            translationShown = shown
+            await ports.translation.setShown(shown)
         }
     }
 
@@ -404,6 +426,7 @@ public enum UserAction: Equatable, Sendable {
         switch e {
         case .started(let id):
             live.reset()
+            liveTranslations = [:]
             diskWarning = nil
             levelTracker = InputLevelTracker()
             recordedThisSession.insert(id)
@@ -453,6 +476,18 @@ public enum UserAction: Equatable, Sendable {
     private func applyLive(_ snapshot: [Utterance]) { live.update(snapshot) }
 
     private func applyQuestions(_ u: LiveQuestionsUpdate) { questionLists[u.scope] = u.items }
+
+    private func applyTranslation(_ u: TranslationUpdate) {
+        switch u {
+        case .job(let id, let state, let revision):
+            translationJobs[id] = state
+            if translationRevisions[id] != revision { translationRevisions[id] = revision }
+        case .live(let id, let line):
+            // Only the recording meeting's lines are kept (a late line of an earlier meeting is dropped).
+            guard recorder.meetingID == id else { return }
+            liveTranslations[line.key] = line
+        }
+    }
 
     /// Kept per meeting: a late update of an earlier meeting never reaches the recording one's age line.
     private func applyLiveSummary(_ u: LiveSummaryUpdate) {

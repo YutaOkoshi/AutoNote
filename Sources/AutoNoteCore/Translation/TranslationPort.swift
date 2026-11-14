@@ -38,12 +38,15 @@ public struct MeetingTranslation: Equatable, Sendable {
     public var byIndex: [Int: TranslatedUtterance]
     /// The translations made while recording, by `TranslationKey.live`.
     public var live: [String: LiveTranslatedLine]
+    /// Whether the meeting has a final transcript (what 「翻訳する」 translates).
+    public var hasTranscript: Bool
 
     public init(status: TranslationStatus = .none, byIndex: [Int: TranslatedUtterance] = [:],
-                live: [String: LiveTranslatedLine] = [:]) {
+                live: [String: LiveTranslatedLine] = [:], hasTranscript: Bool = false) {
         self.status = status
         self.byIndex = byIndex
         self.live = live
+        self.hasTranscript = hasTranscript
     }
 
     public static let empty = MeetingTranslation()
@@ -60,7 +63,7 @@ public struct MeetingTranslation: Equatable, Sendable {
             }
         }
         let lines = Dictionary((live?.lines ?? []).map { ($0.key, $0) }, uniquingKeysWith: { _, new in new })
-        return MeetingTranslation(status: status, byIndex: byIndex, live: lines)
+        return MeetingTranslation(status: status, byIndex: byIndex, live: lines, hasTranscript: transcript != nil)
     }
 }
 
