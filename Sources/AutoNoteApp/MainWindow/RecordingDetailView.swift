@@ -1,9 +1,12 @@
 import AutoNoteCore
 import SwiftUI
 
-/// While recording: stop, pause / resume, bookmark, the language, and the live transcript.
+/// While recording: stop, pause / resume, bookmark, the language, then the transcript (left) and the live summary
+/// (right). With summaries on, the summary pane shows from the start; too narrow for two columns, it sits above
+/// the transcript. With summaries off, only the questions show, small, above the transcript.
 struct RecordingDetailView: View {
     let model: AppModel
+    @State private var width: Double = 0
 
     var body: some View {
         let r = model.recorder
@@ -29,11 +32,72 @@ struct RecordingDetailView: View {
             .disabled(!active)
             .padding(12)
             Divider()
-            if let update = r.meetingID.flatMap(model.liveSummary(for:)),
-               let card = LiveSummaryPresentation.card(state: update.state, status: update.status,
-                                                       updated: model.liveSummaryUpdatedText) {
-                LiveSummaryCard(content: card)
+            columns
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onGeometryChange(for: Double.self) { Double($0.size.width) } action: { width = $0 }
+        }
+        .task(id: r.meetingID) {
+            if let id = r.meetingID { await model.loadQuestions(.meeting(id)) }
+        }
+    }
+
+    @ViewBuilder private var columns: some View {
+        let id = model.recorder.meetingID
+        let update = id.flatMap(model.liveSummary(for:))
+        let questions = id.map { model.questions(.meeting($0)) } ?? []
+        switch LiveSummaryPresentation.recordingMode(liveSummaryEnabled: model.liveSummaryEnabled,
+                                                     hasResult: update?.state != nil) {
+        case .sidePane:
+            let content = LiveSummaryPresentation.pane(state: update?.state, status: update?.status ?? .active,
+                                                       updated: model.liveSummaryUpdatedText, questions: questions)
+            switch LiveSummaryLayout.arrangement(width: width) {
+            case .sideBySide(let paneWidth):
+                HStack(spacing: 0) {
+                    transcriptPane
+                    Divider()
+                    LiveSummaryPane(content: content, onEdit: edit(id))
+                        .frame(width: paneWidth)
+                }
+            case .stacked:
+                VStack(spacing: 0) {
+                    LiveSummaryPane(content: content, onEdit: edit(id))
+                        .frame(maxHeight: LiveSummaryLayout.stackedMaxHeight)
+                    Divider()
+                    transcriptPane
+                }
             }
+        case .questionsOnly:
+            VStack(spacing: 0) {
+                if let id {
+                    CappedScrollView(maxHeight: LiveSummaryLayout.stackedMaxHeight) {
+                        QuestionsPanel(title: LiveSummarySection.questions.title,
+                                       content: LiveSummaryPresentation.questionsOnly(questions)) { e in
+                            Task { await model.perform(.editQuestion(e, in: .meeting(id))) }
+                        }
+                        .padding(12)
+                    }
+                    Divider()
+                }
+                transcriptPane
+            }
+        }
+    }
+
+    /// 「💬 文字起こし」 with the recognition state at the right end, over the transcript.
+    private var transcriptPane: some View {
+        VStack(spacing: 0) {
+            PaneHeader(symbol: "bubble.left.and.text.bubble.right", title: LiveSummaryPresentation.transcriptTitle) {
+                if let status = LiveSummaryPresentation.transcriptStatus(model.recorder.state) {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(model.recorder.state == .recording ? Color.accentColor : Color.secondary)
+                            .frame(width: 7, height: 7)
+                            .accessibilityHidden(true)
+                        Text(status).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Divider()
             if model.live.lines.isEmpty {
                 Text("聞き取り中…")
                     .foregroundStyle(.secondary)
@@ -42,6 +106,13 @@ struct RecordingDetailView: View {
                 LiveTranscriptView(lines: model.live.lines)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The questions' actions, once the recording has its meeting (none while 開始中…).
+    private func edit(_ id: MeetingID?) -> ((LiveQuestionEdit) -> Void)? {
+        guard let id else { return nil }
+        return { e in Task { await model.perform(.editQuestion(e, in: .meeting(id))) } }
     }
 
     private func run(_ action: UserAction) {

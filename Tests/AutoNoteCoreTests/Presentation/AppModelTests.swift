@@ -695,6 +695,68 @@ import AutoNoteTestSupport
         #expect(model.liveSummary(for: a) == later)
     }
 
+
+    // MARK: - Questions to ask
+
+    private func repo(_ initial: [LiveQuestionScope: LiveQuestionList] = [:]) -> LiveQuestionsRepository {
+        let n = Mutex(0)
+        return LiveQuestionsRepository(storage: InMemoryLiveQuestionsStorage(initial),
+                                       makeID: { "q" + String(n.withLock { $0 += 1; return $0 }) })
+    }
+
+    @Test func draftIsLoadedAtLaunchAndEditedThroughActions() async {
+        let questions = repo([.draft: LiveQuestionList(items: [LiveQuestion(id: "d1", text: "前から書いてあった問い")])])
+        let fakes = FakePorts(questions: questions)
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        #expect(model.questions(.draft).map(\.text) == ["前から書いてあった問い"])
+        await model.perform(.editQuestion(.add("会場のキャパシティ"), in: .draft))
+        #expect(model.questions(.draft).map(\.text) == ["前から書いてあった問い", "会場のキャパシティ"])
+        await model.perform(.editQuestion(.setAsked(id: "d1", true), in: .draft))
+        #expect(model.questions(.draft).first?.askedBy == .user)
+        #expect(await questions.list(.draft).count == 2)      // saved, not only shown
+        #expect(model.lastError == nil)
+    }
+
+    /// The live summary's marks (and the draft moving into a recording) arrive through the repository's updates.
+    @Test func repositoryChangesReachTheModel() async {
+        let questions = repo()
+        let fakes = FakePorts(questions: questions)
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        await model.perform(.editQuestion(.add("録画の公開範囲"), in: .draft))
+        await questions.adoptDraft(into: m1)
+        await waitUntil { model.questions(.meeting(m1)).count == 1 && model.questions(.draft).isEmpty }
+        #expect(model.questions(.meeting(m1)).map(\.id) == ["q1"])
+        #expect(model.questions(.draft).isEmpty)
+        await questions.markAskedByModel(["q1"], in: m1)
+        await waitUntil { model.questions(.meeting(m1)).first?.asked == true }
+        #expect(model.questions(.meeting(m1)).first?.askedBy == .model)
+    }
+
+    /// A meeting's questions are read when a view asks for them (post-stop cards) or when its recording starts.
+    @Test func meetingQuestionsLoadOnDemandAndOnStart() async {
+        let other = MeetingID(rawValue: "20261024-1500-c3d4")
+        let questions = repo([.meeting(m1): LiveQuestionList(items: [LiveQuestion(id: "a", text: "一")]),
+                              .meeting(other): LiveQuestionList(items: [LiveQuestion(id: "b", text: "二")])])
+        let fakes = FakePorts(questions: questions)
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        #expect(model.questions(.meeting(m1)).isEmpty)
+        await model.loadQuestions(.meeting(m1))
+        #expect(model.questions(.meeting(m1)).map(\.id) == ["a"])
+        await fakes.events.send(.started(other))
+        await waitUntil { !model.questions(.meeting(other)).isEmpty }
+        #expect(model.questions(.meeting(other)).map(\.id) == ["b"])
+    }
+
+    @Test func liveSummaryEnabledIsSetByTheApp() async {
+        let (model, task) = await start(FakePorts())
+        defer { task.cancel() }
+        #expect(!model.liveSummaryEnabled)
+        model.liveSummaryEnabled = true
+        #expect(model.liveSummaryEnabled)
+    }
 }
 
 /// A wall clock the test moves forward by hand.

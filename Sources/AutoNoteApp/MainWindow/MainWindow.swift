@@ -81,6 +81,8 @@ private struct MainWindowContent: View {
     @State private var multiSelection: Set<String> = []
     @State private var mergeRequest: MergeRequest?
     @State private var mergeFailure: String?
+    /// The questions draft's popover (the toolbar button shown while not recording).
+    @State private var showDraft = false
 
     /// A single selection is the model's `selectedMeetingID` itself, so a notice tap that sets it while the window
     /// is already open moves the selection too. A change from the list first asks the open editor about unsaved
@@ -122,6 +124,9 @@ private struct MainWindowContent: View {
             ToolbarItemGroup(placement: .primaryAction) {
                 ForEach(Array(MainToolbar.actions(for: model.recorder.state).enumerated()), id: \.offset) { _, action in
                     recordButton(action)
+                }
+                if [.idle, .countdown].contains(model.recorder.state) {
+                    draftButton
                 }
                 Button("音声ファイルを取り込む…", systemImage: "square.and.arrow.down") { pickFile() }
                     .help("音声ファイルを取り込む…")
@@ -209,6 +214,21 @@ private struct MainWindowContent: View {
         } else {
             ContentUnavailableView("会議を選んでください", systemImage: "list.bullet.rectangle",
                                    description: Text("音声ファイルをここへドラッグすると取り込めます"))
+        }
+    }
+
+    /// 「聞きたいこと (n)」: the questions for the next meeting, written before it starts.
+    private var draftButton: some View {
+        let title = LiveSummaryPresentation.draftButton(count: model.questions(.draft).count)
+        return Button { showDraft.toggle() } label: {
+            Label(title, systemImage: LiveSummarySection.questions.symbol).labelStyle(.titleAndIcon)
+        }
+        .help(LiveSummaryPresentation.draftTitle)
+        .accessibilityLabel(title)
+        .popover(isPresented: $showDraft, arrowEdge: .bottom) {
+            QuestionsDraftPanel(model: model)
+                .frame(width: 380)
+                .padding(10)
         }
     }
 

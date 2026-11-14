@@ -3,7 +3,8 @@ import Foundation
 import SwiftUI
 
 /// The detail column when there are no meetings, nothing is selected and nothing is recording:
-/// how to record, how to import, what happens after stopping, and the readiness card at the bottom.
+/// how to record, how to import, what happens after stopping, the questions for the next meeting, and the
+/// readiness card at the bottom.
 struct EmptyStateView: View {
     let model: AppModel
     let shell: AppShell
@@ -30,6 +31,9 @@ struct EmptyStateView: View {
             .multilineTextAlignment(.center)
             .padding(.horizontal, 24)
             Spacer()
+            QuestionsDraftPanel(model: model)
+                .frame(maxWidth: 560)
+                .padding(.horizontal, 16)
             ReadinessCard(model: model, shell: shell)
                 .padding(16)
         }

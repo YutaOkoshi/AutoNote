@@ -132,6 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let s = (try? await env.settings.load()) ?? AutoNoteCore.Settings()
         model.shortcuts = s.shortcuts
+        model.liveSummaryEnabled = s.liveSummaryEnabled
 
         // 4. On the very first run, the main window, so it lands somewhere to start from (later launches open nothing);
         // 5. then the microphone prompt while undetermined (the recorder itself never asks).

@@ -252,6 +252,7 @@ final class AppEnvironment {
         // folder and saw the warning stay. Re-read it now so the save is visibly effective.
         await model.refresh()
         model.shortcuts = new.shortcuts
+        model.liveSummaryEnabled = new.liveSummaryEnabled
         let hotKeys = shortcutsChanged(new.shortcuts)
         let loginItem = reconcileLoginItem(launchAtLogin: new.launchAtLogin)
         logger.notice("settings save applied: hot keys re-registered (\(hotKeys.count, privacy: .public)), login item \(String(describing: loginItem), privacy: .public)")
