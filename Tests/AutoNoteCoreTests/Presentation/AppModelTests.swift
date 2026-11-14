@@ -711,8 +711,10 @@ import AutoNoteTestSupport
         defer { task.cancel() }
         #expect(model.questions(.draft).map(\.text) == ["前から書いてあった問い"])
         await model.perform(.editQuestion(.add("会場のキャパシティ"), in: .draft))
+        await waitUntil { model.questions(.draft).count == 2 }
         #expect(model.questions(.draft).map(\.text) == ["前から書いてあった問い", "会場のキャパシティ"])
         await model.perform(.editQuestion(.setAsked(id: "d1", true), in: .draft))
+        await waitUntil { model.questions(.draft).first?.askedBy == .user }
         #expect(model.questions(.draft).first?.askedBy == .user)
         #expect(await questions.list(.draft).count == 2)      // saved, not only shown
         #expect(model.lastError == nil)
@@ -725,6 +727,7 @@ import AutoNoteTestSupport
         let (model, task) = await start(fakes)
         defer { task.cancel() }
         await model.perform(.editQuestion(.add("録画の公開範囲"), in: .draft))
+        await waitUntil { model.questions(.draft).count == 1 }
         await questions.adoptDraft(into: m1)
         await waitUntil { model.questions(.meeting(m1)).count == 1 && model.questions(.draft).isEmpty }
         #expect(model.questions(.meeting(m1)).map(\.id) == ["q1"])
@@ -748,6 +751,18 @@ import AutoNoteTestSupport
         await fakes.events.send(.started(other))
         await waitUntil { !model.questions(.meeting(other)).isEmpty }
         #expect(model.questions(.meeting(other)).map(\.id) == ["b"])
+    }
+
+    /// The updates are what the model shows: a read that finishes after a newer update never puts the older list back.
+    @Test func aLateReadDoesNotOverwriteANewerUpdate() async {
+        let questions = repo([.meeting(m1): LiveQuestionList(items: [LiveQuestion(id: "a", text: "一")])])
+        let fakes = FakePorts(questions: questions)
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        await questions.markAskedByModel(["a"], in: m1)
+        await waitUntil { model.questions(.meeting(m1)).first?.asked == true }
+        await model.loadQuestions(.meeting(m1))      // already current: kept
+        #expect(model.questions(.meeting(m1)).first?.askedBy == .model)
     }
 
     @Test func liveSummaryEnabledIsSetByTheApp() async {

@@ -204,9 +204,12 @@ public enum UserAction: Equatable, Sendable {
     /// The questions of `scope` as last read; empty until loaded.
     public func questions(_ scope: LiveQuestionScope) -> [LiveQuestion] { questionLists[scope] ?? [] }
 
-    /// Reads `scope`'s questions (a view showing a meeting calls this; updates keep it current afterwards).
+    /// Reads `scope`'s questions once (a view showing a meeting, a recording start). After that the repository's
+    /// updates keep it current, so a read is never put over a list an update already set (it could be older).
     public func loadQuestions(_ scope: LiveQuestionScope) async {
-        questionLists[scope] = await ports.questions.list(scope)
+        guard questionLists[scope] == nil else { return }
+        let items = await ports.questions.list(scope)
+        if questionLists[scope] == nil { questionLists[scope] = items }
     }
 
     public func quitDecision(reason: QuitReason) -> QuitDecision { QuitPolicy.decide(recorder.state, reason: reason) }
@@ -272,7 +275,8 @@ public enum UserAction: Equatable, Sendable {
         case .retryModelDownload: await ports.readiness.retryModelDownload()
         case .installGuide: await ports.readiness.installGuide()
         case .editQuestion(let edit, let scope):
-            questionLists[scope] = await ports.questions.apply(edit, to: scope)
+            // The change comes back through `updates()` in order with the live summary's marks.
+            await ports.questions.apply(edit, to: scope)
         }
     }
 
