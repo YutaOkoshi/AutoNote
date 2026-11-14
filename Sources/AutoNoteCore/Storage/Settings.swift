@@ -59,6 +59,18 @@ public struct Settings: Codable, Equatable, Sendable {
     }
     /// Model for the live summary; never empty. JSON `live_summary_model`.
     public var liveSummaryModel: String = Settings.defaultLiveSummaryModel
+    /// When to translate transcripts on this Mac (off by default). JSON `translation_mode`.
+    public var translationMode: TranslationMode = .off
+    /// What to translate into. JSON `translation_target`.
+    public var translationTarget: TranslationTarget = .auto
+    /// `0.8b` / `2b` / `8b`; nil = this Mac's default (`TranslationModelPolicy.defaultModel`). JSON `translation_model`.
+    public var translationModel: String? = nil
+    /// The PLaMo Community License revision the person accepted (`TranslationLicense.version`); nil = not accepted,
+    /// and no translation model is downloaded or used. JSON `translation_license_version`.
+    public var translationLicenseVersion: String? = nil
+    /// Whether transcript lines show their translation under the original (the 「訳文」 switch, app-wide).
+    /// JSON `translation_shown`.
+    public var translationShown: Bool = true
 
     public static let liveSummaryIntervalRange: ClosedRange<Int> = 10...120
     public static let defaultLiveSummaryModel = "haiku"
@@ -133,6 +145,12 @@ public struct Settings: Codable, Equatable, Sendable {
             Self.liveSummaryIntervalRange.lowerBound, Self.liveSummaryIntervalRange.upperBound)
         let model = (try c.decodeIfPresent(String.self, forKey: .liveSummaryModel) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         liveSummaryModel = model.isEmpty ? Self.defaultLiveSummaryModel : model
+        // An unknown value (a newer or hand-edited file) falls back to the default instead of failing the whole file.
+        translationMode = (try? c.decodeIfPresent(TranslationMode.self, forKey: .translationMode)) ?? nil ?? .off
+        translationTarget = (try? c.decodeIfPresent(TranslationTarget.self, forKey: .translationTarget)) ?? nil ?? .auto
+        translationModel = try c.decodeIfPresent(String.self, forKey: .translationModel)
+        translationLicenseVersion = try c.decodeIfPresent(String.self, forKey: .translationLicenseVersion)
+        translationShown = try c.decodeIfPresent(Bool.self, forKey: .translationShown) ?? translationShown
         // Backward compatibility: settings written while the consent notice existed carry `consent_notice_shown`.
         // Either key being true means the first run is done; only `first_run_completed` is written.
         let legacy = try decoder.container(keyedBy: LegacyKeys.self)

@@ -18,23 +18,34 @@ private final class ProgressFanout: Sendable {
     }
 }
 
-public actor ModelManager {
+/// A model file the app downloads, checks by size and SHA-256, and keeps in one directory.
+public protocol DownloadableModel: Sendable {
+    var name: String { get }
+    var url: URL { get }
+    var sizeBytes: Int64 { get }
+    var sha256: String { get }
+    var fileName: String { get }
+}
+
+extension WhisperModel: DownloadableModel {}
+
+/// The whisper models' manager (the name every caller already uses).
+public typealias ModelManager = ModelFileManager<WhisperModel>
+
+public actor ModelFileManager<Model: DownloadableModel> {
     private let directory: URL
-    private let catalog: [WhisperModel]
+    private let catalog: [Model]
     private let downloader: any ModelDownloading
     private var inFlight: [String: (task: Task<URL, any Error>, fanout: ProgressFanout)] = [:]
 
-    public init(
-        directory: URL, catalog: [WhisperModel] = WhisperModelCatalog.all,
-        downloader: any ModelDownloading = URLSessionModelDownloader()
-    ) {
+    public init(directory: URL, catalog: [Model], downloader: any ModelDownloading = URLSessionModelDownloader()) {
         self.directory = directory
         self.catalog = catalog
         self.downloader = downloader
     }
 
     /// Models whose file exists with exactly the catalog size (no hashing: see `verify`).
-    public func installed() -> [WhisperModel] {
+    public func installed() -> [Model] {
         catalog.filter { isInstalled($0) }
     }
 
@@ -81,7 +92,7 @@ public actor ModelManager {
 
     // MARK: - Private
 
-    private func isInstalled(_ model: WhisperModel) -> Bool {
+    private func isInstalled(_ model: Model) -> Bool {
         let path = directory.appending(path: model.fileName).path
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
             let size = attrs[.size] as? NSNumber
@@ -90,7 +101,7 @@ public actor ModelManager {
     }
 
     private static func fetch(
-        _ model: WhisperModel, into directory: URL, using downloader: any ModelDownloading,
+        _ model: Model, into directory: URL, using downloader: any ModelDownloading,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws -> URL {
         let fm = FileManager.default
@@ -138,5 +149,11 @@ public actor ModelManager {
             }
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+extension ModelFileManager where Model == WhisperModel {
+    public init(directory: URL, downloader: any ModelDownloading = URLSessionModelDownloader()) {
+        self.init(directory: directory, catalog: WhisperModelCatalog.all, downloader: downloader)
     }
 }
