@@ -73,7 +73,7 @@ final class Collected<T: Sendable>: Sendable {
     }
 }
 
-func eventually(_ timeout: Duration = .seconds(2), _ condition: () async -> Bool) async -> Bool {
+func pollTranslation(_ timeout: Duration = .seconds(2), _ condition: () async -> Bool) async -> Bool {
     let deadline = ContinuousClock.now + timeout
     while ContinuousClock.now < deadline {
         if await condition() { return true }
@@ -119,7 +119,7 @@ func eventually(_ timeout: Duration = .seconds(2), _ condition: () async -> Bool
         let runtime = TranslationRuntime(completer: FakeTextCompleter())
         let gate = AsyncStream<Void>.makeStream()
         let holder = Task { try await runtime.withModel(URL(filePath: "/m")) { _ in for await _ in gate.stream {} } }
-        #expect(await eventually { await runtime.isHeld })
+        #expect(await pollTranslation { await runtime.isHeld })
         let waiter = Task { try await runtime.withModel(URL(filePath: "/m")) { _ in } }
         try await Task.sleep(for: .milliseconds(20))
         waiter.cancel()
@@ -182,7 +182,7 @@ func eventually(_ timeout: Duration = .seconds(2), _ condition: () async -> Bool
         #expect(fake.snapshot.prompts.isEmpty)   // still transcribing: nothing yet
 
         continuation.yield(queue([(f.id.rawValue, StageName.summarize, "running")]))
-        #expect(await eventually { f.store.load(f.id)?.complete == true })
+        #expect(await pollTranslation { f.store.load(f.id)?.complete == true })
         await service.waitForJob(f.id)
         let doc = try #require(f.store.load(f.id))
         #expect(doc.entries.count == 4 && doc.total == 4 && doc.model == "2b")
@@ -198,7 +198,7 @@ func eventually(_ timeout: Duration = .seconds(2), _ condition: () async -> Bool
         #expect(fake.snapshot.prompts.count == 4)
         continuation.finish()
         await follower.value
-        #expect(await eventually { updates.values.contains(.job(f.id, nil, revision: 1)) })
+        #expect(await pollTranslation { updates.values.contains(.job(f.id, nil, revision: 1)) })
         #expect(updates.values.contains { if case .job(_, .running(let p), _) = $0 { p == TranslationProgress(done: 4, total: 4) } else { false } })
         collector.cancel()
         #expect(await service.meetingTranslation(f.id).status == .complete)
@@ -302,7 +302,7 @@ func eventually(_ timeout: Duration = .seconds(2), _ condition: () async -> Bool
         let service = TranslationService(f.deps(fake))
         holder.withLock { $0 = service }
         try await service.translate(f.id)
-        #expect(await eventually {
+        #expect(await pollTranslation {
             if case .waitingForRecording(let p) = await service.state(f.id) { p.done == 2 } else { false }
         })
         #expect(fake.snapshot.prompts.count == 2)
@@ -331,7 +331,7 @@ func eventually(_ timeout: Duration = .seconds(2), _ condition: () async -> Bool
         let fake = FakeTextCompleter(hang: true)
         let service = TranslationService(f.deps(fake))
         try await service.translate(f.id)
-        #expect(await eventually { fake.snapshot.prompts.count == 1 })
+        #expect(await pollTranslation { fake.snapshot.prompts.count == 1 })
         await service.shutdown()
         #expect(await service.state(f.id) == nil)
         #expect(fake.snapshot.loaded == nil)

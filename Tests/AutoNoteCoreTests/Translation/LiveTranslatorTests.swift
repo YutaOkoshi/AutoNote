@@ -41,9 +41,9 @@ import Testing
         let a = utterance(0, "We moved the tenants.")
         let b = utterance(3, "残りはいつですか。", .me)
         lists.yield([a])
-        #expect(await eventually { fake.snapshot.prompts.count == 1 })
+        #expect(await pollTranslation { fake.snapshot.prompts.count == 1 })
         lists.yield([a, b, partial(6, "And the")])
-        #expect(await eventually { updates.values.count == 2 })
+        #expect(await pollTranslation { updates.values.count == 2 })
         lists.finish()
         await runner.value
         await translator.waitForSessions()
@@ -70,7 +70,7 @@ import Testing
         let (translator, continuation, updates, runner) = await start(f, fake)
         lists.withLock { $0 = continuation }
         continuation.yield([all[0]])
-        #expect(await eventually { updates.values.count >= 3 })
+        #expect(await pollTranslation { updates.values.count >= 3 })
         continuation.finish()
         await runner.value
         await translator.waitForSessions()
@@ -89,7 +89,7 @@ import Testing
         let (feeds, feedsContinuation) = AsyncStream<LiveConfirmedFeed>.makeStream()
         feedsContinuation.yield(LiveConfirmedFeed(meetingID: f.id, utterances: lists))
         let runner = Task { await translator.run(feeds: feeds) }
-        #expect(await eventually {
+        #expect(await pollTranslation {
             listContinuation.yield([utterances[0]])
             return fake.snapshot.prompts.count == 1
         })

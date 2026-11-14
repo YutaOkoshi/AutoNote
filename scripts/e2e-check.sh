@@ -1126,6 +1126,7 @@ CHECKS=(
     check_app_launch
     check_first_run_output_folder
     check_first_run_no_download
+    check_translation_default_off   # アプリが動いている間に見る（06.6 でアプリを止めるため）
     check_menu_no_folder_warning
     check_status_over_socket
     check_failure_message_compat
@@ -1161,7 +1162,6 @@ CHECKS=(
     check_dev_translate_shape
     check_dev_translate_fixed_target
     check_dev_translate_real_model
-    check_translation_default_off
 )
 
 ensure_whisper_xcframework   # 失敗しても続ける（swift test などの項目が FAIL を出す）
