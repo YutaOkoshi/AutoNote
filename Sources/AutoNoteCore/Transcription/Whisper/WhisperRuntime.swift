@@ -19,7 +19,7 @@ enum WhisperRuntime {
         whisper_lang_id(code)
     }
 
-    /// whisper / ggml のログを ERROR 以上だけ stderr に出すようにする（初回だけ効く）。
+    /// whisper / llama / ggml のログを ERROR 以上だけ stderr に出すようにする（初回だけ効く）。
     /// 既定では `ggml_metal_*` などの情報ログがテスト出力やコンソールに大量に出る。
     static func installQuietLogging() {
         _ = quietLoggingInstalled
@@ -27,6 +27,7 @@ enum WhisperRuntime {
 
     private static let quietLoggingInstalled: Bool = {
         whisper_log_set(quietLog, nil)
+        llama_log_set(quietLog, nil)   // 翻訳（Translation/Llama）。llama と whisper は同じ ggml を使う
         ggml_log_set(quietLog, nil)
         return true
     }()

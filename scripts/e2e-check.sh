@@ -112,8 +112,10 @@ cli_or_skip() {   # 項目の先頭で呼ぶ。使えなければ skip / fail �
 # whisper.cpp の XCFramework（Package.swift の binaryTarget、tools/ は git 管理外）が無ければ先に作る。
 # 項目 1 の swift test と AUTONOTE_CLI のビルドが新しい clone で失敗しないように。--quick はビルドしないので触らない
 ensure_whisper_xcframework() {
-    [[ "${QUICK}" -eq 1 || -f "${ROOT}/tools/whisper.xcframework/Info.plist" ]] && return 0
-    echo "tools/whisper.xcframework が無いので scripts/build-whisper-xcframework.sh で作る（数分かかる）"
+    [[ "${QUICK}" -eq 1 ]] && return 0
+    # 今の版（whisper.cpp と llama.cpp のコミット）で作成済みならスクリプトはすぐ終わる
+    [[ -f "${ROOT}/tools/whisper.xcframework/Info.plist" ]] \
+        || echo "tools/whisper.xcframework が無いので scripts/build-whisper-xcframework.sh で作る（数分かかる）"
     "${ROOT}/scripts/build-whisper-xcframework.sh" >"${WORK}/build-whisper-xcframework.log" 2>&1 && return 0
     echo "scripts/build-whisper-xcframework.sh が失敗（末尾 20 行）:" >&2
     tail -n 20 "${WORK}/build-whisper-xcframework.log" | sed 's/^/      | /' >&2
