@@ -20,19 +20,27 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
         public var save: @Sendable (MeetingID, LiveSummaryState) async -> Void
         public var log: @Sendable (String) -> Void
         public var clock: any QueueClock
+        /// The meeting's undecided questions, read right before each call (never while summaries are off).
+        public var questions: @Sendable (MeetingID) async -> [LiveQuestionPrompt]
+        /// The ids a successful call found answered (only ids that call sent), applied to the questions as they are now.
+        public var markAsked: @Sendable (MeetingID, [String]) async -> Void
 
         public init(settings: @Sendable @escaping () async -> Settings,
                     makeSummarizer: @Sendable @escaping (Settings) async throws -> any LiveSummarizer,
                     queueInRateLimitWait: @Sendable @escaping () async -> Bool,
                     save: @Sendable @escaping (MeetingID, LiveSummaryState) async -> Void,
                     log: @Sendable @escaping (String) -> Void,
-                    clock: any QueueClock) {
+                    clock: any QueueClock,
+                    questions: @Sendable @escaping (MeetingID) async -> [LiveQuestionPrompt] = { _ in [] },
+                    markAsked: @Sendable @escaping (MeetingID, [String]) async -> Void = { _, _ in }) {
             self.settings = settings
             self.makeSummarizer = makeSummarizer
             self.queueInRateLimitWait = queueInRateLimitWait
             self.save = save
             self.log = log
             self.clock = clock
+            self.questions = questions
+            self.markAsked = markAsked
         }
     }
 
@@ -64,7 +72,7 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
     }
 
     private enum Outcome: Sendable {
-        case success(LiveSummaryState)
+        case success(LiveSummaryStepResult)
         case failure(any Error)
     }
 
@@ -204,11 +212,12 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
         }
         guard let summarizer = await readySummarizer(id, settings) else { return (interval, false) }
         guard let current = sessions[id],
-              let request = LiveSummaryInputBuilder.request(previous: current.state ?? .empty, confirmed: current.confirmed,
+              var request = LiveSummaryInputBuilder.request(previous: current.state ?? .empty, confirmed: current.confirmed,
                                                             alreadySent: current.sent) else {
             setStatus(id, .active)
             return (interval, false)
         }
+        request.questions = await deps.questions(id)
         sessions[id]?.phase = .calling
         let call = Self.call(request, summarizer: summarizer, clock: deps.clock)
         sessions[id]?.inFlight = call
@@ -226,9 +235,10 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
         if let until = s.backoffUntil, deps.clock.now() < until { return }
         if await deps.queueInRateLimitWait() { return }
         guard let current = sessions[id],
-              let request = LiveSummaryInputBuilder.request(previous: current.state ?? .empty, confirmed: current.confirmed,
+              var request = LiveSummaryInputBuilder.request(previous: current.state ?? .empty, confirmed: current.confirmed,
                                                             alreadySent: current.sent),
               let summarizer = await readySummarizer(id, settings) else { return }
+        request.questions = await deps.questions(id)
         sessions[id]?.phase = .calling
         let deadline = deps.clock.now().addingTimeInterval(Self.finalCallTimeoutSeconds)
         let call = Self.call(request, summarizer: summarizer, clock: deps.clock)
@@ -260,7 +270,8 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
     private func apply(_ outcome: Outcome, to id: MeetingID, request: LiveSummaryRequest, interval: TimeInterval) async {
         guard sessions[id] != nil else { return }
         switch outcome {
-        case .success(let state):
+        case .success(let result):
+            let state = result.state
             sessions[id]?.state = state
             sessions[id]?.sent.formUnion(request.utterances)
             sessions[id]?.failures = 0
@@ -269,6 +280,7 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
             sessions[id]?.status = .active
             await deps.save(id, state)
             emit(id)
+            if !result.askedQuestionIDs.isEmpty { await deps.markAsked(id, result.askedQuestionIDs) }
         case .failure(let error):
             if error is CancellationError { return }       // the scheduler was cancelled (quit)
             switch error as? SummarizerError {
@@ -323,9 +335,9 @@ public actor LiveSummaryScheduler: LiveSummaryPort {
     private static func call(_ r: LiveSummaryRequest, summarizer: any LiveSummarizer, clock: any QueueClock) -> Task<Outcome, Never> {
         Task.detached {
             do {
-                var state = try await LiveSummaryStep.run(r, summarizer: summarizer, now: clock.now())
-                state.updatedAt = clock.now()
-                return .success(state)
+                var result = try await LiveSummaryStep.run(r, summarizer: summarizer, now: clock.now())
+                result.state.updatedAt = clock.now()
+                return .success(result)
             } catch {
                 return .failure(error)
             }

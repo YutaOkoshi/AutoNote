@@ -7,6 +7,8 @@ public enum UserAction: Equatable, Sendable {
     case openLatestMinutes, open(MeetingID), notice(UserNoticeAction), toggleRecording, togglePause
     case redetectClaude, redetectClaudeAndRerun(MeetingID), retryModelDownload, installGuide
     case merge([MeetingID])
+    /// A change to the questions to ask (the draft or a meeting's).
+    case editQuestion(LiveQuestionEdit, in: LiveQuestionScope)
 }
 
 /// Everything the menu bar and the window show, gathered from the app's ports.
@@ -56,6 +58,12 @@ public enum UserAction: Equatable, Sendable {
     public private(set) var liveSummaryUpdatedText: String?
     /// The newest live summary update per meeting received in this launch.
     private var liveSummaries: [MeetingID: LiveSummaryUpdate] = [:]
+    /// The questions to ask: the draft (read at launch) and the meetings read so far (`loadQuestions`, a recording
+    /// start), kept current by `LiveQuestionsPort.updates()`.
+    public private(set) var questionLists: [LiveQuestionScope: [LiveQuestion]] = [:]
+    /// The app sets this at launch and whenever the settings are saved: whether the recording screen shows the
+    /// live summary pane (`LiveSummaryPresentation.recordingMode`).
+    public var liveSummaryEnabled = false
     /// Withdraws the system notification of a prompt answered or resolved elsewhere (the app points it at
     /// `UserNotifier.withdraw(id:)`), so Notification Center keeps no stale buttons.
     /// True while the window's minutes editor holds unsaved edits (the app wires it to the editor). A stop does not
@@ -73,7 +81,7 @@ public enum UserAction: Equatable, Sendable {
     @ObservationIgnored private var levelTracker = InputLevelTracker()
     @ObservationIgnored private let bandDuration: Duration
 
-    private static let streamCount = 7
+    private static let streamCount = 8
     private static let refreshInterval: Duration = .seconds(30)
     private static let tickInterval: Duration = .seconds(1)
 
@@ -95,6 +103,7 @@ public enum UserAction: Equatable, Sendable {
         syncOverwritePrompts()
         readiness = await ports.readiness.current()
         await refreshRows()
+        await loadQuestions(.draft)
 
         let ports = ports
         await withTaskGroup(of: Void.self) { group in
@@ -105,6 +114,7 @@ public enum UserAction: Equatable, Sendable {
             group.addTask { await self.consume(await ports.automations.records()) { await self.apply($0) } }
             group.addTask { await self.consume(await ports.readiness.updates()) { await self.applyModel($0) } }
             group.addTask { await self.consume(await ports.liveSummary.updates()) { await self.applyLiveSummary($0) } }
+            group.addTask { await self.consume(await ports.questions.updates()) { await self.applyQuestions($0) } }
             group.addTask { await self.every(Self.refreshInterval) { await self.refresh() } }
             group.addTask { await self.every(Self.tickInterval) { await self.updateElapsed() } }
         }
@@ -191,6 +201,17 @@ public enum UserAction: Equatable, Sendable {
     /// The newest live summary update of `id` received in this launch (the post-stop views fall back to the file).
     public func liveSummary(for id: MeetingID) -> LiveSummaryUpdate? { liveSummaries[id] }
 
+    /// The questions of `scope` as last read; empty until loaded.
+    public func questions(_ scope: LiveQuestionScope) -> [LiveQuestion] { questionLists[scope] ?? [] }
+
+    /// Reads `scope`'s questions once (a view showing a meeting, a recording start). After that the repository's
+    /// updates keep it current, so a read is never put over a list an update already set (it could be older).
+    public func loadQuestions(_ scope: LiveQuestionScope) async {
+        guard questionLists[scope] == nil else { return }
+        let items = await ports.questions.list(scope)
+        if questionLists[scope] == nil { questionLists[scope] = items }
+    }
+
     public func quitDecision(reason: QuitReason) -> QuitDecision { QuitPolicy.decide(recorder.state, reason: reason) }
 
     /// Test hook: waits (up to about 2 s each) until `run()` has subscribed to every stream and then until no
@@ -253,6 +274,9 @@ public enum UserAction: Equatable, Sendable {
             try await ports.queue.retry(id)
         case .retryModelDownload: await ports.readiness.retryModelDownload()
         case .installGuide: await ports.readiness.installGuide()
+        case .editQuestion(let edit, let scope):
+            // The change comes back through `updates()` in order with the live summary's marks.
+            await ports.questions.apply(edit, to: scope)
         }
     }
 
@@ -383,6 +407,7 @@ public enum UserAction: Equatable, Sendable {
             diskWarning = nil
             levelTracker = InputLevelTracker()
             recordedThisSession.insert(id)
+            await loadQuestions(.meeting(id))
             await refresh()
         case .diskSpaceLow:
             diskWarning = "ディスクの空きが 1GB を切りました"
@@ -426,6 +451,8 @@ public enum UserAction: Equatable, Sendable {
     }
 
     private func applyLive(_ snapshot: [Utterance]) { live.update(snapshot) }
+
+    private func applyQuestions(_ u: LiveQuestionsUpdate) { questionLists[u.scope] = u.items }
 
     /// Kept per meeting: a late update of an earlier meeting never reaches the recording one's age line.
     private func applyLiveSummary(_ u: LiveSummaryUpdate) {

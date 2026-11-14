@@ -74,10 +74,25 @@ public enum LiveSummarizerFactory {
     }
 }
 
+/// The new state and the questions the call found answered.
+public struct LiveSummaryStepResult: Equatable, Sendable {
+    public var state: LiveSummaryState
+    /// Ids that were sent in the request, once each, in the model's order (unknown ids are dropped).
+    public var askedQuestionIDs: [String]
+
+    public init(state: LiveSummaryState, askedQuestionIDs: [String]) {
+        self.state = state; self.askedQuestionIDs = askedQuestionIDs
+    }
+}
+
 /// One live summary update: summarize, then fold the output into the previous state.
 public enum LiveSummaryStep {
-    public static func run(_ r: LiveSummaryRequest, summarizer: any LiveSummarizer, now: Date) async throws -> LiveSummaryState {
+    public static func run(_ r: LiveSummaryRequest, summarizer: any LiveSummarizer, now: Date) async throws -> LiveSummaryStepResult {
         let output = try await summarizer.summarize(r)
-        return r.previous.applying(output, consumedThrough: r.consumedThrough, at: now)
+        let sent = Set(r.questions.map(\.id))
+        var seen = Set<String>()
+        let asked = output.askedQuestionIDs.filter { sent.contains($0) && seen.insert($0).inserted }
+        return LiveSummaryStepResult(state: r.previous.applying(output, consumedThrough: r.consumedThrough, at: now),
+                                     askedQuestionIDs: asked)
     }
 }

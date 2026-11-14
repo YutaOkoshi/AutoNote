@@ -141,6 +141,15 @@ public protocol LiveSummaryPort: Sendable {
     func updates() async -> AsyncStream<LiveSummaryUpdate>
 }
 
+/// Implemented by `LiveQuestionsRepository`: the person's questions, before and during a meeting.
+public protocol LiveQuestionsPort: Sendable {
+    func list(_ scope: LiveQuestionScope) async -> [LiveQuestion]
+    /// Returns the list after the edit.
+    @discardableResult func apply(_ edit: LiveQuestionEdit, to scope: LiveQuestionScope) async -> [LiveQuestion]
+    /// Every change from now on (no replay).
+    func updates() async -> AsyncStream<LiveQuestionsUpdate>
+}
+
 public protocol OutputFolderPort: Sendable {
     func isAvailable() async -> Bool
 }
@@ -160,10 +169,12 @@ public struct AppPorts: Sendable {
     public var opener: any FileOpener
     public var readiness: any ReadinessPort
     public var liveSummary: any LiveSummaryPort
+    public var questions: any LiveQuestionsPort
 
     public init(recorder: any RecorderPort, events: any RecordingEventsPort, queue: any QueuePort, meetings: any MeetingsPort,
                 automations: any AutomationsPort, live: any LiveTranscriptPort, outputFolder: any OutputFolderPort,
-                opener: any FileOpener, readiness: any ReadinessPort, liveSummary: any LiveSummaryPort) {
+                opener: any FileOpener, readiness: any ReadinessPort, liveSummary: any LiveSummaryPort,
+                questions: any LiveQuestionsPort) {
         self.recorder = recorder
         self.events = events
         self.queue = queue
@@ -174,5 +185,6 @@ public struct AppPorts: Sendable {
         self.opener = opener
         self.readiness = readiness
         self.liveSummary = liveSummary
+        self.questions = questions
     }
 }

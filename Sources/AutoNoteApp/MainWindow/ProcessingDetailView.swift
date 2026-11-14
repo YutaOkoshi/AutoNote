@@ -44,10 +44,7 @@ struct ProcessingDetailView: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
-            if let card = LiveSummaryPresentation.card(state: model.liveSummary(for: MeetingID(rawValue: row.id))?.state ?? stored,
-                                                       status: .active, updated: nil) {
-                LiveSummaryCard(content: card)
-            }
+            StoredLiveSummary(model: model, id: MeetingID(rawValue: row.id), stored: stored)
             if let loadError {
                 ContentUnavailableView("文字起こしを読めませんでした", systemImage: "doc.questionmark", description: Text(loadError))
                     .frame(maxHeight: .infinity)
@@ -69,6 +66,7 @@ struct ProcessingDetailView: View {
         let id = MeetingID(rawValue: row.id)
         // Clear the previous row's card first; a slow read for that row must not land after a switch.
         stored = nil
+        await model.loadQuestions(.meeting(id))
         let summary = try? await env.ports.meetings.liveSummary(id)
         guard !Task.isCancelled else { return }
         stored = summary

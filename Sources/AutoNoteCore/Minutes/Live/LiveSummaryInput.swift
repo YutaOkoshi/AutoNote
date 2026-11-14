@@ -1,16 +1,26 @@
 import Foundation
 
-/// One live summary call: the previous state and the window of confirmed utterances to send.
+/// One live summary call: the previous state, the undecided questions and the window of confirmed utterances to send.
 public struct LiveSummaryRequest: Equatable, Sendable {
     public var previous: LiveSummaryState
     /// The window to send, oldest first.
     public var utterances: [Utterance]
     /// End second of the newest utterance in the window.
     public var consumedThrough: Double
+    /// The person's questions not decided yet (`LiveQuestionList.pendingForModel`); only their ids come back.
+    public var questions: [LiveQuestionPrompt]
 
-    public init(previous: LiveSummaryState, utterances: [Utterance], consumedThrough: Double) {
+    public init(previous: LiveSummaryState, utterances: [Utterance], consumedThrough: Double, questions: [LiveQuestionPrompt] = []) {
         self.previous = previous; self.utterances = utterances; self.consumedThrough = consumedThrough
+        self.questions = questions
     }
+}
+
+/// The previous state as the model sees it: what it returned last time, without the asked ids.
+private struct LiveSummaryPrevious: Encodable {
+    var now: String
+    var decisions: [String]
+    var todos: [LiveSummaryTodo]
 }
 
 /// Cuts the live transcript into the input of one live summary call and renders its prompt.
@@ -62,11 +72,17 @@ public enum LiveSummaryInputBuilder {
         return head + kept.reversed().joined(separator: "\n")
     }
 
-    /// instructions → data notice → previous state (compact JSON) → utterances.
+    /// instructions → data notice → previous state (compact JSON) → questions (compact JSON, `[]` when none) → utterances.
     public static func prompt(_ r: LiveSummaryRequest) -> String {
-        let json = (try? AutoNoteJSON.compactEncoder().encode(r.previous.output)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let previous = LiveSummaryPrevious(now: r.previous.now, decisions: r.previous.decisions, todos: r.previous.todos)
         return [DefaultPrompt.liveInstructions, DefaultPrompt.liveDataNotice,
-                "## 前回の状態\n" + json, "## 発話\n" + transcriptBlock(r.utterances)].joined(separator: "\n\n")
+                "## 前回の状態\n" + compact(previous, fallback: "{}"),
+                "## 聞きたいこと\n" + compact(r.questions, fallback: "[]"),
+                "## 発話\n" + transcriptBlock(r.utterances)].joined(separator: "\n\n")
+    }
+
+    private static func compact<T: Encodable>(_ value: T, fallback: String) -> String {
+        (try? AutoNoteJSON.compactEncoder().encode(value)).flatMap { String(data: $0, encoding: .utf8) } ?? fallback
     }
 
     private static func endSeconds(_ u: Utterance) -> Double { (u.end ?? u.start).seconds }

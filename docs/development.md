@@ -78,7 +78,7 @@ autonote dev transcribe --mic --engine dictation|speech|whisper-live --seconds N
 autonote dev models list|download <name>|delete <name> [--data <dir>]
 autonote dev summarize --fake <transcript.json> --out <dir> [--minutes <minutes.json>] [--fail-summary] [--claude]
   (--minutes is required unless --fail-summary or --claude is given)
-autonote dev live-summary <live.json> [--state <state.json>] [--claude]
+autonote dev live-summary <live.json> [--state <state.json>] [--questions <questions.json>] [--claude]
 ```
 
 `scripts/` の一覧:

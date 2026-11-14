@@ -159,8 +159,10 @@ final class AppEnvironment {
             config: { AutoRecordCoordinator.config(from: (try? await settings.load()) ?? AutoNoteCore.Settings()) })
 
         // 8b. Live summary. Off unless the setting is on; the scheduler reads the settings on every tick.
+        // The person's questions are read only for a call (so never sent while summaries are off).
         let queuePort = QueueAdapter(holder: queue)
         let liveSummaryStore = LiveSummaryStore(paths: paths)
+        let questions = LiveQuestionsRepository(storage: LiveQuestionsFileStorage(paths: paths))
         let liveSummary = LiveSummaryScheduler(.init(
             settings: { (try? await settings.load()) ?? AutoNoteCore.Settings() },
             makeSummarizer: { try await LiveSummarizerFactory.make(settings: $0, paths: paths) },
@@ -174,13 +176,17 @@ final class AppEnvironment {
                 }
             },
             log: { NSLog("AutoNote: %@", $0) },
-            clock: SystemQueueClock()))
+            clock: SystemQueueClock(),
+            questions: { await questions.pendingForModel($0) },
+            markAsked: { id, ids in await questions.markAskedByModel(ids, in: id) }))
 
         // 9. App-wide wiring. A queue-input change re-registers the stages on the same queue (ruling X19).
         let trigger = RecordingAutomationTrigger(dispatcher: dispatcher, manifests: manifests)
         let wiring = AppWiring(
             events: { await session.events() }, enqueuer: QueueEnqueuer(queue), notifier: notifier,
             listeners: [
+                // The draft questions become the new recording's, whether or not live summaries are on.
+                { e in if case .started(let id) = e { await questions.adoptDraft(into: id) } },
                 { await live.handle($0) },
                 { await liveSummary.handle($0) },
                 { await trigger.handle($0) },
@@ -210,7 +216,8 @@ final class AppEnvironment {
             outputFolder: PortableOutputFolderPort(output: output),
             opener: WorkspaceOpener(),
             readiness: readiness,
-            liveSummary: liveSummary)
+            liveSummary: liveSummary,
+            questions: questions)
         let model = AppModel(ports: ports)
         model.withdrawNotice = { [notifier] id in await notifier.withdraw(id: id) }
         routing.model = model
@@ -245,6 +252,7 @@ final class AppEnvironment {
         // folder and saw the warning stay. Re-read it now so the save is visibly effective.
         await model.refresh()
         model.shortcuts = new.shortcuts
+        model.liveSummaryEnabled = new.liveSummaryEnabled
         let hotKeys = shortcutsChanged(new.shortcuts)
         let loginItem = reconcileLoginItem(launchAtLogin: new.launchAtLogin)
         logger.notice("settings save applied: hot keys re-registered (\(hotKeys.count, privacy: .public)), login item \(String(describing: loginItem), privacy: .public)")

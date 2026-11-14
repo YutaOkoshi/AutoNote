@@ -4,7 +4,7 @@ import Foundation
 import AutoNoteTestSupport
 
 @Suite struct ClaudeLiveSummarizerTests {
-    private static let ok = #"{"type":"result","subtype":"success","is_error":false,"structured_output":{"now":"架空の話題","decisions":["架空の決定"],"todos":[{"text":"架空の宿題","owner":null}]}}"#
+    private static let ok = #"{"type":"result","subtype":"success","is_error":false,"structured_output":{"now":"架空の話題","decisions":["架空の決定"],"todos":[{"text":"架空の宿題","owner":null,"side":"other"}],"asked_question_ids":["q1"]}}"#
 
     private func request() -> LiveSummaryRequest {
         let previous = LiveSummaryState(now: "前の話題", decisions: ["前の決定"], todos: [], consumedThrough: 40, updatedAt: nil)
@@ -33,9 +33,9 @@ import AutoNoteTestSupport
         #expect(ClaudeCodeSummarizer.arguments(model: nil) == ClaudeCodeSummarizer.arguments(schema: MinutesSchema.json, model: nil))
     }
 
-    @Test func liveSchemaRequiresTheThreeKeys() throws {
+    @Test func liveSchemaRequiresTheFourKeys() throws {
         let schema = try #require(try JSONSerialization.jsonObject(with: Data(LiveSummarySchema.json.utf8)) as? [String: Any])
-        #expect(schema["required"] as? [String] == ["now", "decisions", "todos"])
+        #expect(schema["required"] as? [String] == ["now", "decisions", "todos", "asked_question_ids"])
         let properties = try #require(schema["properties"] as? [String: Any])
         let now = try #require(properties["now"] as? [String: Any])
         #expect(now["maxLength"] as? Int == 60)
@@ -46,7 +46,8 @@ import AutoNoteTestSupport
         let claude = try FakeClaude.make(in: dir.appending(path: "fake"), auth: #"{"loggedIn":false}"#, responses: [Self.ok])
         let r = request()
         let out = try await summarizer(claude, paths: paths).summarize(r)
-        #expect(out == LiveSummaryOutput(now: "架空の話題", decisions: ["架空の決定"], todos: [.init(text: "架空の宿題", owner: nil)]))
+        #expect(out == LiveSummaryOutput(now: "架空の話題", decisions: ["架空の決定"], todos: [.init(text: "架空の宿題", owner: nil, side: .other)],
+                                         askedQuestionIDs: ["q1"]))
         let fake = dir.appending(path: "fake")
         #expect(FakeClaude.count(in: fake) == 1)
         #expect(try FakeClaude.stdin(in: fake, call: 1) == LiveSummaryInputBuilder.prompt(r))
@@ -127,7 +128,7 @@ import AutoNoteTestSupport
 
     @Test func stepAppliesTheOutput() async throws {
         let r = request()
-        let s = try await LiveSummaryStep.run(r, summarizer: FakeLiveSummarizer(), now: Samples.start)
+        let s = try await LiveSummaryStep.run(r, summarizer: FakeLiveSummarizer(), now: Samples.start).state
         #expect(s.consumedThrough == r.consumedThrough)
         #expect(s.updatedAt == Samples.start)
         #expect(s.decisions == r.previous.decisions + ["決定（85 秒まで）"])

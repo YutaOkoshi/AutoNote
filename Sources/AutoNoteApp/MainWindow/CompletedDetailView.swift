@@ -307,10 +307,7 @@ struct MinutesMissingView: View {
     var body: some View {
         VStack(spacing: 0) {
             FailureBand(env: env, model: model, shell: shell, row: row, item: queueItem)
-            if let card = LiveSummaryPresentation.card(state: model.liveSummary(for: MeetingID(rawValue: row.id))?.state ?? stored,
-                                                       status: .active, updated: nil) {
-                LiveSummaryCard(content: card)
-            }
+            StoredLiveSummary(model: model, id: MeetingID(rawValue: row.id), stored: stored)
             if transcript.isEmpty {
                 ContentUnavailableView("確定版の文字起こしはありません", systemImage: "text.alignleft")
                     .frame(maxHeight: .infinity)
@@ -327,6 +324,7 @@ struct MinutesMissingView: View {
             let id = MeetingID(rawValue: row.id)
             // Clear the previous row's card first; a slow read for that row must not land after a switch.
             stored = nil
+            await model.loadQuestions(.meeting(id))
             let summary = try? await env.ports.meetings.liveSummary(id)
             guard !Task.isCancelled else { return }
             stored = summary

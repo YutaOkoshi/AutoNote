@@ -435,6 +435,8 @@ public struct FakePorts: Sendable {
     public let opener: FakeFileOpener
     public let readiness: FakeReadinessPort
     public let liveSummary: FakeLiveSummaryPort
+    /// The real repository over memory (its behaviour is what the model's question actions rely on).
+    public let questions: LiveQuestionsRepository
     public var ports: AppPorts
 
     public init(recorder: FakeRecorderPort = FakeRecorderPort(), events: FakeRecordingEventsPort = FakeRecordingEventsPort(),
@@ -442,7 +444,8 @@ public struct FakePorts: Sendable {
                 automations: FakeAutomationsPort = FakeAutomationsPort(), live: FakeLiveTranscriptPort = FakeLiveTranscriptPort(),
                 outputFolder: FakeOutputFolderPort = FakeOutputFolderPort(), opener: FakeFileOpener = FakeFileOpener(),
                 readiness: FakeReadinessPort = FakeReadinessPort(),
-                liveSummary: FakeLiveSummaryPort = FakeLiveSummaryPort()) {
+                liveSummary: FakeLiveSummaryPort = FakeLiveSummaryPort(),
+                questions: LiveQuestionsRepository = LiveQuestionsRepository(storage: InMemoryLiveQuestionsStorage())) {
         self.recorder = recorder
         self.events = events
         self.queue = queue
@@ -453,8 +456,9 @@ public struct FakePorts: Sendable {
         self.opener = opener
         self.readiness = readiness
         self.liveSummary = liveSummary
+        self.questions = questions
         ports = AppPorts(recorder: recorder, events: events, queue: queue, meetings: meetings, automations: automations,
                          live: live, outputFolder: outputFolder, opener: opener, readiness: readiness,
-                         liveSummary: liveSummary)
+                         liveSummary: liveSummary, questions: questions)
     }
 }
