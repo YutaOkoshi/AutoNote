@@ -63,15 +63,15 @@ import Testing
 
     @Test func catchesUpWithTheNewestWhenBehind() async throws {
         let f = try TranslationFixture(mode: .duringRecording)
-        let fake = FakeTextCompleter(delay: .milliseconds(40))
-        let (translator, lists, updates, runner) = await start(f, fake)
         let all = (0..<10).map { utterance(Double($0 * 3), "Line number \($0).") }
-        lists.yield([all[0]])
-        #expect(await eventually { fake.snapshot.prompts.count == 1 })
-        // Nine more lines arrive while the first is still being translated.
-        lists.yield(all)
+        let lists = LockedBox<AsyncStream<[Utterance]>.Continuation?>(nil)
+        // Nine more lines arrive while the first one is being translated.
+        let fake = FakeTextCompleter(onCall: { n in if n == 1 { lists.withLock { $0 }?.yield(all) } })
+        let (translator, continuation, updates, runner) = await start(f, fake)
+        lists.withLock { $0 = continuation }
+        continuation.yield([all[0]])
         #expect(await eventually { updates.values.count >= 3 })
-        lists.finish()
+        continuation.finish()
         await runner.value
         await translator.waitForSessions()
         let translated = updates.values.compactMap { if case .live(_, let l) = $0 { l.text } else { nil } }

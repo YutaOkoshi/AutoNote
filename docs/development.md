@@ -79,6 +79,8 @@ autonote dev models list|download <name>|delete <name> [--data <dir>]
 autonote dev summarize --fake <transcript.json> --out <dir> [--minutes <minutes.json>] [--fail-summary] [--claude]
   (--minutes is required unless --fail-summary or --claude is given)
 autonote dev live-summary <live.json> [--state <state.json>] [--questions <questions.json>] [--claude]
+autonote dev translate <transcript.json> [--target auto|ja|en] [--model <gguf>]
+  (without --model: the deterministic fake, "EN: <text>" / "JA: <text>"; --model needs the on-device llama.cpp runtime)
 ```
 
 `scripts/` の一覧:

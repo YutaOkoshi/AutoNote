@@ -88,7 +88,8 @@ private func document(_ utterances: [Utterance], target: TranslationTarget = .au
     }
 
     @Test func cancellationStopsBetweenUtterances() async throws {
-        let fake = FakeTextCompleter(delay: .milliseconds(50))
+        // The task is cancelled while the second utterance is being translated.
+        let fake = FakeTextCompleter(onCall: { n in if n == 2 { withUnsafeCurrentTask { $0?.cancel() } } })
         let plan = TranscriptTranslation.plan(utterances, target: .auto)
         let utterances = utterances
         let task = Task {
@@ -96,10 +97,8 @@ private func document(_ utterances: [Utterance], target: TranslationTarget = .au
             return try await TranscriptTranslation.run(&doc, utterances: utterances, plan: plan,
                                                        translator: UtteranceTranslator(completer: fake)) { _ in .proceed }
         }
-        try await Task.sleep(for: .milliseconds(70))
-        task.cancel()
         await #expect(throws: CancellationError.self) { _ = try await task.value }
-        #expect(fake.snapshot.prompts.count < plan.count)
+        #expect(fake.snapshot.prompts.count == 2)
     }
 
     @Test func aRuntimeErrorIsPassedOn() async {

@@ -294,18 +294,22 @@ func eventually(_ timeout: Duration = .seconds(2), _ condition: () async -> Bool
 
     @Test func pausesWhileRecordingAndContinuesAfter() async throws {
         let f = try TranslationFixture()
-        let fake = FakeTextCompleter(delay: .milliseconds(20))
-        let service = TranslationService(f.deps(fake))
-        try await service.translate(f.id)
-        #expect(await eventually { fake.snapshot.prompts.count >= 1 })
-        await service.setRecording(true)
-        #expect(await eventually {
-            if case .waitingForRecording = await service.state(f.id) { true } else { false }
+        let holder = LockedBox<TranslationService?>(nil)
+        // A recording starts while the second utterance is being translated.
+        let fake = FakeTextCompleter(onCall: { n in
+            if n == 2, let service = holder.withLock({ $0 }) { await service.setRecording(true) }
         })
-        let during = fake.snapshot.prompts.count
+        let service = TranslationService(f.deps(fake))
+        holder.withLock { $0 = service }
+        try await service.translate(f.id)
+        #expect(await eventually {
+            if case .waitingForRecording(let p) = await service.state(f.id) { p.done == 2 } else { false }
+        })
+        #expect(fake.snapshot.prompts.count == 2)
         #expect(fake.snapshot.loaded == nil)   // the model is released for the recording
-        try await Task.sleep(for: .milliseconds(80))
-        #expect(fake.snapshot.prompts.count == during)
+        #expect(f.store.load(f.id)?.processed == 2)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(fake.snapshot.prompts.count == 2)
         await service.setRecording(false)
         await service.waitForJob(f.id)
         #expect(f.store.load(f.id)?.complete == true)

@@ -23,17 +23,20 @@ public final class FakeTextCompleter: TextCompleting, @unchecked Sendable {
     private let failOnCall: Int?
     private let failLoad: Bool
     private let hang: Bool
+    private let onCall: (@Sendable (Int) async -> Void)?
 
     /// - Parameters:
     ///   - failOnCall: the 1-based `complete` call that throws `Failure` (later calls succeed again).
     ///   - hang: every `complete` waits until its task is cancelled.
+    ///   - onCall: awaited at the start of every `complete` with its 1-based number (to act at an exact point).
     public init(phrases: [String: String] = [:], delay: Duration = .zero, failOnCall: Int? = nil,
-                failLoad: Bool = false, hang: Bool = false) {
+                failLoad: Bool = false, hang: Bool = false, onCall: (@Sendable (Int) async -> Void)? = nil) {
         self.phrases = phrases
         self.delay = delay
         self.failOnCall = failOnCall
         self.failLoad = failLoad
         self.hang = hang
+        self.onCall = onCall
     }
 
     public var snapshot: State { state.withLock { $0 } }
@@ -53,6 +56,7 @@ public final class FakeTextCompleter: TextCompleting, @unchecked Sendable {
             s.stops.append(stop)
             return s.prompts.count
         }
+        await onCall?(call)
         if hang {
             while true { try await Task.sleep(for: .seconds(60)) }
         }
