@@ -324,11 +324,16 @@ func pollTranslation(_ timeout: Duration = .seconds(2), _ condition: () async ->
         let f = try TranslationFixture()
         let other = "20261114-1100-bbbb"
         let (stream, continuation) = AsyncStream<QueueStatus>.makeStream()
-        // Another meeting's final transcription starts while the second utterance is being translated.
+        // Another meeting's final transcription starts while the second utterance is being translated; the call
+        // returns once the service has seen it, so the checkpoint after it pauses.
+        let holder = LockedBox<TranslationService?>(nil)
         let fake = FakeTextCompleter(onCall: { n in
-            if n == 2 { continuation.yield(QueueStatus(items: [QueueItemDTO(meetingID: other, stage: StageName.transcribe, state: "running")])) }
+            guard n == 2, let service = holder.withLock({ $0 }) else { return }
+            continuation.yield(QueueStatus(items: [QueueItemDTO(meetingID: other, stage: StageName.transcribe, state: "running")]))
+            _ = await pollTranslation { await service.isTranscribing }
         })
         let service = TranslationService(f.deps(fake))
+        holder.withLock { $0 = service }
         let follower = Task { await service.follow(queue: stream) }
         try await service.translate(f.id)
         #expect(await pollTranslation {

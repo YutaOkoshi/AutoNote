@@ -148,6 +148,9 @@ public actor TranslationService: TranslationPort {
         }
     }
 
+    /// Whether the queue was last seen making a final transcript (tests).
+    var isTranscribing: Bool { transcribing }
+
     private enum PauseReason { case recording, transcription }
 
     private var pauseReason: PauseReason? {
