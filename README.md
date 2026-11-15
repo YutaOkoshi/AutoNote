@@ -9,6 +9,7 @@ macOS のメニューバーに常駐して会議を録音し、手元で文字�
 - 文字起こしは Mac の中で行う。録音中は Apple の音声認識（SpeechTranscriber / DictationTranscriber）でリアルタイムに流し、止めたあとに whisper.cpp で精度の高い確定版を作る（whisper のモデルを取得していないときは、確定版も Apple の音声認識で作る）
 - 確定版の文字起こしから、手元の Claude Code（`claude -p`）が 要約・出席者・議題・決定事項・アクション（優先度付き）・質問・締め切り・リスク・構成図などを持つ議事録を作る
 - 録音中にリアルタイム要約を出せる（設定でオンにしたとき）
+- 文字起こしを Mac の中で翻訳し、各行に訳文を併記できる（日本語 ↔ 英語。設定でオンにしたとき。Preferred Networks の PLaMo 3 Translate を使う。Built with PLaMo）
 - 議事録は 1 会議 1 ファイルの Markdown で、Obsidian などの Vault のフォルダに保存する。Claude Code がフォルダを読んで「先月決まったこと」に答えられる形にしてある
 - 登録した会議用のマイク機材をつなぐと録音が始まり、外すと止まる
 - CLI（`autonote start` / `stop` / `latest` など）と、議事録ができたときに自分のコマンドを走らせる Automations を持つ
@@ -17,6 +18,7 @@ macOS のメニューバーに常駐して会議を録音し、手元で文字�
 
 - 音声はこの Mac から出ない。録音・文字起こしはすべてローカルで行う
 - 外に渡るのは、議事録（とリアルタイム要約）を作るために Claude Code（`claude -p`）へ渡す文字起こしのテキストだけ（リアルタイム要約がオンのときは、書いておいた「聞きたいこと」も）
+- 翻訳は Mac の中だけで行い、文字起こしも訳文も外に送らない。通信するのは、翻訳モデルを Hugging Face からダウンロードするときだけ
 - 根拠: [要件書](docs/superpowers/specs/2026-10-24-autonote-design.md) のゴール G9
 
 ## 動作環境
@@ -54,6 +56,7 @@ macOS のメニューバーに常駐して会議を録音し、手元で文字�
 | [停止後の文字起こしを窓で流す](docs/superpowers/specs/2026-10-28-windowed-batch-transcription-design.md) | 長時間録音でもメモリを抑える確定版文字起こしの設計 |
 | [録音中のリアルタイム要約](docs/superpowers/specs/2026-10-28-live-summary-design.md) | 録音中に要約を更新する機能の設計 |
 | [要約を右ペインに置き「聞きたいこと」を足す](docs/superpowers/specs/2026-11-14-live-summary-side-pane-design.md) | 上の表示と入出力を置き換えた設計 |
+| [文字起こしを端末内で翻訳する](docs/superpowers/specs/2026-11-14-transcript-translation-design.md) | PLaMo 3 Translate で各行に訳文を併記する機能の設計 |
 
 調査記録（`docs/superpowers/research/`）:
 
@@ -70,3 +73,13 @@ macOS のメニューバーに常駐して会議を録音し、手元で文字�
 ## ライセンス
 
 [MIT License](LICENSE)。同梱してビルドする whisper.cpp も MIT License で配布されている。
+
+### 翻訳モデル（PLaMo 3 Translate）— Built with PLaMo
+
+翻訳には Preferred Networks（PFN）の [PLaMo 3 Translate](https://huggingface.co/pfnet/plamo-3-translate-2b-GGUF) を使う。モデルはアプリに同梱せず、設定 › 翻訳 で利用者が PFN 公式の GGUF（Q4_K_M）をダウンロードする（ファイルはリビジョンと SHA-256 で固定している）。AutoNote 側でモデルを量子化・改変・再配布することはない。
+
+モデルの重みには AutoNote の MIT License ではなく [PLaMo Community License](https://plamo.preferredai.jp/info/plamo-community-license-ja) が適用され、初回のダウンロードの前に同意を求める。
+
+- 個人・非商用（学術を含む）の利用は無料で、登録は要らない
+- **業務（社内利用を含む）で使う場合は、PFN への事前登録が必要**（[登録フォーム](https://forms.gle/mTL8tBLrMYXKNZD56)）。直近の事業年度の売上が 10 億円以下なら登録だけで無料、超える場合は PFN との別途の契約が要る
+- 訳文を法律・医療・金融・人物評価などの重要な判断の唯一の根拠にしない

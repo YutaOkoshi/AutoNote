@@ -1,7 +1,8 @@
 name: Prepare Swift build
 description: >-
   Selects an Xcode with Swift 6.3+ and the macOS 26 SDK, restores (or builds)
-  tools/whisper.xcframework and restores the SwiftPM .build cache.
+  tools/whisper.xcframework (whisper.cpp + llama.cpp on one shared ggml) and
+  restores the SwiftPM .build cache.
   Shared by ci.yml and release.yml so both run the same steps.
 
 inputs:
@@ -19,16 +20,18 @@ runs:
         XCODE_APP: ${{ inputs.xcode-app }}
       run: .github/scripts/select-xcode.sh "${XCODE_APP}"
 
-    - name: Resolve whisper.cpp commit
+    - name: Resolve whisper.cpp and llama.cpp commits
       id: whisper
       shell: bash
       run: |
-        commit="$(sed -n 's/^WHISPER_COMMIT="\([0-9a-f]*\)".*/\1/p' scripts/build-whisper-xcframework.sh)"
-        if [[ -z "${commit}" ]]; then
-          echo "::error::WHISPER_COMMIT not found in scripts/build-whisper-xcframework.sh"
+        script=scripts/build-whisper-xcframework.sh
+        whisper="$(sed -n 's/^WHISPER_COMMIT="\([0-9a-f]*\)".*/\1/p' "${script}")"
+        llama="$(sed -n 's/^LLAMA_COMMIT="\([0-9a-f]*\)".*/\1/p' "${script}")"
+        if [[ -z "${whisper}" || -z "${llama}" ]]; then
+          echo "::error::WHISPER_COMMIT or LLAMA_COMMIT not found in ${script}"
           exit 1
         fi
-        echo "commit=${commit}" >> "${GITHUB_OUTPUT}"
+        echo "commit=${whisper:0:12}-${llama:0:12}" >> "${GITHUB_OUTPUT}"
 
     - name: Cache whisper.xcframework
       id: whisper-cache
@@ -46,6 +49,8 @@ runs:
       uses: actions/cache@v4
       with:
         path: .build
-        key: spm-${{ runner.os }}-${{ runner.arch }}-xcode${{ env.AUTONOTE_XCODE_VERSION }}-${{ hashFiles('Package.swift', 'Package.resolved', 'Sources/**', 'Tests/**') }}
+        # The xcframework's version is part of the key: a .build made against other whisper/llama headers fails with
+        # "ggml.h has been modified since the module file ... was built"
+        key: spm-${{ runner.os }}-${{ runner.arch }}-xcode${{ env.AUTONOTE_XCODE_VERSION }}-${{ steps.whisper.outputs.commit }}-${{ hashFiles('Package.swift', 'Package.resolved', 'Sources/**', 'Tests/**') }}
         restore-keys: |
-          spm-${{ runner.os }}-${{ runner.arch }}-xcode${{ env.AUTONOTE_XCODE_VERSION }}-
+          spm-${{ runner.os }}-${{ runner.arch }}-xcode${{ env.AUTONOTE_XCODE_VERSION }}-${{ steps.whisper.outputs.commit }}-

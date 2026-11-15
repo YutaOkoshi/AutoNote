@@ -23,6 +23,7 @@ struct CompletedDetailView: View {
     @State private var transcript: [LiveLine] = []
     @State private var utterances: [Utterance] = []
     @State private var tab: DetailTab = .summary
+    @State private var translation = MeetingTranslation.empty
     /// The transcript line a summary row's time asked for; the 文字起こし tab scrolls to it and highlights it.
     @State private var jump: TranscriptJump?
     @State private var renameFile = false
@@ -68,6 +69,12 @@ struct CompletedDetailView: View {
             }
         }
         .task(id: row.id) { await load() }
+        .task(id: TranslationLoadKey(id: row.id, revision: model.translationRevisions[id] ?? 0)) {
+            translation = .empty
+            let loaded = await env.ports.translation.meetingTranslation(id)
+            guard !Task.isCancelled else { return }
+            translation = loaded
+        }
         .onAppear { unsaved.register(guardToken, isDirty: { isDirty }) { await confirmLeave() } }
         .onDisappear { unsaved.unregister(guardToken) }
         // 「保存しました」 is about the saved state only.
@@ -106,26 +113,8 @@ struct CompletedDetailView: View {
     private var transcriptTab: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("ブックマーク").font(.headline)
-                        if bookmarks.isEmpty { Text("（なし）").foregroundStyle(.secondary) }
-                        ForEach(bookmarks.indices, id: \.self) { i in
-                            Label {
-                                Text("\(bookmarks[i].at.hhmmss)\(bookmarks[i].note.map { "  \($0)" } ?? "")")
-                                    .monospacedDigit()
-                            } icon: {
-                                Image(systemName: "bookmark.fill").foregroundStyle(.orange)
-                            }
-                        }
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("文字起こし（確定版）").font(.headline)
-                        TranscriptList(lines: transcript, highlighted: jump?.index)
-                    }
-                }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                CompletedTranscriptContent(model: model, id: id, bookmarks: bookmarks, transcript: transcript,
+                                           translation: translation, highlighted: jump?.index)
             }
             .defaultScrollAnchor(.top)
             // Scroll once the tab's rows exist (on the switch from 要約), and again for a later jump.
@@ -303,8 +292,10 @@ struct MinutesMissingView: View {
     @State private var transcript: [LiveLine] = []
     /// The stored live summary, kept read-only after the stop.
     @State private var stored: LiveSummaryState?
+    @State private var translation = MeetingTranslation.empty
 
     var body: some View {
+        let id = MeetingID(rawValue: row.id)
         VStack(spacing: 0) {
             FailureBand(env: env, model: model, shell: shell, row: row, item: queueItem)
             StoredLiveSummary(model: model, id: MeetingID(rawValue: row.id), stored: stored)
@@ -316,9 +307,20 @@ struct MinutesMissingView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12)
+                TranslationControls(model: model, id: id, translation: translation)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
                 Divider()
-                LiveTranscriptView(lines: transcript, follows: false)
+                LiveTranscriptView(lines: transcript, follows: false,
+                                   translations: TranslationPresentation.finalTranslations(
+                                       transcript, translation, shown: model.translationShown))
             }
+        }
+        .task(id: TranslationLoadKey(id: row.id, revision: model.translationRevisions[id] ?? 0)) {
+            translation = .empty
+            let loaded = await env.ports.translation.meetingTranslation(id)
+            guard !Task.isCancelled else { return }
+            translation = loaded
         }
         .task(id: row.id) {
             let id = MeetingID(rawValue: row.id)
@@ -341,30 +343,4 @@ struct MinutesMissingView: View {
 struct TranscriptJump: Equatable {
     let index: Int
     let token = UUID()
-}
-
-/// The transcript inside an outer scroll view: plain rows, no own scrolling. Each row has an id for `scrollTo`;
-/// the highlighted row (a jump from 要約) gets a tinted background.
-private struct TranscriptList: View {
-    let lines: [LiveLine]
-    var highlighted: Int?
-
-    static func rowID(_ index: Int) -> String { "transcript.\(index)" }
-
-    var body: some View {
-        if lines.isEmpty {
-            Text("（なし）").foregroundStyle(.secondary)
-        } else {
-            LazyVStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                    TranscriptLineView(line: line)
-                        .padding(.horizontal, 4)
-                        .background(RoundedRectangle(cornerRadius: 4)
-                            .fill(index == highlighted ? Color.accentColor.opacity(0.18) : Color.clear))
-                        .id(Self.rowID(index))
-                }
-            }
-            .textSelection(.enabled)
-        }
-    }
 }

@@ -87,6 +87,7 @@ struct RecordingDetailView: View {
     private var transcriptPane: some View {
         VStack(spacing: 0) {
             PaneHeader(symbol: "bubble.left.and.text.bubble.right", title: LiveSummaryPresentation.transcriptTitle) {
+                if !model.liveTranslations.isEmpty { TranslationToggle(model: model) }
                 if let status = LiveSummaryPresentation.transcriptStatus(model.recorder.state) {
                     HStack(spacing: 4) {
                         Circle()
@@ -103,7 +104,9 @@ struct RecordingDetailView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                LiveTranscriptView(lines: model.live.lines)
+                LiveTranscriptView(lines: model.live.lines,
+                                   translations: TranslationPresentation.liveTranslations(
+                                       model.live.lines, model.liveTranslations, shown: model.translationShown))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

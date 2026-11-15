@@ -112,8 +112,10 @@ cli_or_skip() {   # 項目の先頭で呼ぶ。使えなければ skip / fail �
 # whisper.cpp の XCFramework（Package.swift の binaryTarget、tools/ は git 管理外）が無ければ先に作る。
 # 項目 1 の swift test と AUTONOTE_CLI のビルドが新しい clone で失敗しないように。--quick はビルドしないので触らない
 ensure_whisper_xcframework() {
-    [[ "${QUICK}" -eq 1 || -f "${ROOT}/tools/whisper.xcframework/Info.plist" ]] && return 0
-    echo "tools/whisper.xcframework が無いので scripts/build-whisper-xcframework.sh で作る（数分かかる）"
+    [[ "${QUICK}" -eq 1 ]] && return 0
+    # 今の版（whisper.cpp と llama.cpp のコミット）で作成済みならスクリプトはすぐ終わる
+    [[ -f "${ROOT}/tools/whisper.xcframework/Info.plist" ]] \
+        || echo "tools/whisper.xcframework が無いので scripts/build-whisper-xcframework.sh で作る（数分かかる）"
     "${ROOT}/scripts/build-whisper-xcframework.sh" >"${WORK}/build-whisper-xcframework.log" 2>&1 && return 0
     echo "scripts/build-whisper-xcframework.sh が失敗（末尾 20 行）:" >&2
     tail -n 20 "${WORK}/build-whisper-xcframework.log" | sed 's/^/      | /' >&2
@@ -1037,6 +1039,82 @@ JSON
 
 # ---------------------------------------------------------------- 実行
 
+# 10.x 共通: 架空の確定版の文字起こし（日英まじり、数字だけの行、一時停止の印）を ${WORK} に書く
+write_dev_translate_input() {
+    cat >"${WORK}/translate-in.json" <<'JSON'
+{"engine":"fake","language":"auto","utterances":[
+{"start":3,"end":6,"speaker":"other","text":"We moved about sixty percent of the tenants.","is_final":true},
+{"start":7,"end":9,"speaker":"me","text":"残りも今月末までにいけそうですか。","is_final":true},
+{"start":10,"end":11,"speaker":"unknown","text":"── 一時停止 ──","is_final":true},
+{"start":12,"end":13,"speaker":"other","text":"60%","is_final":true},
+{"start":14,"end":16,"speaker":"other","text":"Put me down. I'll take it.","is_final":true}]}
+JSON
+}
+
+check_dev_translate_shape() {
+    CURRENT="10.1 dev translate が偽の翻訳器で日英を自動で反転し、1 行の JSON を出す"
+    command -v jq >/dev/null 2>&1 || { skip "jq が無い"; return; }
+    cli_or_skip || return
+    write_dev_translate_input
+    local out="${WORK}/translate-1.json" again="${WORK}/translate-1b.json"
+    run_timeout 30 sh -c '"$1" dev translate "$2" >"$3"' _ "${AUTONOTE_CLI}" "${WORK}/translate-in.json" "${out}"; local code=$?
+    [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
+    [[ "$(wc -l <"${out}" | tr -d ' ')" -eq 1 ]] || { LAST_LOG="${out}"; fail "出力が 1 行でない"; return; }
+    jq -e '.target == "auto" and .model == "fake" and .utterances == 5 and .skipped == [2, 3]
+           and ([.entries[].index] == [0, 1, 4])
+           and .entries[0].source_lang == "en" and .entries[0].target_lang == "ja"
+           and .entries[0].text == "JA: We moved about sixty percent of the tenants."
+           and .entries[1].source_lang == "ja" and .entries[1].target_lang == "en"
+           and .entries[1].text == "EN: 残りも今月末までにいけそうですか。"' "${out}" >/dev/null \
+        || { LAST_LOG="${out}"; fail "形か言語の判定が違う: $(cat "${out}")"; return; }
+    run_timeout 30 sh -c '"$1" dev translate "$2" >"$3"' _ "${AUTONOTE_CLI}" "${WORK}/translate-in.json" "${again}"
+    cmp -s "${out}" "${again}" || { LAST_LOG="${again}"; fail "2 回目の出力が 1 回目と違う（決定的でない）"; return; }
+    pass "訳 3 件（en→ja 2・ja→en 1）、数字だけの行と一時停止の印は訳さない、2 回とも同じ"
+}
+
+check_dev_translate_fixed_target() {
+    CURRENT="10.2 dev translate --target ja は英語の行だけを訳す（日本語の行はそのまま）"
+    command -v jq >/dev/null 2>&1 || { skip "jq が無い"; return; }
+    cli_or_skip || return
+    [[ -s "${WORK}/translate-in.json" ]] || write_dev_translate_input
+    local out="${WORK}/translate-2.json"
+    run_timeout 30 sh -c '"$1" dev translate "$2" --target ja >"$3"' _ "${AUTONOTE_CLI}" "${WORK}/translate-in.json" "${out}"; local code=$?
+    [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
+    jq -e '.target == "ja" and ([.entries[].index] == [0, 4]) and ([.entries[].target_lang] | unique == ["ja"])
+           and .skipped == [1, 2, 3]' "${out}" >/dev/null \
+        || { LAST_LOG="${out}"; fail "訳す先の固定が効いていない: $(cat "${out}")"; return; }
+    run_timeout 10 "${AUTONOTE_CLI}" dev translate "${WORK}/translate-in.json" --target fr; code=$?
+    [[ ${code} -eq 2 ]] || { fail "--target fr が exit ${code}（期待 2 = usage）"; return; }
+    pass "訳 2 件（英語の行だけ）、--target fr は usage"
+}
+
+check_dev_translate_real_model() {
+    CURRENT="10.3 dev translate --model で本物の PLaMo 3 Translate が訳す（モデルと翻訳エンジンがあるときだけ）"
+    command -v jq >/dev/null 2>&1 || { skip "jq が無い"; return; }
+    cli_or_skip || return
+    local model="${E2E_PLAMO_MODEL:-${HOME}/Library/Caches/autonote-plamo-spike/models/pfnet/plamo-3-translate-0.8b-GGUF/plamo-3-translate-0.8b-Q4_K_M.gguf}"
+    [[ -f "${model}" ]] || { skip "モデルが無い（E2E_PLAMO_MODEL で GGUF を指定する）"; return; }
+    [[ -s "${WORK}/translate-in.json" ]] || write_dev_translate_input
+    local out="${WORK}/translate-3.json"
+    run_timeout 120 sh -c '"$1" dev translate "$2" --model "$3" >"$4"' _ "${AUTONOTE_CLI}" "${WORK}/translate-in.json" "${model}" "${out}"; local code=$?
+    if [[ ${code} -ne 0 ]] && grep -q "翻訳エンジン" "${LAST_LOG}"; then skip "このビルドには翻訳エンジンが無い（--model は分かりやすいエラーで止まる）"; return; fi
+    [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
+    jq -e '([.entries[].index] == [0, 1, 4]) and (.entries[1].text | test("[A-Za-z]"))
+           and (.entries[0].text | test("[ぁ-んァ-ン一-龥]"))' "${out}" >/dev/null \
+        || { LAST_LOG="${out}"; fail "訳が期待の言語でない: $(cat "${out}")"; return; }
+    pass "$(jq -r '.entries[0].text' "${out}")"
+}
+
+check_translation_default_off() {
+    CURRENT="10.4 翻訳は既定オフで、起動しても翻訳モデルをダウンロードしない"
+    app_or_skip || return
+    local mode; mode="$(plutil -extract translation_mode raw -o - "${DATA}/settings.json" 2>/dev/null)"
+    [[ -z "${mode}" || "${mode}" == "off" ]] || { LAST_LOG=""; fail "settings.json の translation_mode が「${mode}」（期待: なし か off）"; return; }
+    local files; files="$(find "${DATA}/models/translation" -type f 2>/dev/null | wc -l | tr -d ' ')"
+    [[ "${files}" -eq 0 ]] || { LAST_LOG=""; fail "${DATA}/models/translation にファイルが ${files} 個（期待 0）"; return; }
+    pass "translation_mode ${mode:-（未設定）}、models/translation は空"
+}
+
 CHECKS=(
     check_identity_consistency
     check_swift_test
@@ -1050,6 +1128,7 @@ CHECKS=(
     check_app_launch
     check_first_run_output_folder
     check_first_run_no_download
+    check_translation_default_off   # アプリが動いている間に見る（06.6 でアプリを止めるため）
     check_menu_no_folder_warning
     check_status_over_socket
     check_failure_message_compat
@@ -1082,6 +1161,9 @@ CHECKS=(
     check_dev_live_summary_shape
     check_dev_live_summary_accumulates
     check_dev_live_summary_questions
+    check_dev_translate_shape
+    check_dev_translate_fixed_target
+    check_dev_translate_real_model
 )
 
 ensure_whisper_xcframework   # 失敗しても続ける（swift test などの項目が FAIL を出す）

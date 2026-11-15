@@ -6,13 +6,14 @@ AutoNote をソースからビルドし、テストし、変更を入れるた�
 
 - macOS 26.0 以降の Mac（Apple Silicon でも Intel でもよい）
 - Xcode 26 系（Swift 6.2 以降のツールチェーンと macOS 26 SDK。`Package.swift` は `swift-tools-version:6.2`。CI は Xcode 26.6 / Swift 6.3 を使う）。`xcodebuild`・`libtool`・`lipo` は Xcode に入っている
-- cmake（whisper.cpp の XCFramework のビルドに使う。ninja があれば使う）と git
+- cmake（whisper.cpp + llama.cpp の XCFramework のビルドに使う。ninja があれば使う）と git
 - Claude Code の CLI（`claude`。議事録生成を実際に動かすとき）
 - jq（`scripts/e2e-check.sh` の一部の項目が使う）
 
 ## 初回セットアップ
 
-- whisper.cpp の XCFramework（`tools/whisper.xcframework`）はリポジトリに含めず、手元でソースからビルドする。初回は `scripts/build-whisper-xcframework.sh` を実行する（数分かかる。`tools/whisper.cpp` が無ければ v1.9.5 を clone する。既存の `tools/whisper.cpp` が commit `d1be6fd`（= v1.9.5）でなければエラーで止まる）。公式の zip は x86_64 スライスが AVX2 なしで Intel では約 7 倍遅いため使わない。`scripts/build-app.sh` と `scripts/e2e-check.sh` は成果物が無ければこのスクリプトを先に呼ぶ
+- whisper.cpp と llama.cpp の XCFramework（`tools/whisper.xcframework`。フレームワーク名・モジュール名は `whisper` のまま、`llama.h` も入っている）はリポジトリに含めず、手元でソースからビルドする。初回は `scripts/build-whisper-xcframework.sh` を実行する（数分かかる。`tools/whisper.cpp`（v1.9.5）と `tools/llama.cpp`（b12359 = Homebrew の llama.cpp 1.0.0）が無ければ clone する。既存の checkout がスクリプトで固定したコミットでなければエラーで止まる）。ggml は llama.cpp 側の 1 つだけをビルドし、whisper.cpp もそれを使う（PLaMo 3 Translate には whisper.cpp v1.9.5 同梱の ggml より新しい ggml が要る）。公式の zip は x86_64 スライスが AVX2 なしで Intel では約 7 倍遅いため使わない。成果物の直下の `AutoNoteBuild.txt` に版を記録し、版が違えば作り直す。`scripts/build-app.sh` と `scripts/e2e-check.sh` は毎回このスクリプトを呼ぶ（今の版で作成済みならすぐ終わる）
+- XCFramework を作り直した後の `swift build` が `ggml.h has been modified since the module file ... was built` で失敗したら、古いモジュールのキャッシュを消す: `rm -rf .build/out/Intermediates.noindex/SwiftExplicitPrecompiledModules`（または `swift package clean`）
 - `tools/` は git の管理外。whisper.cpp のソース、XCFramework、ベンチ用のモデルや音声はここに置き、コミットしない
 - 初回の `scripts/build-app.sh` は自己署名のコード署名証明書 `AutoNote Dev` を作ってログインキーチェーンに入れるので（`scripts/make-dev-cert.sh`）、管理者認証のダイアログが出る。同じ証明書と同じ Bundle ID で署名し続けることで、再ビルドしてもマイクなどの許可（TCC）が外れない
 - `xcodebuild -create-xcframework` がプラグインの読み込みで失敗する Xcode がある（Xcode 26.5 で確認。直すには `xcodebuild -runFirstLaunch`）。そのときスクリプトは同じ構造の XCFramework を手で組んで続ける
@@ -79,6 +80,8 @@ autonote dev models list|download <name>|delete <name> [--data <dir>]
 autonote dev summarize --fake <transcript.json> --out <dir> [--minutes <minutes.json>] [--fail-summary] [--claude]
   (--minutes is required unless --fail-summary or --claude is given)
 autonote dev live-summary <live.json> [--state <state.json>] [--questions <questions.json>] [--claude]
+autonote dev translate <transcript.json> [--target auto|ja|en] [--model <gguf>]
+  (without --model: the deterministic fake, "EN: <text>" / "JA: <text>"; --model needs the on-device llama.cpp runtime)
 ```
 
 `scripts/` の一覧:
@@ -87,7 +90,7 @@ autonote dev live-summary <live.json> [--state <state.json>] [--questions <quest
 |---|---|
 | `config.sh` | Bundle ID と署名証明書名の唯一の定義。他のスクリプトが source する |
 | `build-app.sh` | `AutoNote.app` を組み立てて署名する |
-| `build-whisper-xcframework.sh` | `tools/whisper.cpp`（v1.9.5）から `tools/whisper.xcframework` を作る（x86_64 は AVX2 付き、arm64 は Metal・Core ML） |
+| `build-whisper-xcframework.sh` | `tools/whisper.cpp`（v1.9.5）と `tools/llama.cpp`（b12359）を 1 つの ggml でビルドし、`tools/whisper.xcframework` を作る（x86_64 は AVX2 付き、arm64 は Metal・Core ML） |
 | `make-dev-cert.sh` | 自己署名の証明書 `AutoNote Dev` をログインキーチェーンに作り、コード署名用に信頼する（冪等） |
 | `e2e-check.sh` | E2E の動作確認 |
 | `tcc-check.sh` | マイク・システム音声録音などの許可（TCC）の持続と許可なしの挙動を、手順を自動化して記録する |

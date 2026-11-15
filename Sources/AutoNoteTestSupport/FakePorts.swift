@@ -346,6 +346,37 @@ public actor FakeLiveSummaryPort: LiveSummaryPort {
     private func unsubscribe(_ id: UUID) { subscribers.remove(id) }
 }
 
+/// A `TranslationPort` whose stored translations, availability and updates the test sets.
+public actor FakeTranslationPort: TranslationPort {
+    public private(set) var calls: [String] = []
+    public var stored: [MeetingID: MeetingTranslation] = [:]
+    public var available: TranslationAvailability
+    private var subscribers = Subscribers<TranslationUpdate>()
+
+    public init(available: TranslationAvailability = .ready) { self.available = available }
+
+    public func send(_ u: TranslationUpdate) { subscribers.yield(u) }
+    public func setStored(_ t: MeetingTranslation, for id: MeetingID) { stored[id] = t }
+
+    public func updates() -> AsyncStream<TranslationUpdate> {
+        calls.append("updates")
+        return subscribers.stream { [weak self] id in Task { await self?.unsubscribe(id) } }
+    }
+
+    public func meetingTranslation(_ id: MeetingID) -> MeetingTranslation { stored[id] ?? .empty }
+
+    public func translate(_ id: MeetingID) throws {
+        calls.append("translate \(id.rawValue)")
+        guard available == .ready else { throw AppCommandError.invalid("unavailable") }
+    }
+
+    public func availability() -> TranslationAvailability { available }
+
+    public func setShown(_ shown: Bool) { calls.append("setShown \(shown)") }
+
+    private func unsubscribe(_ id: UUID) { subscribers.remove(id) }
+}
+
 public actor FakeOutputFolderPort: OutputFolderPort {
     public private(set) var calls: [String] = []
     public private(set) var available: Bool
@@ -437,6 +468,7 @@ public struct FakePorts: Sendable {
     public let liveSummary: FakeLiveSummaryPort
     /// The real repository over memory (its behaviour is what the model's question actions rely on).
     public let questions: LiveQuestionsRepository
+    public let translation: FakeTranslationPort
     public var ports: AppPorts
 
     public init(recorder: FakeRecorderPort = FakeRecorderPort(), events: FakeRecordingEventsPort = FakeRecordingEventsPort(),
@@ -445,7 +477,8 @@ public struct FakePorts: Sendable {
                 outputFolder: FakeOutputFolderPort = FakeOutputFolderPort(), opener: FakeFileOpener = FakeFileOpener(),
                 readiness: FakeReadinessPort = FakeReadinessPort(),
                 liveSummary: FakeLiveSummaryPort = FakeLiveSummaryPort(),
-                questions: LiveQuestionsRepository = LiveQuestionsRepository(storage: InMemoryLiveQuestionsStorage())) {
+                questions: LiveQuestionsRepository = LiveQuestionsRepository(storage: InMemoryLiveQuestionsStorage()),
+                translation: FakeTranslationPort = FakeTranslationPort()) {
         self.recorder = recorder
         self.events = events
         self.queue = queue
@@ -457,8 +490,9 @@ public struct FakePorts: Sendable {
         self.readiness = readiness
         self.liveSummary = liveSummary
         self.questions = questions
+        self.translation = translation
         ports = AppPorts(recorder: recorder, events: events, queue: queue, meetings: meetings, automations: automations,
                          live: live, outputFolder: outputFolder, opener: opener, readiness: readiness,
-                         liveSummary: liveSummary, questions: questions)
+                         liveSummary: liveSummary, questions: questions, translation: translation)
     }
 }

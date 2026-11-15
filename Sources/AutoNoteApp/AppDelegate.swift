@@ -25,6 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var tasks: [Task<Void, Never>] = []
     /// The live summary scheduler's `run` (also in `tasks`); cancelled on quit so no new claude call starts.
     private var liveSummaryTask: Task<Void, Never>?
+    /// The translation (live and post-recording); cancelled on quit, then the runtime is unloaded (spec 10).
+    private var translationTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installTerminationSignals()
@@ -85,6 +87,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let liveSummaryTask = Task { await env.runLiveSummary() }
         self.liveSummaryTask = liveSummaryTask
         tasks.append(liveSummaryTask)
+        let translationTask = Task { await env.runTranslation() }
+        self.translationTask = translationTask
+        tasks.append(translationTask)
         tasks.append(Task { await wiring.run() })
         // After the saved jobs are loaded, a `.recorded` meeting with no job (the app quit between a stop and its
         // `route`) is enqueued again (I2).
@@ -133,6 +138,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let s = (try? await env.settings.load()) ?? AutoNoteCore.Settings()
         model.shortcuts = s.shortcuts
         model.liveSummaryEnabled = s.liveSummaryEnabled
+        model.translationShown = s.translationShown
 
         // 4. On the very first run, the main window, so it lands somewhere to start from (later launches open nothing);
         // 5. then the microphone prompt while undetermined (the recorder itself never asks).
@@ -287,16 +293,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         liveSummaryTask?.cancel()
-        guard let server = env?.server else { return }
-        // The socket file must be gone when the process exits (E2E 06.6); wait briefly for the actor.
-        let done = DispatchSemaphore(value: 0)
-        Task.detached {
-            await server.stop()
-            done.signal()
+        translationTask?.cancel()
+        // The translation model's Metal resources must be freed before exit (research note §2.2: an assert
+        // otherwise); jobs are cancelled first, then the runtime unloads.
+        if let translation = env?.translation {
+            let unloaded = DispatchSemaphore(value: 0)
+            Task.detached {
+                await translation.shutdown()
+                unloaded.signal()
+            }
+            if unloaded.wait(timeout: .now() + 2) == .timedOut {
+                logger.error("translation runtime did not unload in time")
+            }
         }
-        if done.wait(timeout: .now() + 2) == .timedOut {
-            logger.error("socket server did not stop in time")
+        if let server = env?.server {
+            // The socket file must be gone when the process exits (E2E 06.6); wait briefly for the actor.
+            let done = DispatchSemaphore(value: 0)
+            Task.detached {
+                await server.stop()
+                done.signal()
+            }
+            if done.wait(timeout: .now() + 2) == .timedOut {
+                logger.error("socket server did not stop in time")
+            }
         }
+        // Last, after the recording and the socket: free every llama model synchronously even if the unload above
+        // timed out, and refuse later loads, so ggml's Metal device finds no buffer left at exit (it aborts then).
+        LlamaRuntime.shutdown()
     }
 
     /// SIGTERM (default handling ignored, then caught) and power-off both quit with `reason = .powerOff`.

@@ -2,12 +2,12 @@ import AppKit
 import AutoNoteCore
 import SwiftUI
 
-/// The eight tabs of the settings window, in their order.
+/// The nine tabs of the settings window, in their order.
 enum SettingsTab: Hashable {
-    case general, devices, transcription, dictionary, minutes, automations, retention, shortcuts
+    case general, devices, transcription, translation, dictionary, minutes, automations, retention, shortcuts
 }
 
-/// The settings window: eight tabs. Each tab loads what it shows when it appears and writes it
+/// The settings window: nine tabs. Each tab loads what it shows when it appears and writes it
 /// with its own 「保存」.
 struct SettingsView: View {
     @Bindable var shell: AppShell
@@ -25,6 +25,9 @@ struct SettingsView: View {
                     TranscriptionTab(env: env)
                         .tabItem { Label("文字起こし", systemImage: "text.bubble") }
                         .tag(SettingsTab.transcription)
+                    TranslationTab(env: env)
+                        .tabItem { Label("翻訳", systemImage: "character.bubble") }
+                        .tag(SettingsTab.translation)
                     DictionaryTab(env: env)
                         .tabItem { Label("辞書", systemImage: "character.book.closed") }
                         .tag(SettingsTab.dictionary)

@@ -85,3 +85,13 @@
 - `claude_env`: 議事録の作成、リアルタイム要約、ログインの確認の 3 つの起動で `claude` に渡す環境変数（名前 → 値のオブジェクト。既定 `{}`）。AutoNote が組み立てる環境（`claude` のフォルダとシステムのフォルダを前に足した `PATH` を含む）より優先し、`PATH` を書けばその値をそのまま使う。名前は英字・数字・`_` だけで数字で始めない（`^[A-Za-z_][A-Za-z0-9_]*$`）。設定画面ではそれ以外の名前は保存できず、手で書いた不正な名前は読み込み時に無視する。例: 別の設定フォルダの Claude Code を使うなら `"claude_env": {"CLAUDE_CONFIG_DIR": "/Users/<あなた>/.claude-work"}`。設定 › 一般 ›「Claude の起動」の「環境変数」と同じ
 
 `claude_args` と `claude_env` は、議事録は次の作成から、リアルタイム要約は次の録音から効く（アプリの再起動は要らない）。
+
+翻訳（設定 › 翻訳。どれも書かなければ既定）:
+
+- `translation_mode`: `off`（既定）/ `after_recording`（録音後に訳す）/ `during_recording`（録音中も訳す。Intel では録音後だけになる）
+- `translation_target`: `auto`（既定。日本語 ↔ 英語を発話ごとに反転）/ `ja` / `en`
+- `translation_model`: `0.8b` / `2b` / `8b`。書かないとこの Mac の既定（Apple Silicon かつメモリ 16 GB 以上は `2b`、それ以外は `0.8b`）。メモリ 16 GB 未満の `8b` は既定に戻す
+- `translation_license_version`: 同意した PLaMo Community License の版。これが今の版でない限り、翻訳モデルはダウンロードも使用もしない
+- `translation_shown`: 文字起こしの「訳文」スイッチ（既定 `true`）
+
+翻訳モデルは `~/Library/Application Support/AutoNote/models/translation/` に、訳文は会議ごとに `transcripts/<会議ID>/translation.json`（確定版の訳）と `live-translation.json`（録音中の訳。確定版の訳ができると消える）に保存する。文字起こしのファイル（`final.json` など）は書き換えない。モデルの重みには PLaMo Community License が適用され、業務（社内利用を含む）で使う場合は PFN への事前登録が要る（README の「翻訳モデル」を参照）。

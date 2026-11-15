@@ -12,6 +12,7 @@ struct ProcessingDetailView: View {
     @State private var loadError: String?
     /// The stored live summary, kept read-only after the stop.
     @State private var stored: LiveSummaryState?
+    @State private var translation = MeetingTranslation.empty
 
     var body: some View {
         let stage = queueItem?.stage ?? ""
@@ -45,6 +46,9 @@ struct ProcessingDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
             StoredLiveSummary(model: model, id: MeetingID(rawValue: row.id), stored: stored)
+            TranslationControls(model: model, id: MeetingID(rawValue: row.id), translation: translation)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
             if let loadError {
                 ContentUnavailableView("文字起こしを読めませんでした", systemImage: "doc.questionmark", description: Text(loadError))
                     .frame(maxHeight: .infinity)
@@ -52,10 +56,19 @@ struct ProcessingDetailView: View {
                 ContentUnavailableView("リアルタイムの文字起こしはありません", systemImage: "text.alignleft")
                     .frame(maxHeight: .infinity)
             } else {
-                LiveTranscriptView(lines: lines, follows: false)
+                // The translations made while recording, until the final translation replaces them.
+                LiveTranscriptView(lines: lines, follows: false,
+                                   translations: TranslationPresentation.liveTranslations(
+                                       lines, translation.live, shown: model.translationShown))
             }
         }
         .task(id: row.id) { await load() }
+        .task(id: TranslationLoadKey(id: row.id, revision: model.translationRevisions[MeetingID(rawValue: row.id)] ?? 0)) {
+            translation = .empty
+            let loaded = await env.ports.translation.meetingTranslation(MeetingID(rawValue: row.id))
+            guard !Task.isCancelled else { return }
+            translation = loaded
+        }
     }
 
     private var queueItem: QueueItemDTO? {

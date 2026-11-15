@@ -28,10 +28,9 @@ elif ! security find-identity -v -p codesigning | grep -q "\"${CERT_NAME}\""; th
     "${ROOT}/scripts/make-dev-cert.sh"
 fi
 
-# whisper.cpp の XCFramework（Package.swift の binaryTarget）が無ければ先にソースから作る
-if [[ ! -f "${ROOT}/tools/whisper.xcframework/Info.plist" ]]; then
-    "${ROOT}/scripts/build-whisper-xcframework.sh"
-fi
+# whisper.cpp + llama.cpp の XCFramework（Package.swift の binaryTarget）が無いか古い版なら先にソースから作る
+# （今の版で作成済みならスクリプトはすぐ終わる）
+"${ROOT}/scripts/build-whisper-xcframework.sh"
 
 BUILD_ARGS=(-c "${CONF}")
 for arch in ${AUTONOTE_BUILD_ARCHS:-}; do

@@ -10,7 +10,8 @@ let package = Package(
         .executable(name: "autonote", targets: ["autonote"]),
     ],
     targets: [
-        // scripts/build-whisper-xcframework.sh が tools/whisper.cpp（v1.9.5）から作る（x86_64 は AVX2/FMA/F16C 付き）
+        // scripts/build-whisper-xcframework.sh が tools/whisper.cpp（v1.9.5）と tools/llama.cpp（b12359）を
+        // llama.cpp の ggml 1 つでビルドして作る（モジュール whisper に whisper.h と llama.h。x86_64 は AVX2/FMA/F16C 付き）
         .binaryTarget(name: "whisper", path: "tools/whisper.xcframework"),
         .target(name: "AutoNoteCore", dependencies: ["whisper"]),
         .executableTarget(name: "AutoNoteApp", dependencies: ["AutoNoteCore"]),
