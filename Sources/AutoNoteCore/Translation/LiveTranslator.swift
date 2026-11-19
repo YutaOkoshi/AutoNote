@@ -218,7 +218,11 @@ public actor LiveTranslator {
                             finished = false
                             break
                         }
-                        let text = try await translator.translateSummary(item.text, from: item.source, to: item.target)
+                        let history = SummaryTranslation.history(for: item.text,
+                                                                 context: SummaryTranslation.liveContext(current),
+                                                                 document: summaryDocument)
+                        let text = try await translator.translateSummary(item.text, from: item.source, to: item.target,
+                                                                         history: history)
                         summaryDocument.entries.append(SummaryTranslatedText(
                             sourceHash: TranslationKey.textHash(item.text), sourceLanguage: item.source,
                             targetLanguage: item.target, text: text))

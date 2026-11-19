@@ -43,7 +43,7 @@ import Testing
         let line = try await DevTranslateLine.make(transcript: t, target: .auto, model: "fake", completer: FakeTextCompleter(),
                                                    minutes: minutes, liveSummary: live)
         let json = String(decoding: try line.encoded(), as: UTF8.self)
-        #expect(json.contains(#""minutes":{"entries":[{"source":"移行の定例","source_lang":"ja","target_lang":"en","text":"EN: 移行の定例"},{"source":"六割を移した。","source_lang":"ja","target_lang":"en","text":"EN: 六割を移した。"},{"source":"月末までに終える","source_lang":"ja","target_lang":"en","text":"EN: 月末までに終える"},{"source":"手順書を送る","source_lang":"ja","target_lang":"en","text":"EN: 手順書を送る"}],"summary_lang":"ja","target_lang":"en"}"#))
+        #expect(json.contains(#""minutes":{"entries":[{"source":"六割を移した。","source_lang":"ja","target_lang":"en","text":"EN: 六割を移した。"},{"source":"移行の定例","source_lang":"ja","target_lang":"en","text":"EN: 移行の定例"},{"source":"月末までに終える","source_lang":"ja","target_lang":"en","text":"EN: 月末までに終える"},{"source":"手順書を送る","source_lang":"ja","target_lang":"en","text":"EN: 手順書を送る"}],"summary_lang":"ja","target_lang":"en"}"#))
         #expect(json.contains(#""live_summary":{"entries":[{"source":"Migration status","source_lang":"en","target_lang":"ja","text":"JA: Migration status"},{"source":"Finish by month end","source_lang":"en","target_lang":"ja","text":"JA: Finish by month end"}],"summary_lang":"en","target_lang":"ja"}"#))
         // A fixed target equal to the summary's language: nothing translated.
         let same = try await DevTranslateLine.make(transcript: t, target: .ja, model: "fake", completer: FakeTextCompleter(),

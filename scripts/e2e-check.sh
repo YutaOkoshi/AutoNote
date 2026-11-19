@@ -1109,7 +1109,7 @@ JSON
         "${WORK}/translate-in.json" "${WORK}/translate-minutes.json" "${WORK}/translate-live.json" "${out}"; local code=$?
     [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
     jq -e '.minutes.summary_lang == "ja" and .minutes.target_lang == "en"
-           and ([.minutes.entries[].source] == ["移行の定例", "週末に六割を移した。", "月末までに終える", "手順書を送る"])
+           and ([.minutes.entries[].source] == ["週末に六割を移した。", "移行の定例", "月末までに終える", "手順書を送る"])
            and .minutes.entries[2].text == "EN: 月末までに終える"
            and ([.minutes.entries[].source] | index("佐藤") == null)
            and .live_summary.summary_lang == "en" and .live_summary.target_lang == "ja"

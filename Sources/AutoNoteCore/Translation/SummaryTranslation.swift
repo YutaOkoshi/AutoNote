@@ -88,15 +88,17 @@ public struct SummaryTranslationItem: Equatable, Sendable {
 public enum SummaryTranslation {
     // MARK: - What is translated (spec 訳す対象)
 
-    /// The live summary: the topic, the decisions and the homework texts (not the owners).
+    /// The live summary: the topic, the decisions and the homework texts (not the owners). The topic goes first, as
+    /// the items lean on it (`liveContext`).
     public static func liveTexts(_ s: LiveSummaryState) -> [String] {
         unique([s.now] + s.decisions + s.todos.map(\.text))
     }
 
-    /// The minutes in the note's section order. Owners, dates, times, attendees, suggested terms and the diagram
-    /// are not translated.
+    /// The minutes in the note's section order, except that the summary comes before the title: the title leans on
+    /// the summary, and every other text on both (`minutesContext`). Owners, dates, times, attendees, suggested terms
+    /// and the diagram are not translated.
     public static func minutesTexts(_ m: MinutesOutput) -> [String] {
-        var texts = [m.title] + m.summary
+        var texts = m.summary + [m.title]
         for a in m.agenda { texts += [a.title, a.body] }
         texts += m.keyPoints.map(\.text)
         texts += m.decisions.map(\.text)
@@ -107,6 +109,34 @@ public enum SummaryTranslation {
         for r in m.risks { texts += [r.description, r.mitigation ?? ""] }
         texts += m.insights.map(\.text)
         return unique(texts)
+    }
+
+    // MARK: - Context (Lead's call, open to change)
+
+    /// The texts a minutes text is translated with as context, oldest first: the summary's paragraphs, then the
+    /// title (nearest). A text only lends context once it is translated, and never to itself (`history`).
+    public static func minutesContext(_ m: MinutesOutput) -> [String] {
+        m.summary + [m.title]
+    }
+
+    /// The live summary's context: the items in order, then the topic (nearest); the last `historyLimit` that are
+    /// translated are the topic and the latest items.
+    public static func liveContext(_ s: LiveSummaryState) -> [String] {
+        s.decisions + s.todos.map(\.text) + [s.now]
+    }
+
+    /// The history pairs `text` is translated with: the last `PlamoPrompt.historyLimit` texts of `context` other than
+    /// `text` that `document` holds a non-empty translation of. Only a prompt's history, never part of the output;
+    /// the stored entry stays keyed by `text` alone, so a changed context translates nothing again.
+    public static func history(for text: String, context: [String],
+                               document: SummaryTranslationDocument) -> [TranslationPair] {
+        let pairs: [TranslationPair] = context.compactMap { c in
+            guard c != text, let entry = document.entries.first(where: { $0.sourceHash == TranslationKey.textHash(c) }),
+                  !entry.text.isEmpty else { return nil }
+            return TranslationPair(source: c, sourceLanguage: entry.sourceLanguage, translation: entry.text,
+                                   targetLanguage: entry.targetLanguage)
+        }
+        return Array(pairs.suffix(PlamoPrompt.historyLimit))
     }
 
     private static func unique(_ texts: [String]) -> [String] {
@@ -152,14 +182,17 @@ public enum SummaryTranslation {
     /// Translates what `pending` finds, updating `document` after each text and calling `checkpoint` with it (to save
     /// it and broadcast). Entries of texts no longer in `texts` are dropped first. `.suspend` stops the run.
     /// - Returns: whether every pending text was done.
-    public static func run(_ document: inout SummaryTranslationDocument, texts: [String], target: TranslationLanguage,
+    public static func run(_ document: inout SummaryTranslationDocument, texts: [String], context: [String] = [],
+                           target: TranslationLanguage,
                            translator: UtteranceTranslator,
                            checkpoint: (SummaryTranslationDocument) async -> TranscriptTranslation.Checkpoint)
         async throws -> Bool {
         document.keepOnly(texts)
         for item in pending(texts, target: target, document: document) {
             try Task.checkCancellation()
-            let text = try await translator.translateSummary(item.text, from: item.source, to: item.target)
+            let text = try await translator.translateSummary(item.text, from: item.source, to: item.target,
+                                                             history: history(for: item.text, context: context,
+                                                                              document: document))
             document.entries.append(SummaryTranslatedText(sourceHash: TranslationKey.textHash(item.text),
                                                           sourceLanguage: item.source, targetLanguage: item.target,
                                                           text: text))
@@ -170,17 +203,18 @@ public enum SummaryTranslation {
 }
 
 extension UtteranceTranslator {
-    /// A summary text: no history (the items stand alone), line by line (a paragraph break stays where it was),
-    /// with a larger cap than an utterance's (`PlamoPrompt.summaryMaxTokens`). Blank lines are kept as they are.
-    public func translateSummary(_ text: String, from source: TranslationLanguage,
-                                 to target: TranslationLanguage) async throws -> String {
+    /// A summary text, line by line (a paragraph break stays where it was), with a larger cap than an utterance's
+    /// (`PlamoPrompt.summaryMaxTokens`). `history` is the same summary's context (`SummaryTranslation.history`),
+    /// given to every line; it is only the prompt's, never translated into the output. Blank lines are kept.
+    public func translateSummary(_ text: String, from source: TranslationLanguage, to target: TranslationLanguage,
+                                 history: [TranslationPair] = []) async throws -> String {
         var out: [String] = []
         for line in text.components(separatedBy: "\n") {
             if line.trimmingCharacters(in: .whitespaces).isEmpty {
                 out.append(line)
                 continue
             }
-            out.append(try await translate(line, from: source, to: target, history: [],
+            out.append(try await translate(line, from: source, to: target, history: history,
                                            maxTokens: PlamoPrompt.summaryMaxTokens(for: line)))
         }
         return out.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)

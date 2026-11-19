@@ -88,13 +88,15 @@ public struct DevTranslateLine: Codable, Equatable, Sendable {
         public var targetLang: TranslationLanguage?
         public var entries: [Entry]
 
-        static func make(_ texts: [String], setting: TranslationTarget, translator: UtteranceTranslator) async throws -> Summary {
+        static func make(_ texts: [String], context: [String], setting: TranslationTarget,
+                         translator: UtteranceTranslator) async throws -> Summary {
             let language = SummaryLanguagePolicy.decide(texts)
             guard let target = SummaryTranslation.targetLanguage(for: texts, setting: setting) else {
                 return Summary(summaryLang: language, targetLang: nil, entries: [])
             }
             var document = SummaryTranslationDocument(model: "", modelRevision: "", target: setting, updatedAt: Date())
-            _ = try await SummaryTranslation.run(&document, texts: texts, target: target, translator: translator) { _ in .proceed }
+            _ = try await SummaryTranslation.run(&document, texts: texts, context: context, target: target,
+                                                 translator: translator) { _ in .proceed }
             let entries = SummaryTranslation.pending(texts, target: target, document: nil).compactMap { item -> Entry? in
                 guard let text = document.translation(of: item.text) else { return nil }
                 return Entry(source: item.text, sourceLang: item.source, targetLang: item.target, text: text)
@@ -121,10 +123,13 @@ public struct DevTranslateLine: Codable, Equatable, Sendable {
         var line = DevTranslateLine(target: target, model: model, utterances: transcript.utterances.count, entries: entries,
                                     skipped: transcript.utterances.indices.filter { !done.contains($0) })
         if let minutes {
-            line.minutes = try await .make(SummaryTranslation.minutesTexts(minutes), setting: target, translator: translator)
+            line.minutes = try await .make(SummaryTranslation.minutesTexts(minutes),
+                                          context: SummaryTranslation.minutesContext(minutes), setting: target,
+                                          translator: translator)
         }
         if let liveSummary {
-            line.liveSummary = try await .make(SummaryTranslation.liveTexts(liveSummary), setting: target,
+            line.liveSummary = try await .make(SummaryTranslation.liveTexts(liveSummary),
+                                               context: SummaryTranslation.liveContext(liveSummary), setting: target,
                                                translator: translator)
         }
         return line

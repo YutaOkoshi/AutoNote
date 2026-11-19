@@ -299,8 +299,12 @@ public actor TranslationService: TranslationPort {
         if let modified = Self.modificationDate(deps.store.paths.minutesFile(id)) { summariesAttempted[id] = modified }
         let s = await deps.settings()
         var work: [SummaryWork] = []
-        if let m = deps.store.minutes(id) { work += summaryWork(id, .minutes, SummaryTranslation.minutesTexts(m), s) }
-        if let l = deps.store.liveSummary(id) { work += summaryWork(id, .live, SummaryTranslation.liveTexts(l), s) }
+        if let m = deps.store.minutes(id) {
+            work += summaryWork(id, .minutes, SummaryTranslation.minutesTexts(m), SummaryTranslation.minutesContext(m), s)
+        }
+        if let l = deps.store.liveSummary(id) {
+            work += summaryWork(id, .live, SummaryTranslation.liveTexts(l), SummaryTranslation.liveContext(l), s)
+        }
         let total = work.reduce(0) { $0 + $1.pending }
         guard total > 0 else { return }
         let (model, url) = try await deps.resolve(s).get()
@@ -320,7 +324,7 @@ public actor TranslationService: TranslationPort {
                 for i in current.indices {
                     let kind = current[i].kind
                     let ok = try await SummaryTranslation.run(&current[i].document, texts: current[i].texts,
-                                                              target: current[i].target,
+                                                              context: current[i].context, target: current[i].target,
                                                               translator: translator) { document in
                         count += 1
                         return await self.summaryCheckpoint(id, kind, document, TranslationProgress(done: count, total: total))
@@ -345,19 +349,21 @@ public actor TranslationService: TranslationPort {
     private struct SummaryWork: Sendable {
         var kind: SummaryKind
         var texts: [String]
+        var context: [String]
         var target: TranslationLanguage
         var document: SummaryTranslationDocument
         var pending: Int
     }
 
     /// One summary's work, or nothing when its target is its own language or every text is translated already.
-    private func summaryWork(_ id: MeetingID, _ kind: SummaryKind, _ texts: [String], _ s: Settings) -> [SummaryWork] {
+    private func summaryWork(_ id: MeetingID, _ kind: SummaryKind, _ texts: [String], _ context: [String],
+                             _ s: Settings) -> [SummaryWork] {
         guard let target = SummaryTranslation.targetLanguage(for: texts, setting: s.translationTarget) else { return [] }
         let document = deps.store.loadSummary(id, kind)
             ?? SummaryTranslationDocument(model: "", modelRevision: "", target: s.translationTarget, updatedAt: deps.now())
         let pending = SummaryTranslation.pending(texts, target: target, document: document).count
         guard pending > 0 else { return [] }
-        return [SummaryWork(kind: kind, texts: texts, target: target, document: document, pending: pending)]
+        return [SummaryWork(kind: kind, texts: texts, context: context, target: target, document: document, pending: pending)]
     }
 
     private func summaryCheckpoint(_ id: MeetingID, _ kind: SummaryKind, _ document: SummaryTranslationDocument,

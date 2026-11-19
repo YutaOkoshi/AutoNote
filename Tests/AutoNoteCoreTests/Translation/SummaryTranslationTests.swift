@@ -36,7 +36,7 @@ import Testing
     @Test func theMinutesTranslateTheirTextsButNotNamesDatesTimesOrTheDiagram() {
         let texts = SummaryTranslation.minutesTexts(Self.minutes)
         #expect(texts == [
-            "テナント移行の定例", "週末に六割を移した。", "残りは今月末までに移す。", "進捗", "六割を移した",
+            "週末に六割を移した。", "残りは今月末までに移す。", "テナント移行の定例", "進捗", "六割を移した",
             "移行済みは六割", "移行は今月末までに終える", "残りの手順書を送る", "月末に間に合うか", "間に合う見込み",
             "移行の締め切り", "来週の定例で確認する", "週末の作業者が足りない", "応援を頼む", "週末の作業が効いた",
         ])
@@ -99,6 +99,80 @@ import Testing
         #expect(fake.snapshot.prompts.count == 2)
         #expect(!fake.snapshot.prompts[1].contains("一つ目の決定"))
         #expect(fake.snapshot.maxTokens[1] > PlamoPrompt.maxTokens(for: long))
+    }
+
+    // MARK: - Context (Lead 差し戻し 2: 短い項目は同じ要約の本文を文脈として渡す)
+
+    private static let input = "<|plamo:tag|>input<|plamo:key|>lang<|plamo:val|>"
+
+    /// The PFML history pairs a prompt carries before its own input, as (source, translation).
+    private func historyPairs(_ prompt: String) -> [(String, String)] {
+        let parts = prompt.components(separatedBy: Self.input).dropFirst().dropLast()
+        return parts.map { part in
+            let body = part.components(separatedBy: "<|plamo:msg|>")
+            return (body[1].components(separatedBy: "<|plamo:tag|>")[0], body[2])
+        }
+    }
+
+    @Test func minutesItemsCarryTheSummaryAndTheTitleAsContextNotAsOutput() async throws {
+        let fake = FakeTextCompleter()
+        var document = SummaryTranslationDocument(model: "2b", modelRevision: "r", target: .auto, updatedAt: Date())
+        let texts = SummaryTranslation.minutesTexts(Self.minutes)
+        // The context's texts go first, so the title already has the summary and the items have both.
+        #expect(Array(texts.prefix(3)) == Self.minutes.summary + [Self.minutes.title])
+        _ = try await SummaryTranslation.run(&document, texts: texts, context: SummaryTranslation.minutesContext(Self.minutes),
+                                             target: .en, translator: UtteranceTranslator(completer: fake)) { _ in .proceed }
+        let prompts = fake.snapshot.prompts
+        #expect(historyPairs(prompts[0]).isEmpty)
+        // The title: the summary's paragraphs, already translated.
+        #expect(historyPairs(prompts[2]).map(\.0) == Self.minutes.summary)
+        // A short item: the last summary paragraph and the title (nearest last), each with its translation.
+        let decision = try #require(prompts.first { FakeTextCompleter.lastInput($0)?.text == "移行は今月末までに終える" })
+        let pairs = historyPairs(decision)
+        #expect(pairs.map(\.0) == ["週末に六割を移した。", "残りは今月末までに移す。", "テナント移行の定例"])
+        #expect(pairs.last?.1 == "EN: テナント移行の定例")
+        // The context is never part of the stored translation.
+        #expect(document.translation(of: "移行は今月末までに終える") == "EN: 移行は今月末までに終える")
+    }
+
+    @Test func aChangedContextAloneTranslatesNothingAgain() async throws {
+        let fake = FakeTextCompleter()
+        var document = SummaryTranslationDocument(model: "2b", modelRevision: "r", target: .auto, updatedAt: Date())
+        let run: (MinutesOutput) async throws -> Void = { m in
+            _ = try await SummaryTranslation.run(&document, texts: SummaryTranslation.minutesTexts(m),
+                                                 context: SummaryTranslation.minutesContext(m), target: .en,
+                                                 translator: UtteranceTranslator(completer: fake)) { _ in .proceed }
+        }
+        try await run(Self.minutes)
+        let first = fake.snapshot.prompts.count
+        let hash = TranslationKey.textHash("移行は今月末までに終える")
+        var renamed = Self.minutes
+        renamed.title = "移行の定例会"
+        try await run(renamed)
+        // Only the new title: the items whose context changed keep their translations (the hash is the text's own).
+        #expect(fake.snapshot.prompts.count == first + 1)
+        #expect(document.entries.contains { $0.sourceHash == hash })
+    }
+
+    @Test func liveItemsCarryTheTopicAndTheLatestItems() async throws {
+        let fake = FakeTextCompleter()
+        var document = SummaryTranslationDocument(model: "2b", modelRevision: "r", target: .auto, updatedAt: Date())
+        _ = try await SummaryTranslation.run(&document, texts: SummaryTranslation.liveTexts(Self.live),
+                                             context: SummaryTranslation.liveContext(Self.live), target: .en,
+                                             translator: UtteranceTranslator(completer: fake)) { _ in .proceed }
+        let prompts = fake.snapshot.prompts
+        // The topic first (nothing yet to lean on), then each item with the latest items before it and the topic last.
+        #expect(historyPairs(prompts[0]).isEmpty)
+        #expect(historyPairs(prompts[1]).map(\.0) == ["テナント移行の進捗"])
+        #expect(historyPairs(prompts[3]).map(\.0) == ["月末までに終える", "応援を頼む", "テナント移行の進捗"])
+        // A newer topic gets the latest items, and itself is never its own context.
+        var next = Self.live
+        next.now = "当番の割り当て"
+        _ = try await SummaryTranslation.run(&document, texts: SummaryTranslation.liveTexts(next),
+                                             context: SummaryTranslation.liveContext(next), target: .en,
+                                             translator: UtteranceTranslator(completer: fake)) { _ in .proceed }
+        #expect(fake.snapshot.prompts.count == 5)
+        #expect(historyPairs(fake.snapshot.prompts[4]).map(\.0) == ["月末までに終える", "応援を頼む", "手順書を送る"])
     }
 
     @Test func aMultiLineTextIsTranslatedLineByLine() async throws {
