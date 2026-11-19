@@ -238,7 +238,8 @@ public actor TranslationService: TranslationPort {
         do {
             if !summariesOnly { try await translateMeeting(id, automatic: automatic) }
             // Then the summaries (spec 2026-11-19: 文字起こしに続けて議事録も訳す).
-            try await translateSummaries(id)
+            // 「訳し直す」 redoes the summaries too, like the transcript (review M2).
+            try await translateSummaries(id, fresh: !automatic)
             // Minutes written (or redone) while this job ran: `startSummariesIfDue` skipped them because the job was
             // running, and the meeting may have left the queue meanwhile, so the job takes them before it ends.
             while minutesChangedSinceAttempt(id) { try await translateSummaries(id) }
@@ -304,15 +305,19 @@ public actor TranslationService: TranslationPort {
 
     /// The minutes' and the live summary's texts still to translate, each saved after every text; the Vault note is
     /// rewritten when the minutes' translation changed. Paused like the transcript's translation.
-    private func translateSummaries(_ id: MeetingID) async throws {
+    /// `fresh` (a manual run) starts the stored translations over; so does a translation by another model or revision.
+    private func translateSummaries(_ id: MeetingID, fresh: Bool = false) async throws {
         if let modified = Self.modificationDate(deps.store.paths.minutesFile(id)) { summariesAttempted[id] = modified }
         let s = await deps.settings()
+        let current = try? await deps.resolve(s).get().0
         var work: [SummaryWork] = []
         if let m = deps.store.minutes(id) {
-            work += summaryWork(id, .minutes, SummaryTranslation.minutesTexts(m), SummaryTranslation.minutesContext(m), s)
+            work += summaryWork(id, .minutes, SummaryTranslation.minutesTexts(m), SummaryTranslation.minutesContext(m), s,
+                                model: current, fresh: fresh)
         }
         if let l = deps.store.liveSummary(id) {
-            work += summaryWork(id, .live, SummaryTranslation.liveTexts(l), SummaryTranslation.liveContext(l), s)
+            work += summaryWork(id, .live, SummaryTranslation.liveTexts(l), SummaryTranslation.liveContext(l), s,
+                                model: current, fresh: fresh)
         }
         let total = work.reduce(0) { $0 + $1.pending }
         guard total > 0 else { return }
@@ -366,10 +371,12 @@ public actor TranslationService: TranslationPort {
 
     /// One summary's work, or nothing when its target is its own language or every text is translated already.
     private func summaryWork(_ id: MeetingID, _ kind: SummaryKind, _ texts: [String], _ context: [String],
-                             _ s: Settings) -> [SummaryWork] {
+                             _ s: Settings, model: TranslationModel?, fresh: Bool) -> [SummaryWork] {
         guard let target = SummaryTranslation.targetLanguage(for: texts, setting: s.translationTarget) else { return [] }
-        let document = deps.store.loadSummary(id, kind)
-            ?? SummaryTranslationDocument(model: "", modelRevision: "", target: s.translationTarget, updatedAt: deps.now())
+        let empty = SummaryTranslationDocument(model: "", modelRevision: "", target: s.translationTarget, updatedAt: deps.now())
+        var document = deps.store.loadSummary(id, kind) ?? empty
+        let otherModel = model.map { document.model != $0.name || document.modelRevision != $0.revision } ?? false
+        if fresh || (otherModel && !document.entries.isEmpty) { document = empty }
         let pending = SummaryTranslation.pending(texts, target: target, document: document).count
         guard pending > 0 else { return [] }
         return [SummaryWork(kind: kind, texts: texts, context: context, target: target, document: document, pending: pending)]

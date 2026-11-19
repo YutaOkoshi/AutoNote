@@ -182,13 +182,19 @@ import Testing
         #expect(fake.snapshot.prompts.count == 2)
     }
 
-    @Test func anEmptyOutputIsRememberedSoItIsNotRetriedEveryUpdate() async throws {
+    /// Review M2: an empty output (nothing usable, or a prompt too long even alone) is a failure, not a translation:
+    /// it is not stored, and the next run tries it again. An empty entry left by an older build counts as missing.
+    @Test func anEmptyOutputIsNotStoredAndIsTriedAgainNextTime() async throws {
         let fake = FakeTextCompleter(phrases: ["空になる": ""])
         var document = SummaryTranslationDocument(model: "2b", modelRevision: "r", target: .auto, updatedAt: Date())
         try await translate(["空になる"], &document, fake)
+        #expect(document.entries.isEmpty)
         try await translate(["空になる"], &document, fake)
-        #expect(fake.snapshot.prompts.count == 1)
+        #expect(fake.snapshot.prompts.count == 2)
         #expect(document.translation(of: "空になる") == nil)
+        document.entries = [SummaryTranslatedText(sourceHash: TranslationKey.textHash("空になる"), sourceLanguage: .ja,
+                                                  targetLanguage: .en, text: "")]
+        #expect(SummaryTranslation.pending(["空になる"], target: .en, document: document).count == 1)
     }
 
     // MARK: - Stored files

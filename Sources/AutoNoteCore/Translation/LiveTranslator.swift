@@ -173,6 +173,9 @@ public actor LiveTranslator {
                                                   updatedAt: now())
                 /// The newest summary whose texts are not all translated yet.
                 var summary: LiveSummaryState?
+                /// Texts that came back empty in this recording: not stored (the job after the recording tries them
+                /// again, review M2) and not retried on every summary update meanwhile.
+                var emptyThisSession: Set<String> = []
                 while let list = await box.next() {
                     if let newer = await box.takeSummary() { summary = newer }
                     var interrupted = false
@@ -213,7 +216,8 @@ public actor LiveTranslator {
                     }
                     summaryDocument.keepOnly(texts)
                     var finished = true
-                    for item in SummaryTranslation.pending(texts, target: to, document: summaryDocument) {
+                    for item in SummaryTranslation.pending(texts, target: to, document: summaryDocument)
+                        where !emptyThisSession.contains(item.text) {
                         if await box.hasNewer {
                             finished = false
                             break
@@ -223,6 +227,10 @@ public actor LiveTranslator {
                                                                  document: summaryDocument)
                         let text = try await translator.translateSummary(item.text, from: item.source, to: item.target,
                                                                          history: history)
+                        guard !text.isEmpty else {
+                            emptyThisSession.insert(item.text)
+                            continue
+                        }
                         summaryDocument.entries.append(SummaryTranslatedText(
                             sourceHash: TranslationKey.textHash(item.text), sourceLanguage: item.source,
                             targetLanguage: item.target, text: text))

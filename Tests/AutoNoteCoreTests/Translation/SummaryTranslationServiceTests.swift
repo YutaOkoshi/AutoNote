@@ -115,6 +115,36 @@ import Testing
         #expect(fake.snapshot.prompts.count == prompts)
     }
 
+    /// Review M2: 「訳し直す」 and a changed model redo the summaries like the transcript; an automatic run with the
+    /// same model keeps them.
+    @Test func aRetranslationOrANewModelRedoesTheSummaries() async throws {
+        let f = try TranslationFixture()
+        try writeMinutes(f)
+        let fake = FakeTextCompleter()
+        let service = service(f, fake)
+        let decision = "移行は今月末までに終える"
+        let asked = { fake.snapshot.prompts.filter { FakeTextCompleter.lastInput($0)?.text == decision }.count }
+        try await service.translate(f.id)
+        await service.waitForJob(f.id)
+        #expect(asked() == 1)
+        // The same model, automatically: nothing again.
+        await service.start(f.id, automatic: true, summariesOnly: true)
+        await service.waitForJob(f.id)
+        #expect(asked() == 1)
+        // 「訳し直す」: the summaries are translated again from scratch.
+        try await service.translate(f.id)
+        await service.waitForJob(f.id)
+        #expect(asked() == 2)
+        // Translated by another model (or revision): redone even automatically.
+        var old = try #require(f.store.loadSummary(f.id, .minutes))
+        old.modelRevision = "older"
+        try f.store.saveSummary(old, .minutes, for: f.id)
+        await service.start(f.id, automatic: true, summariesOnly: true)
+        await service.waitForJob(f.id)
+        #expect(asked() == 3)
+        #expect(f.store.loadSummary(f.id, .minutes)?.modelRevision != "older")
+    }
+
     @Test func nothingIsTranslatedWhenTheTargetIsTheSummarysOwnLanguage() async throws {
         let f = try TranslationFixture()
         f.settings.withLock { $0.translationTarget = .ja }

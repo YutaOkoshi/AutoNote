@@ -53,7 +53,8 @@ public struct SummaryTranslationDocument: Codable, Equatable, Sendable {
 
     func hasEntry(for text: String, target: TranslationLanguage) -> Bool {
         let hash = TranslationKey.textHash(text)
-        return entries.contains { $0.sourceHash == hash && $0.targetLanguage == target }
+        // An empty text is a failed attempt (an older build stored those), so it counts as missing.
+        return entries.contains { $0.sourceHash == hash && $0.targetLanguage == target && !$0.text.isEmpty }
     }
 
     /// Only the entries of `texts` (the summary as it is now) stay, so the file never grows with old versions.
@@ -193,9 +194,10 @@ public enum SummaryTranslation {
             let text = try await translator.translateSummary(item.text, from: item.source, to: item.target,
                                                              history: history(for: item.text, context: context,
                                                                               document: document))
-            document.entries.append(SummaryTranslatedText(sourceHash: TranslationKey.textHash(item.text),
+            // Nothing usable is a failure, not a translation: not stored, so the next run tries it again.
+            if !text.isEmpty { document.entries.append(SummaryTranslatedText(sourceHash: TranslationKey.textHash(item.text),
                                                           sourceLanguage: item.source, targetLanguage: item.target,
-                                                          text: text))
+                                                          text: text)) }
             if await checkpoint(document) == .suspend { return false }
         }
         return true
