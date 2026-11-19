@@ -65,6 +65,20 @@ import Testing
         #expect(pending == [SummaryTranslationItem(text: "月末までに終える", source: .ja, target: .en)])
     }
 
+    /// Review L3: only the entries in the direction the current setting gives are used; none when that is the
+    /// summary's own language.
+    @Test func onlyTheCurrentDirectionsTranslationsAreUsed() {
+        let texts = ["月末までに終える"]
+        let doc = SummaryTranslationDocument(model: "2b", modelRevision: "r", target: .auto, updatedAt: Date(),
+                                             entries: [SummaryTranslatedText(sourceHash: TranslationKey.textHash(texts[0]),
+                                                                             sourceLanguage: .ja, targetLanguage: .en,
+                                                                             text: "Finish by month end")])
+        #expect(SummaryTranslation.current(doc, texts: texts, setting: .auto)?.translation(of: texts[0]) == "Finish by month end")
+        #expect(SummaryTranslation.current(doc, texts: texts, setting: .en)?.translation(of: texts[0]) == "Finish by month end")
+        #expect(SummaryTranslation.current(doc, texts: texts, setting: .ja) == nil)
+        #expect(SummaryTranslation.current(nil, texts: texts, setting: .auto) == nil)
+    }
+
     // MARK: - Running
 
     private func translate(_ texts: [String], _ document: inout SummaryTranslationDocument,

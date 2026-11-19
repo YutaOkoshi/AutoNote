@@ -167,6 +167,21 @@ import Testing
         #expect(rewrites.values == [f.id, f.id])
     }
 
+    /// Review L3: after the target changes to the summary's own language, the screens get no translation.
+    @Test func aTargetOfTheSummarysOwnLanguageHidesTheOldTranslation() async throws {
+        let f = try TranslationFixture()
+        try writeMinutes(f)
+        try LiveSummaryStore(paths: f.paths).save(SummaryTranslationTests.live, for: f.id)
+        let service = service(f, FakeTextCompleter())
+        try await service.translate(f.id)
+        await service.waitForJob(f.id)
+        #expect(await service.meetingTranslation(f.id).minutes != nil)
+        f.settings.withLock { $0.translationTarget = .ja }
+        let t = await service.meetingTranslation(f.id)
+        #expect(t.minutes == nil && t.liveSummary == nil)
+        #expect(f.store.loadSummary(f.id, .minutes) != nil)   // kept on disk, only not shown
+    }
+
     @Test func nothingIsTranslatedWhenTheTargetIsTheSummarysOwnLanguage() async throws {
         let f = try TranslationFixture()
         f.settings.withLock { $0.translationTarget = .ja }

@@ -126,6 +126,21 @@ import Testing
         return (paths, manifests, settings, services, note)
     }
 
+    /// Review L3: with the target now the minutes' own language, the note's rewrite drops the translated section.
+    @Test func aTargetOfTheMinutesOwnLanguageLeavesNoSectionInTheNote() async throws {
+        let (paths, manifests, settings, services, note) = try await written()
+        #expect(await WriteVaultStage.rewriteForTranslation(Samples.manifest.id, paths: paths, settings: settings,
+                                                            manifests: manifests, services: services,
+                                                            timeZone: Self.tokyo) == .rewritten)
+        #expect(try String(contentsOf: note, encoding: .utf8).contains("## 議事録の訳文"))
+        var japanese = settings
+        japanese.translationTarget = .ja
+        #expect(await WriteVaultStage.rewriteForTranslation(Samples.manifest.id, paths: paths, settings: japanese,
+                                                            manifests: manifests, services: services,
+                                                            timeZone: Self.tokyo) == .rewritten)
+        #expect(try !String(contentsOf: note, encoding: .utf8).contains("## 議事録の訳文"))
+    }
+
     /// Review M3: a note the person deleted is not brought back by the translation (only the queue writes new notes).
     @Test func aDeletedNoteIsNotRecreatedByTheTranslation() async throws {
         let (paths, manifests, settings, services, note) = try await written()

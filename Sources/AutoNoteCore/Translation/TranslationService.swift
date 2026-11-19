@@ -82,10 +82,19 @@ public actor TranslationService: TranslationPort {
         broadcaster.subscribe(initial: states.map { .job($0.key, $0.value, revision: revisions[$0.key] ?? 0) })
     }
 
-    public func meetingTranslation(_ id: MeetingID) -> MeetingTranslation {
-        MeetingTranslation.make(document: deps.store.load(id), transcript: deps.store.finalTranscript(id),
-                                live: deps.store.loadLive(id), liveSummary: deps.store.loadSummary(id, .live),
-                                minutes: deps.store.loadSummary(id, .minutes))
+    /// The summaries' translations only in the current setting's direction (review L3).
+    public func meetingTranslation(_ id: MeetingID) async -> MeetingTranslation {
+        let setting = await deps.settings().translationTarget
+        let live = deps.store.liveSummary(id).flatMap {
+            SummaryTranslation.current(deps.store.loadSummary(id, .live), texts: SummaryTranslation.liveTexts($0),
+                                       setting: setting)
+        }
+        let minutes = deps.store.minutes(id).flatMap {
+            SummaryTranslation.current(deps.store.loadSummary(id, .minutes), texts: SummaryTranslation.minutesTexts($0),
+                                       setting: setting)
+        }
+        return MeetingTranslation.make(document: deps.store.load(id), transcript: deps.store.finalTranscript(id),
+                                       live: deps.store.loadLive(id), liveSummary: live, minutes: minutes)
     }
 
     public func translate(_ id: MeetingID) async throws {

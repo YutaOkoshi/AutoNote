@@ -58,7 +58,8 @@ public struct WriteVaultStage: QueueStage {
             let document = MeetingDocument(manifest: manifest, transcript: final, minutes: minutes,
                                            frontmatter: FrontmatterTemplate(text: frontmatterText),
                                            appVersion: AutoNoteVersion.current, timeZone: timeZone,
-                                           minutesTranslation: TranslationStore(paths: context.paths).loadSummary(id, .minutes))
+                                           minutesTranslation: Self.minutesTranslation(id, minutes, paths: context.paths,
+                                                                                         setting: context.settings.translationTarget))
             noteTitle = document.hasTitle ? document.title : nil
             outcome = try await writer.write(document, policy: job.overwriteApproved ? .force : .ifUnchanged)
         } catch is CancellationError {
@@ -119,7 +120,8 @@ public struct WriteVaultStage: QueueStage {
             let document = MeetingDocument(manifest: manifest, transcript: final, minutes: minutes,
                                            frontmatter: FrontmatterTemplate(text: frontmatterText),
                                            appVersion: AutoNoteVersion.current, timeZone: timeZone,
-                                           minutesTranslation: TranslationStore(paths: paths).loadSummary(id, .minutes))
+                                           minutesTranslation: minutesTranslation(id, minutes, paths: paths,
+                                                                                    setting: settings.translationTarget))
             // Only an existing note, unchanged and made from these minutes (review M3, L1).
             switch try await writer.rewriteExisting(document, basedOn: plain) {
             case .written:
@@ -136,6 +138,14 @@ public struct WriteVaultStage: QueueStage {
             logger.notice("\(id.rawValue, privacy: .public): note not rewritten (\(String(describing: type(of: error)), privacy: .public))")
             return .leftAlone
         }
+    }
+
+    /// The stored translation of `minutes` the note carries: the current setting's direction only (review L3).
+    public static func minutesTranslation(_ id: MeetingID, _ minutes: MinutesOutput?, paths: AppPaths,
+                                          setting: TranslationTarget) -> SummaryTranslationDocument? {
+        guard let minutes else { return nil }
+        return SummaryTranslation.current(TranslationStore(paths: paths).loadSummary(id, .minutes),
+                                          texts: SummaryTranslation.minutesTexts(minutes), setting: setting)
     }
 
     /// The status a written note carries: minutes only count when they exist and the last summarize did not fail.

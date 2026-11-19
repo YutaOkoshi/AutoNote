@@ -165,6 +165,16 @@ public enum SummaryTranslation {
         return targetLanguage(summary: SummaryLanguagePolicy.decide(texts), setting: setting)
     }
 
+    /// What the screens and the note use (review L3): `document` with only the entries in the direction the current
+    /// `setting` gives for `texts`; nil when that is the summary's own language or nothing is left. Entries of another
+    /// direction stay on disk (a later change back uses them again).
+    public static func current(_ document: SummaryTranslationDocument?, texts: [String],
+                               setting: TranslationTarget) -> SummaryTranslationDocument? {
+        guard var document, let target = targetLanguage(for: texts, setting: setting) else { return nil }
+        document.entries.removeAll { $0.targetLanguage != target || $0.text.isEmpty }
+        return document.entries.isEmpty ? nil : document
+    }
+
     /// The texts of `texts` still to translate into `target`, in order: one already in `target` or without letters
     /// is left out, and so is one `document` already holds.
     public static func pending(_ texts: [String], target: TranslationLanguage,
