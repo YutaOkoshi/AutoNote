@@ -1,0 +1,214 @@
+{
+  "label": "main-e1de04c",
+  "date": "2026-11-20",
+  "judge_model": "claude-sonnet-5-5",
+  "prompt_version": "match=judge-1,faith=judge-2,faith_open=judge-2-generic",
+  "summary_cache_version": "summary-1",
+  "build": {
+    "autonote": "eval-open-data/.build/release/autonote",
+    "sha256": "a627559e13a167a4531dfe50ecae80d0b5b7ed2575f24501cb4fe70dd2dde71c",
+    "commit": "a8470e8b6a009f10c2465318df7367665293ee2a",
+    "branch": "feature/eval-open-data"
+  },
+  "datasets": {
+    "ingcrowd-09": {
+      "reference": {
+        "transcript_utterances": 330,
+        "minutes_schema_version": 2,
+        "decisions": {
+          "pred": 0
+        },
+        "actions": {
+          "pred": 0
+        },
+        "faithfulness": {
+          "supported": 13,
+          "partial": 0,
+          "unsupported": 0,
+          "missing": 0,
+          "items": 13,
+          "score": 1.0,
+          "by_kind": {
+            "summary": {
+              "items": 5,
+              "supported": 5,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "key_point": {
+              "items": 8,
+              "supported": 8,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            }
+          }
+        },
+        "cached": {
+          "summary": false,
+          "faithfulness": false
+        },
+        "judge_models": [
+          "claude-sonnet-5-5"
+        ],
+        "judge_usage": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 956,
+            "cache_creation_input_tokens": 10271,
+            "cache_read_input_tokens": 1158,
+            "cost_usd": 0.050763800000000005
+          }
+        ],
+        "summarize_input_chars": 32490
+      },
+      "final": {
+        "transcript_utterances": 199,
+        "minutes_schema_version": 2,
+        "decisions": {
+          "pred": 0
+        },
+        "actions": {
+          "pred": 0
+        },
+        "faithfulness": {
+          "supported": 10,
+          "partial": 1,
+          "unsupported": 0,
+          "missing": 0,
+          "items": 11,
+          "score": 0.9545454545454546,
+          "by_kind": {
+            "summary": {
+              "items": 4,
+              "supported": 4,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "key_point": {
+              "items": 7,
+              "supported": 6,
+              "partial": 1,
+              "unsupported": 0,
+              "missing": 0
+            }
+          }
+        },
+        "cached": {
+          "summary": false,
+          "faithfulness": false
+        },
+        "judge_models": [
+          "claude-sonnet-5-5"
+        ],
+        "judge_usage": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 756,
+            "cache_creation_input_tokens": 10218,
+            "cache_read_input_tokens": 1158,
+            "cost_usd": 0.0485518
+          }
+        ],
+        "summarize_input_chars": 19795
+      }
+    }
+  },
+  "judge_models_seen": [
+    "claude-sonnet-5-5"
+  ],
+  "claude_calls_this_run": [
+    {
+      "kind": "summarize",
+      "input_chars": 32490
+    },
+    {
+      "kind": "judge-faithfulness",
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 10271,
+        "cache_read_input_tokens": 1158,
+        "output_tokens": 956,
+        "output_tokens_details": {
+          "thinking_tokens": 649
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 10271,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "global",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 956,
+            "cache_read_input_tokens": 1158,
+            "cache_creation_input_tokens": 10271,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 10271
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "cost_usd": 0.050763800000000005,
+      "models": [
+        "claude-sonnet-5-5"
+      ]
+    },
+    {
+      "kind": "summarize",
+      "input_chars": 19795
+    },
+    {
+      "kind": "judge-faithfulness",
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 10218,
+        "cache_read_input_tokens": 1158,
+        "output_tokens": 756,
+        "output_tokens_details": {
+          "thinking_tokens": 487
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 10218,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "global",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 756,
+            "cache_read_input_tokens": 1158,
+            "cache_creation_input_tokens": 10218,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 10218
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "cost_usd": 0.0485518,
+      "models": [
+        "claude-sonnet-5-5"
+      ]
+    }
+  ]
+}

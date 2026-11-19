@@ -99,7 +99,42 @@ def render(res, base):
                 run.get("er", {}).get("max_del_run", "–"), "%.3f" % run["rtf"] if run.get("rtf") is not None else "–",
                 rtf_ratio))
         lines.append("")
+        lines += parts_table(ds) + tracks_table(ds)
     return "\n".join(lines) + "\n"
+
+
+PART_NAMES = {"opening": "冒頭発言", "qa": "質疑"}
+
+
+def parts_table(ds):
+    runs = {k: r for k, r in ds["runs"].items() if r.get("parts")}
+    if not runs:
+        return []
+    names = list(next(iter(runs.values()))["parts"])
+    out = ["区間別の誤り率（正解の範囲を冒頭発言と質疑の境目で分けたもの。境目の発話は始まりの時刻で振り分ける）", "",
+           "| エンジン/言語 | " + " | ".join("%s（%s 字）" % (PART_NAMES.get(n, n), runs[next(iter(runs))]["parts"][n]["ref_len"])
+                                        for n in names) + " |",
+           "|---|" + "---|" * len(names)]
+    for key in sorted(runs):
+        out.append("| %s | %s |" % (key, " | ".join(pct(runs[key]["parts"][n].get("rate")) for n in names)))
+    return out + [""]
+
+
+def tracks_table(ds):
+    runs = {k: r for k, r in ds["runs"].items() if r.get("tracks")}
+    if not runs:
+        return []
+    out = ["話者別の音声（アプリの「自分」「相手」のトラック）。混入 = そのトラックの発話のうち、同じ時刻の相手の正解に"
+           "よく合うもの（発話数 / 文字数）", "",
+           "| エンジン/言語 | 自分 | 相手 | 2 トラック計 | 混合音声（上の er） | 混入 自分 | 混入 相手 | 反復 自分/相手 |",
+           "|---|---|---|---|---|---|---|---|"]
+    for key in sorted(runs):
+        t = runs[key]["tracks"]
+        leak = lambda n: "%d / %d字" % (t[n]["leak"]["utterances"], t[n]["leak"]["chars"])
+        out.append("| %s | %s | %s | %s | %s | %s | %s | %d/%d |" % (
+            key, pct(t["me"]["er"]["rate"]), pct(t["other"]["er"]["rate"]), pct(t["combined"]["rate"]),
+            pct(rate(runs[key], "er")), leak("me"), leak("other"), t["me"]["repetition"], t["other"]["repetition"]))
+    return out + [""]
 
 
 def main(argv):

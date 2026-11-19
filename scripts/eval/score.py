@@ -11,6 +11,10 @@
 - foreign: 日本語・ラテン文字以外の文字種（キリル・ハングルなど）を含む確定発話の数と割合。
 - repetition: 繰り返しの幻覚らしい確定発話の数。
 - rtf / elapsed / finals: autonote dev transcribe の summary 行。
+- parts: 正解を時刻の区間に分けたもの（会見の冒頭発言 opening と質疑 qa）ごとの誤り率。
+- tracks: 話者別の音声をトラックごとに文字起こししたもの（アプリの「自分」「相手」）の、トラックごとの誤り率、
+  2 トラック合計の誤り率（話者を正しく分けた上での誤り率）、相手の声の混入（leak: 自分のトラックの発話のうち、
+  同じ時刻の相手の正解によく合うもの）。
 """
 
 import argparse
@@ -24,7 +28,7 @@ import common  # noqa: E402
 import metrics  # noqa: E402
 import textnorm  # noqa: E402
 
-SCORER_VERSION = "score-1"
+SCORER_VERSION = "score-1"   # 既存の指標は変えていない（parts / tracks / ja_range は足しただけ）
 
 
 def toks(text, unit, level="norm"):
@@ -63,15 +67,20 @@ def score_run(ds, ref, finals, summary):
         r.update({"rtf": summary.get("rtf"), "elapsed": summary.get("elapsed"), "audio_seconds": summary.get("audioSeconds")})
     kind = ds["kind"]
     if kind == "govinfo":
-        lo, hi = ref["en_range"]
-        window_text = "\n".join(u["text"] for u in finals if u["start"] is not None and lo <= u["start"] < hi)
-        hyp_tokens = toks(window_text, "word")
+        lo, hi = ref.get("en_range") or [0, float("inf")]
+        hyp_tokens = toks(in_range(finals, lo, hi), "word")
         ref_tokens = toks(ref["en_text"], "word")
         r["er"] = metrics.error_rate(ref_tokens, only(hyp_tokens, "en"))
         r["en_wer"] = r["er"]
         r["en_retention"] = metrics.english_retention(ref_tokens, hyp_tokens)
+        if ref.get("ja_text") and ref.get("ja_range"):
+            ja_hyp = only(toks(in_range(finals, *ref["ja_range"]), "word"), "ja")
+            r["ja_cer"] = metrics.error_rate(only(toks(ref["ja_text"], "word"), "ja"), ja_hyp)
         return r
     r.update(score_text(ref["text"], hyp_text, unit, ref.get("window", "full")))
+    if ref.get("parts"):
+        r["parts"] = {p["name"]: metrics.error_rate(toks(p["text"], unit), toks(in_range(finals, *p["range"]), unit), detail=False)
+                      for p in ref["parts"]}
     hyp_words = toks(hyp_text, "word")
     if ref.get("en_text"):
         ref_en = toks(ref["en_text"], "word")
@@ -86,6 +95,44 @@ def score_run(ds, ref, finals, summary):
         ja_ref = ref.get("ja_text") or ref["text"]
         r["ja_cer"] = metrics.error_rate(only(toks(ja_ref, "word"), "ja"), only(hyp_words, "ja"))
     return r
+
+
+def in_range(finals, lo, hi):
+    """開始時刻が [lo, hi) の確定発話の本文を改行でつなぐ。"""
+    return "\n".join(u["text"] for u in finals if u["start"] is not None and lo <= u["start"] < hi)
+
+
+def leaked(utt, track, ref_utts, unit, slack=1.0, threshold=0.5):
+    """自分のトラックの発話 utt が、同じ時刻の相手の正解によく合うか（相手の声がこのトラックに入って文字になった）。"""
+    hyp = toks(utt["text"], unit)
+    if not hyp or utt["start"] is None:
+        return False
+    end = utt["end"] if utt["end"] is not None else utt["start"]
+    near = [u for u in ref_utts if u["start"] <= end + slack and utt["start"] - slack <= u["end"]]
+
+    def ratio(us):
+        ref = [t for u in us for t in toks(u["text"], unit)]
+        return metrics.search_distance(ref, hyp)[0] / len(hyp) if ref else 1.0
+    own = ratio([u for u in near if u.get("track") == track])
+    other = ratio([u for u in near if u.get("track") not in (track, None)])
+    return other < threshold and other < own
+
+
+def score_tracks(ref, track_finals):
+    """トラックごとの誤り率、2 トラック合計（話者を分けた上での誤り率）、相手の声の混入。"""
+    unit = ref["unit"]
+    out, errors, ref_len = {}, 0, 0
+    for name, finals in sorted(track_finals.items()):
+        texts = [u["text"] for u in finals]
+        er = metrics.error_rate(toks(ref["tracks"][name], unit), toks("\n".join(texts), unit))
+        leaks = [u for u in finals if leaked(u, name, ref.get("utterances", []), unit)]
+        out[name] = {"er": er, "finals": len(finals), "repetition": metrics.repetition(texts)["utterances"],
+                     "leak": {"utterances": len(leaks), "chars": sum(len(toks(u["text"], unit)) for u in leaks),
+                              "hyp_chars": er["hyp_len"]}}
+        errors += er["errors"]
+        ref_len += er["ref_len"]
+    out["combined"] = {"errors": errors, "ref_len": ref_len, "rate": errors / ref_len if ref_len else None}
+    return out
 
 
 def main(argv):
@@ -121,6 +168,16 @@ def main(argv):
             engine, lang = name[:-len(".jsonl")].rsplit("-", 1)
             print("採点: %s %s %s" % (ds["id"], engine, lang), flush=True)
             scored = score_run(ds, ref, finals, summary)
+            if ref.get("tracks"):
+                track_finals = {}
+                for track in ref["tracks"]:
+                    tpath = os.path.join(run_dir, "tracks", "%s-%s-%s.jsonl" % (track, engine, lang))
+                    if os.path.exists(tpath):
+                        tf, tsum = common.read_jsonl(tpath)
+                        if tsum is not None:
+                            track_finals[track] = tf
+                if len(track_finals) == len(ref["tracks"]):
+                    scored["tracks"] = score_tracks(ref, track_finals)
             exit_path = os.path.join(run_dir, name[:-len(".jsonl")] + ".exit")
             if os.path.exists(exit_path):
                 with open(exit_path) as f:

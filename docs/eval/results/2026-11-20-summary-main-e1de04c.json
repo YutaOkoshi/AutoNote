@@ -1,0 +1,346 @@
+{
+  "label": "main-e1de04c",
+  "date": "2026-11-20",
+  "judge_model": "claude-sonnet-5-5",
+  "prompt_version": "match=judge-1,faith=judge-2,faith_open=judge-2-generic",
+  "summary_cache_version": "summary-1",
+  "build": {
+    "autonote": "eval-open-data/.build/release/autonote",
+    "sha256": "daa5f0b31662fd656e204734d95f192ec46660df8eef3ee7d658c7cbbdc3a936",
+    "commit": "c0a53aac9f69dcf95ff78f5c5bd83b4e3561999e",
+    "branch": "feature/eval-open-data"
+  },
+  "datasets": {
+    "kaiken-kishida": {
+      "reference": {
+        "transcript_utterances": 16,
+        "minutes_schema_version": 2,
+        "decisions": {
+          "pred": 5
+        },
+        "actions": {
+          "pred": 7
+        },
+        "faithfulness": {
+          "supported": 25,
+          "partial": 0,
+          "unsupported": 0,
+          "missing": 0,
+          "items": 25,
+          "score": 1.0,
+          "by_kind": {
+            "summary": {
+              "items": 4,
+              "supported": 4,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "decision": {
+              "items": 5,
+              "supported": 5,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "action": {
+              "items": 7,
+              "supported": 7,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "key_point": {
+              "items": 9,
+              "supported": 9,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            }
+          }
+        },
+        "cached": {
+          "summary": false,
+          "faithfulness": false
+        },
+        "judge_models": [
+          "claude-sonnet-5-5"
+        ],
+        "judge_usage": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 1174,
+            "cache_creation_input_tokens": 9391,
+            "cache_read_input_tokens": 1158,
+            "cost_usd": 0.0494238
+          }
+        ],
+        "summarize_input_chars": 6755
+      },
+      "final": {
+        "transcript_utterances": 215,
+        "minutes_schema_version": 2,
+        "decisions": {
+          "pred": 8
+        },
+        "actions": {
+          "pred": 8
+        },
+        "faithfulness": {
+          "supported": 28,
+          "partial": 0,
+          "unsupported": 0,
+          "missing": 0,
+          "items": 28,
+          "score": 1.0,
+          "by_kind": {
+            "summary": {
+              "items": 4,
+              "supported": 4,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "decision": {
+              "items": 8,
+              "supported": 8,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "action": {
+              "items": 8,
+              "supported": 8,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "key_point": {
+              "items": 8,
+              "supported": 8,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            }
+          }
+        },
+        "cached": {
+          "summary": false,
+          "faithfulness": false
+        },
+        "judge_models": [
+          "claude-sonnet-5-5"
+        ],
+        "judge_usage": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 1156,
+            "cache_creation_input_tokens": 9459,
+            "cache_read_input_tokens": 1158,
+            "cost_usd": 0.0495158
+          }
+        ],
+        "summarize_input_chars": 23649
+      }
+    },
+    "ingcrowd-09": {
+      "reference": {
+        "transcript_utterances": 330,
+        "minutes_schema_version": 2,
+        "decisions": {
+          "pred": 0
+        },
+        "actions": {
+          "pred": 0
+        },
+        "faithfulness": {
+          "supported": 14,
+          "partial": 1,
+          "unsupported": 0,
+          "missing": 0,
+          "items": 15,
+          "score": 0.9666666666666667,
+          "by_kind": {
+            "summary": {
+              "items": 5,
+              "supported": 4,
+              "partial": 1,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "key_point": {
+              "items": 10,
+              "supported": 10,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            }
+          }
+        },
+        "cached": {
+          "summary": true,
+          "faithfulness": true
+        },
+        "judge_models": [
+          "claude-sonnet-5-5"
+        ],
+        "judge_usage": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 869,
+            "cache_creation_input_tokens": 11450,
+            "cache_read_input_tokens": 0,
+            "cost_usd": 0.054494
+          }
+        ],
+        "summarize_input_chars": 32490
+      },
+      "final": {
+        "transcript_utterances": 199,
+        "minutes_schema_version": 2,
+        "decisions": {
+          "pred": 0
+        },
+        "actions": {
+          "pred": 0
+        },
+        "faithfulness": {
+          "supported": 12,
+          "partial": 2,
+          "unsupported": 0,
+          "missing": 0,
+          "items": 14,
+          "score": 0.9285714285714286,
+          "by_kind": {
+            "summary": {
+              "items": 5,
+              "supported": 4,
+              "partial": 1,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "key_point": {
+              "items": 9,
+              "supported": 8,
+              "partial": 1,
+              "unsupported": 0,
+              "missing": 0
+            }
+          }
+        },
+        "cached": {
+          "summary": true,
+          "faithfulness": true
+        },
+        "judge_models": [
+          "claude-sonnet-5-5"
+        ],
+        "judge_usage": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 917,
+            "cache_creation_input_tokens": 10403,
+            "cache_read_input_tokens": 1158,
+            "cost_usd": 0.050901800000000004
+          }
+        ],
+        "summarize_input_chars": 19795
+      }
+    }
+  },
+  "judge_models_seen": [
+    "claude-sonnet-5-5"
+  ],
+  "claude_calls_this_run": [
+    {
+      "kind": "summarize",
+      "input_chars": 6755
+    },
+    {
+      "kind": "judge-faithfulness",
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 9391,
+        "cache_read_input_tokens": 1158,
+        "output_tokens": 1174,
+        "output_tokens_details": {
+          "thinking_tokens": 644
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 9391,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "global",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 1174,
+            "cache_read_input_tokens": 1158,
+            "cache_creation_input_tokens": 9391,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 9391
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "cost_usd": 0.0494238,
+      "models": [
+        "claude-sonnet-5-5"
+      ]
+    },
+    {
+      "kind": "summarize",
+      "input_chars": 23649
+    },
+    {
+      "kind": "judge-faithfulness",
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 9459,
+        "cache_read_input_tokens": 1158,
+        "output_tokens": 1156,
+        "output_tokens_details": {
+          "thinking_tokens": 571
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 9459,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "global",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 1156,
+            "cache_read_input_tokens": 1158,
+            "cache_creation_input_tokens": 9459,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 9459
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "cost_usd": 0.0495158,
+      "models": [
+        "claude-sonnet-5-5"
+      ]
+    }
+  ]
+}

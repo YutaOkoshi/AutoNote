@@ -3,7 +3,9 @@
 
 - AMI: words/<会議>.<話者>.words.xml（NXT 形式）→ 語（時刻・話者つき）→ 発話。abstractive/<会議>.abssumm.xml → 要約 4 区分。
 - 国会会議録 API の JSON → 発言者の呼称・速記の注記・拍手などを除いた本文（発言ごとに改行）。
-- govinfo の HTML（米国政府刊行物）→ 指定した 2 つの目印の間の英語本文。
+- govinfo の HTML（米国政府刊行物）→ 指定した 2 つの目印の間の英語本文、または話者ラベルと注記を除いた全段落。
+- 官邸の会見録（WARP の保存版の HTML）→ 話者の区切り（冒頭発言・質疑応答の各発言）。
+- ELAN（.eaf）→ 話者の層ごとの発話（時刻つき）。笑い・聞き取り不能の記号を除く。
 """
 
 import glob
@@ -120,3 +122,94 @@ def mixed_reference(spans):
     en = "\n".join(s["text"] for s in spans if s["lang"] == "en")
     ja = "\n".join(s["text"] for s in spans if s["lang"] == "ja")
     return whole, en, ja
+
+
+_GOV_SPEAKER = re.compile(r"^(?:President [A-Z][a-z]+|Prime Minister [A-Z][a-z]+|Vice President [A-Z][a-z]+|Q|"
+                          r"Audience member|Interpreter|Press Secretary [A-Z][a-z]+)\. ")
+
+
+def govinfo_paragraphs(markup):
+    """大統領文書の本文の段落（見出し・話者ラベル・[Laughter] などの注記・末尾の NOTE を除く）を改行でつなぐ。
+    通訳を介した発言（Prime Minister … の段落）も英語として音声に出るので含める。"""
+    out = []
+    for attrs, p in re.findall(r"<p([^>]*)>(.*?)</p>", markup, flags=re.S | re.I):
+        if 'class="s1"' in attrs:   # 文書の見出し・日付・話題の小見出し（読み上げない）
+            continue
+        text = " ".join(html.unescape(re.sub(r"<[^>]*>", "", p)).split())
+        if text.startswith("NOTE:"):
+            break
+        if not text:
+            continue
+        text = _GOV_SPEAKER.sub("", text)
+        text = re.sub(r"\[[^\]]*\]", " ", text)
+        text = " ".join(text.split())
+        if text:
+            out.append(text)
+    return "\n".join(out)
+
+
+_KAIKEN_HEADER = re.compile(r"【([^】]*)】")
+_KAIKEN_ROLE = re.compile(r"（([^（）]{1,15})）")
+
+
+def kaiken_turns(markup):
+    """官邸の会見録の本文 → [{"section", "role", "text"}]。section は【…冒頭発言】【質疑応答】など、role は
+    （内閣広報官）（記者）（岸田総理）の行の名前（冒頭発言は「総理」）。本文中の（よみがな）（補足）は読み上げないので除く。
+    WARP の保存版は同じ本文を 2 回載せるページがあるので、最初の見出しが 2 回目に出たら止める。"""
+    t = re.sub(r"<(script|style)\b.*?</\1>", "", markup, flags=re.S | re.I)
+    t = re.sub(r"<[^>]+>", "\n", t)
+    lines = [l.strip() for l in html.unescape(t).split("\n")]
+    lines = [l for l in lines if l]
+    head = next((i for i, l in enumerate(lines) if _KAIKEN_HEADER.fullmatch(l)), None)
+    if head is None:
+        raise ValueError("会見録の見出し（【…】）が見つからない")
+    turns, role, section = [], None, None
+    for l in lines[head:]:
+        if l in ("関連リンク", "もっと見る") or (turns and l == lines[head]):
+            break
+        m = _KAIKEN_HEADER.fullmatch(l)
+        if m:
+            section = m.group(1)
+            role = "総理" if "総理" in section else None
+            continue
+        m = _KAIKEN_ROLE.fullmatch(l)
+        if m:
+            role = m.group(1)
+            continue
+        text = re.sub(r"（[^（）]*）", "", l)
+        if turns and turns[-1]["role"] == role and turns[-1]["section"] == section:
+            turns[-1]["text"] += text
+        else:
+            turns.append({"section": section, "role": role, "text": text})
+    return turns
+
+
+def kaiken_text(turns):
+    """(本文（発言ごとに改行）, 質疑応答の始まりの文字位置 | None)。"""
+    text, qa = "", None
+    for t in turns:
+        if qa is None and t["section"] == "質疑応答":
+            qa = len(text) + (1 if text else 0)
+        text = t["text"] if not text else text + "\n" + t["text"]
+    return text, qa
+
+
+_EAF_TAGS = re.compile(r"<[^<>]{0,8}>")
+
+
+def eaf_utterances(path):
+    """ELAN の .eaf → [{"tier", "start", "end", "text"}]（開始時刻順、秒）。<la>（笑い）<?>（聞き取り不能）などの
+    記号は除き、空になった発話は捨てる。"""
+    root = ET.parse(path).getroot()
+    slots = {t.get("TIME_SLOT_ID"): t.get("TIME_VALUE") for t in root.iter("TIME_SLOT")}
+    out = []
+    for tier in root.iter("TIER"):
+        for ann in tier.iter("ALIGNABLE_ANNOTATION"):
+            v1, v2 = slots.get(ann.get("TIME_SLOT_REF1")), slots.get(ann.get("TIME_SLOT_REF2"))
+            value = ann.find("ANNOTATION_VALUE")
+            text = _EAF_TAGS.sub("", (value.text if value is not None else "") or "").strip()
+            if v1 is None or v2 is None or not text:
+                continue
+            out.append({"tier": tier.get("TIER_ID"), "start": int(v1) / 1000.0, "end": int(v2) / 1000.0, "text": text})
+    out.sort(key=lambda u: (u["start"], u["tier"]))
+    return out

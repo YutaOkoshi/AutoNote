@@ -14,5 +14,94 @@
       "model": "ggml-large-v3-turbo-q5_0.bin",
       "norm_version": "norm-1"
     }
+  },
+  "kantei-us": {
+    "ja_range": [
+      243.0,
+      926.4
+    ],
+    "ja_located_cer": 0.1793,
+    "made_with": {
+      "commit": "219a40dac980e8ff4ba675680347ea6ad1e79b80",
+      "branch": "feature/eval-open-data",
+      "model": "ggml-large-v3-turbo-q5_0.bin",
+      "norm_version": "norm-1"
+    }
+  },
+  "kaiken-kishida": {
+    "clip_start": 1643.9,
+    "qa_time_in_clip": 295.4,
+    "ref_start_char": 3664,
+    "ref_end_char": 8959,
+    "qa_char": 4826,
+    "ref_tokens": [
+      3442,
+      8394,
+      16786
+    ],
+    "located_cer": 0.0473,
+    "qa_located_cer": 0.145,
+    "made_with": {
+      "commit": "10f06a574a1d76217ec5cef388f53f052379d4f9",
+      "branch": "feature/eval-open-data",
+      "model": "ggml-large-v3-turbo-q5_0.bin",
+      "norm_version": "norm-1"
+    }
+  },
+  "kaiken-suga": {
+    "clip_start": 1386.7,
+    "qa_time_in_clip": 274.2,
+    "ref_start_char": 2481,
+    "ref_end_char": 8000,
+    "qa_char": 3472,
+    "ref_tokens": [
+      2338,
+      7524,
+      14981
+    ],
+    "located_cer": 0.0725,
+    "qa_located_cer": 0.115,
+    "made_with": {
+      "commit": "10f06a574a1d76217ec5cef388f53f052379d4f9",
+      "branch": "feature/eval-open-data",
+      "model": "ggml-large-v3-turbo-q5_0.bin",
+      "norm_version": "norm-1"
+    }
+  },
+  "kaiken-ishiba": {
+    "clip_start": 1381.5,
+    "qa_time_in_clip": 296.9,
+    "ref_start_char": 3236,
+    "ref_end_char": 9293,
+    "qa_char": 4605,
+    "ref_tokens": [
+      2992,
+      8668,
+      25721
+    ],
+    "located_cer": 0.0467,
+    "qa_located_cer": 0.045,
+    "made_with": {
+      "commit": "10f06a574a1d76217ec5cef388f53f052379d4f9",
+      "branch": "feature/eval-open-data",
+      "model": "ggml-large-v3-turbo-q5_0.bin",
+      "norm_version": "norm-1"
+    }
+  },
+  "kantei-us2025": {
+    "en_start_char": 13383,
+    "en_end_char": 32208,
+    "en_tokens": [
+      2302,
+      5795,
+      5817
+    ],
+    "en_located_wer": 0.1291,
+    "made_with": {
+      "commit": "b323a880a3d9cedd8710069a043695be3d6035d4",
+      "branch": "feature/eval-open-data",
+      "model": "ggml-large-v3-turbo-q5_0.bin",
+      "norm_version": "norm-1"
+    }
   }
 }

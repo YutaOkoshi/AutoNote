@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
 """時刻のない正解（国会会議録）に区切りの位置を決め、合成の混在セットの区間を選ぶ（一度だけ回して結果を残す）。
 
-使い方: python3 -I scripts/eval/calibrate.py --autonote <実行ファイル> [--model-path <ggml.bin>]
+使い方: python3 -I scripts/eval/calibrate.py --autonote <実行ファイル> [--model-path <ggml.bin>] [--datasets id,id]
+
+--datasets を付けないときは党首討論と合成の混在セット（下の 1・2）。付けたときはそのデータだけを決め、ほかの
+項目は残す（会見 kind kaiken・日米会見 kind govinfo）:
+- 会見: 音声全体を確定版・ja で文字起こしし、会見録の【質疑応答】の書き出しが出る時刻を探す。そこから
+  qa_lead_seconds 秒前の発話の頭を clip_start（切り出しの始め）にし、clip_start から max_seconds 秒に出た発話を
+  会見録に整列して正解の範囲（ref_start_char / ref_end_char）を決める。qa_time_in_clip は冒頭発言と質疑の境目。
+- 日米会見: 用意した音声をライブ・auto（混在をいちばんよく書き分ける）で文字起こしし、英語の語を大統領文書に
+  整列して英語の正解の範囲（en_start_char / en_end_char、en_paragraphs のとき）を、日本語の文字を官邸の冒頭発言に
+  整列して冒頭発言の時刻の範囲（ja_range）を決める。
 
 - 党首討論の音声全体を確定版（whisper、--lang ja）で文字起こしし、会議録に整列する。
   1. 先頭 max_seconds 秒に当たる会議録の範囲 → calibration.json（ref_start_char / ref_end_char）。
@@ -170,14 +179,133 @@ def spread(candidates, n):
     return [candidates[int(k * step)] for k in range(n)]
 
 
+def made_with(autonote, model):
+    made = runner.build_info(autonote)
+    return {"commit": made.get("commit"), "branch": made.get("branch"), "model": os.path.basename(model),
+            "norm_version": textnorm.NORM_VERSION}
+
+
+def word_tokens_with_owner(finals, script):
+    """確定発話の語の単位（日本語は 1 文字、英語は 1 語）のうち script のものと、それぞれの発話の番号。"""
+    toks, owner = [], []
+    for k, u in enumerate(finals):
+        for t in textnorm.tokenize(textnorm.normalize(u["text"], "norm"), "word"):
+            if textnorm.token_script(t) == script:
+                toks.append(t)
+                owner.append(k)
+    return toks, owner
+
+
+def transcribe_once(autonote, wav, engine, lang, model, name):
+    out = os.path.join(common.DATA, "calibration", name)
+    if not runner.is_done(out):
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        print("文字起こし（%s）" % name, flush=True)
+        runner.transcribe(autonote, wav, engine, lang, model, out, 3600)
+    return common.read_jsonl(out)[0]
+
+
+def kaiken_calibration(decl, ds, autonote, model):
+    src = fetch.ensure_source(ds["audio"], decl["sources"][ds["audio"]])
+    full_wav = os.path.join(common.prepared_dir(ds["id"]), "full.wav")
+    if not os.path.exists(full_wav):
+        fetch.to_wav(src, full_wav)
+    finals = transcribe_once(autonote, full_wav, "whisper", "ja", model, "%s-full-whisper-ja.jsonl" % ds["id"])
+    raw, qa = refs.kaiken_text(refs.kaiken_turns(fetch.read_text(fetch.ensure_source(ds["record"], decl["sources"][ds["record"]]))))
+    if qa is None:
+        sys.exit("%s: 会見録に【質疑応答】がない" % ds["id"])
+    ref = norm_chars(raw)
+    qa_tok = len(norm_chars(raw[:qa]))
+    hyp, owner = [], []
+    for k, u in enumerate(finals):
+        cs = norm_chars(u["text"])
+        hyp.extend(cs)
+        owner.extend([k] * len(cs))
+    # 質疑応答の書き出し（正解の 200 文字）が出力のどこに出るか
+    snippet = ref[qa_tok:qa_tok + 200]
+    hs, he, hd = metrics.locate(hyp, snippet)
+    qa_cer = hd / max(1, len(snippet))
+    if he == 0 or qa_cer > 0.35:
+        sys.exit("%s: 質疑応答の書き出しが出力に見つからない（CER %.2f）" % (ds["id"], qa_cer))
+    qa_time = finals[owner[hs]]["start"]
+    want = qa_time - ds.get("qa_lead_seconds", 300)
+    first = next((u for u in finals if u["start"] >= want), finals[0]) if want > 0 else finals[0]
+    clip_start = max(0.0, round(first["start"] - 0.3, 1)) if want > 0 else 0.0
+    clip_end = clip_start + ds["max_seconds"]
+    window = [c for u in finals if clip_start <= u["start"] < clip_end for c in norm_chars(u["text"])]
+    s, e, d = metrics.locate(ref, window)
+    cal = {"clip_start": clip_start, "qa_time_in_clip": round(qa_time - clip_start, 1),
+           "ref_start_char": fetch.raw_to_char_offset(raw, s), "ref_end_char": fetch.raw_to_char_offset(raw, e),
+           "qa_char": qa, "ref_tokens": [s, e, len(ref)], "located_cer": round(d / max(1, e - s), 4),
+           "qa_located_cer": round(qa_cer, 4)}
+    print("%s: 質疑は %.0f 秒から（書き出しの CER %.2f）→ 切り出し %.1f〜%.1f 秒、会見録の文字 %d..%d（CER %.3f）" % (
+        ds["id"], qa_time, qa_cer, clip_start, clip_end, cal["ref_start_char"], cal["ref_end_char"], cal["located_cer"]))
+    return cal
+
+
+def govinfo_calibration(decl, ds, autonote, model):
+    fetch.prepare(decl, ds)   # 音声（と、まだ範囲のない正解）を用意する
+    wav = os.path.join(common.prepared_dir(ds["id"]), "audio.wav")
+    finals = transcribe_once(autonote, wav, "whisper-live", "auto", model, "%s-whisper-live-auto.jsonl" % ds["id"])
+    cal = {}
+    markup = fetch.read_text(fetch.ensure_source(ds["record"], decl["sources"][ds["record"]]))
+    if ds.get("en_paragraphs"):
+        raw = refs.govinfo_paragraphs(markup)
+        ref = [t for t in textnorm.tokenize(textnorm.normalize(raw, "norm"), "word")]
+        hyp, _ = word_tokens_with_owner(finals, "en")
+        s, e, d = metrics.locate(ref, hyp)
+        cal.update({"en_start_char": raw_to_word_offset(raw, s), "en_end_char": raw_to_word_offset(raw, e),
+                    "en_tokens": [s, e, len(ref)], "en_located_wer": round(d / max(1, e - s), 4)})
+        print("%s: 英語の正解 語 %d..%d / %d（WER %.3f）" % (ds["id"], s, e, len(ref), cal["en_located_wer"]))
+    if ds.get("ja_record"):
+        turns = refs.kaiken_turns(fetch.read_text(fetch.ensure_source(ds["ja_record"], decl["sources"][ds["ja_record"]])))
+        opening = "\n".join(t["text"] for t in turns if "冒頭発言" in (t["section"] or ""))
+        ref_ja = [t for t in textnorm.tokenize(textnorm.normalize(opening, "norm"), "word") if textnorm.token_script(t) == "ja"]
+        hyp, owner = word_tokens_with_owner(finals, "ja")
+        hs, he, hd = metrics.locate(hyp, ref_ja)
+        if he == 0:
+            sys.exit("%s: 冒頭発言が出力に見つからない" % ds["id"])
+        t0 = finals[owner[hs]]["start"]
+        t1 = finals[owner[he - 1]]["end"] or finals[owner[he - 1]]["start"]
+        cal.update({"ja_range": [round(max(0.0, t0 - 0.5), 1), round(t1 + 0.5, 1)],
+                    "ja_located_cer": round(hd / max(1, len(ref_ja)), 4)})
+        print("%s: 日本語の冒頭発言 %.1f〜%.1f 秒（CER %.3f）" % (ds["id"], t0, t1, cal["ja_located_cer"]))
+    return cal
+
+
+def raw_to_word_offset(raw, token_count):
+    """語の単位の位置 → 素の本文の文字位置。二分探索は語の途中（1 文字目の直後）で止まるので、語の終わりまで進める。"""
+    if token_count == 0:
+        return 0
+    i = fetch.raw_to_char_offset(raw, token_count, "word")
+    while i < len(raw) and (raw[i].isalnum() or raw[i] in "'’-"):
+        i += 1
+    return i
+
+
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--autonote", required=True)
     ap.add_argument("--model-path", default="")
+    ap.add_argument("--datasets", default="")
     args = ap.parse_args(argv)
     decl = common.load_datasets(include_local=False)
     by_id = {d["id"]: d for d in decl["datasets"]}
     model = runner.model_path(decl, args.model_path)
+    if args.datasets:
+        cal_path = os.path.join(common.EVAL_DIR, "calibration.json")
+        calib = common.load_json(cal_path) if os.path.exists(cal_path) else {}
+        for ds in common.select(decl, args.datasets):
+            if ds["kind"] == "kaiken":
+                cal = kaiken_calibration(decl, ds, args.autonote, model)
+            elif ds["kind"] == "govinfo":
+                cal = govinfo_calibration(decl, ds, args.autonote, model)
+            else:
+                sys.exit("%s: この種類（%s）は --datasets で決めない" % (ds["id"], ds["kind"]))
+            calib[ds["id"]] = dict(cal, made_with=made_with(args.autonote, model))
+            common.write_json(cal_path, calib)
+        print("calibrate: calibration.json（%s）" % args.datasets)
+        return 0
     toron, mixed = by_id["kantei-toron"], by_id["mixed-synth"]
     fetch.ensure_source(mixed["en_source"]["annotations"], decl["sources"][mixed["en_source"]["annotations"]])
     cal, ja = ja_calibration(decl, toron, args.autonote, model)

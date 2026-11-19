@@ -64,6 +64,158 @@
       "path": "kantei-us/gov.html",
       "license": "米国政府の著作物（public domain）",
       "attribution": "Daily Compilation of Presidential Documents DCPD-201700110 (govinfo.gov)"
+    },
+    "kaiken-kishida-video": {
+      "url": "https://upload.wikimedia.org/wikipedia/commons/d/d0/%E5%B2%B8%E7%94%B0%E5%86%85%E9%96%A3%E7%B7%8F%E7%90%86%E5%A4%A7%E8%87%A3%E8%A8%98%E8%80%85%E4%BC%9A%E8%A6%8B%EF%BC%8D%E4%BB%A4%E5%92%8C4%E5%B9%B43%E6%9C%883%E6%97%A5.webm",
+      "sha256": "e48699a9aa8aa7ce5d6f6ac1790086057095cb5dd97abd59d36e4bfb49a51a5b",
+      "path": "kaiken/kishida.webm",
+      "license": "CC BY 3.0（Wikimedia Commons の表示。出典は首相官邸の YouTube。ライセンス審査は未確認）",
+      "attribution": "首相官邸「岸田内閣総理大臣記者会見－令和4年3月3日」, Wikimedia Commons, CC BY 3.0"
+    },
+    "kaiken-kishida-record": {
+      "url": "https://warp.ndl.go.jp/20241003/20241001031800/www.kantei.go.jp/jp/101_kishida/statement/2022/0303kaiken.html",
+      "sha256": "0a188820ce6ec02b5cb7cce560e9d8f3dd00235e4d69fec031c28e8dedb4f218",
+      "sha256_may_change": true,
+      "path": "kaiken/kishida.html",
+      "license": "公共データ利用規約（第1.0版）（PDL1.0、CC BY 4.0 互換）。WARP の保存版は著作権が元の著作権者（内閣官房）に残り、その条件（PDL1.0）に従う。記者の質問は第三者の発言なので、評価の解析にだけ使い本文を再配布しない",
+      "attribution": "出典：首相官邸ホームページ「令和4年3月3日 岸田内閣総理大臣記者会見」（https://www.kantei.go.jp/jp/101_kishida/statement/2022/0303kaiken.html、国立国会図書館 WARP の保存版）。評価のため話者ラベル・注記を除いて加工、PDL1.0"
+    },
+    "kaiken-suga-video": {
+      "url": "https://upload.wikimedia.org/wikipedia/commons/d/d2/%E8%8F%85%E5%86%85%E9%96%A3%E7%B7%8F%E7%90%86%E5%A4%A7%E8%87%A3%E8%A8%98%E8%80%85%E4%BC%9A%E8%A6%8B%E2%80%95%E4%BB%A4%E5%92%8C3%E5%B9%B49%E6%9C%889%E6%97%A5.webm",
+      "sha256": "ae3e950dbad8a8e6bfbd8522bb5fdc69060847e698f3f9af63c1dbf156d18be2",
+      "path": "kaiken/suga.webm",
+      "license": "CC BY 3.0（Wikimedia Commons の表示。出典は首相官邸の YouTube。ライセンス審査は未確認）",
+      "attribution": "首相官邸「菅内閣総理大臣記者会見―令和3年9月9日」, Wikimedia Commons, CC BY 3.0"
+    },
+    "kaiken-suga-record": {
+      "url": "https://warp.ndl.go.jp/20220112/20220105194534/www.kantei.go.jp/jp/99_suga/statement/2021/0909kaiken.html",
+      "sha256": "0ed4acb88eb649f3609ea27ce092a391f1bed36a5b818aea5607f29cef770d8f",
+      "sha256_may_change": true,
+      "path": "kaiken/suga.html",
+      "license": "公共データ利用規約（第1.0版）（PDL1.0、CC BY 4.0 互換）。WARP の保存版は著作権が元の著作権者（内閣官房）に残り、その条件（PDL1.0）に従う。記者の質問は第三者の発言なので、評価の解析にだけ使い本文を再配布しない",
+      "attribution": "出典：首相官邸ホームページ「令和3年9月9日 菅内閣総理大臣記者会見」（https://www.kantei.go.jp/jp/99_suga/statement/2021/0909kaiken.html、国立国会図書館 WARP の保存版）。評価のため話者ラベル・注記を除いて加工、PDL1.0"
+    },
+    "kaiken-ishiba-video": {
+      "url": "https://upload.wikimedia.org/wikipedia/commons/8/8c/%E7%9F%B3%E7%A0%B4%E5%86%85%E9%96%A3%E7%B7%8F%E7%90%86%E5%A4%A7%E8%87%A3%E8%A8%98%E8%80%85%E4%BC%9A%E8%A6%8B%EF%BC%8D%E4%BB%A4%E5%92%8C7%E5%B9%B410%E6%9C%8810%E6%97%A5.webm",
+      "sha256": "76e65cd2a0a548a270386bb0f75f3169229806ce703373c495543109b540102d",
+      "path": "kaiken/ishiba.webm",
+      "license": "CC BY 4.0（Wikimedia Commons の表示。出典は首相官邸の YouTube。ライセンス審査は未確認）",
+      "attribution": "首相官邸「石破内閣総理大臣記者会見－令和7年10月10日」, Wikimedia Commons, CC BY 4.0"
+    },
+    "kaiken-ishiba-record": {
+      "url": "https://warp.ndl.go.jp/20251205/20251203050703/www.kantei.go.jp/jp/103/statement/2025/1010kaiken.html",
+      "sha256": "88b0659503b532547c5ecf664adfbed1f69228d81a80969acf6d2d685a63c65e",
+      "sha256_may_change": true,
+      "path": "kaiken/ishiba.html",
+      "license": "公共データ利用規約（第1.0版）（PDL1.0、CC BY 4.0 互換）。WARP の保存版は著作権が元の著作権者（内閣官房）に残り、その条件（PDL1.0）に従う。記者の質問は第三者の発言なので、評価の解析にだけ使い本文を再配布しない",
+      "attribution": "出典：首相官邸ホームページ「令和7年10月10日 石破内閣総理大臣記者会見」（https://www.kantei.go.jp/jp/103/statement/2025/1010kaiken.html、国立国会図書館 WARP の保存版）。評価のため話者ラベル・注記を除いて加工、PDL1.0"
+    },
+    "kantei-us-record-ja": {
+      "url": "https://warp.ndl.go.jp/20171126/20171101145628/www.kantei.go.jp/jp/97_abe/statement/2017/0210usa.html",
+      "sha256": "d5ce80f74a9cb1a3ce9e20ffc7efec2f9e7c38396e11a43c26637eb5c0ce9e8f",
+      "sha256_may_change": true,
+      "path": "kantei-us/kantei-ja.html",
+      "license": "公共データ利用規約（第1.0版）（PDL1.0、CC BY 4.0 互換）。WARP の保存版は著作権が元の著作権者（内閣官房）に残り、その条件（PDL1.0）に従う。評価の解析にだけ使い本文を再配布しない",
+      "attribution": "出典：首相官邸ホームページ「平成29年2月10日 日米共同記者会見」安倍総理冒頭発言（https://www.kantei.go.jp/jp/97_abe/statement/2017/0210usa.html、国立国会図書館 WARP の保存版）。評価のため注記を除いて加工、PDL1.0"
+    },
+    "kantei-us2025-video": {
+      "url": "https://upload.wikimedia.org/wikipedia/commons/c/c3/President_Trump_Holds_a_Press_Conference_with_Prime_Minister_Shigeru_Ishiba_of_Japan_2025-02-07_19-37.webm",
+      "sha256": "34407b2ec19217b2c078e30adb1c4c68a7c07f2b6da0975c798e6d0f1967a99a",
+      "path": "kantei-us2025/us.webm",
+      "license": "Public domain（Wikimedia Commons の表示。米国政府の著作物。出典は The White House の YouTube）",
+      "attribution": "The White House「President Trump Holds a Press Conference with Prime Minister Shigeru Ishiba of Japan」2025-02-07, Wikimedia Commons, public domain"
+    },
+    "kantei-us2025-record": {
+      "url": "https://www.govinfo.gov/content/pkg/DCPD-202500237/html/DCPD-202500237.htm",
+      "sha256": "86436fa7597ede7ff7da365f0154d749e8afd335d3cf054065851f57bb6c7fb3",
+      "sha256_may_change": true,
+      "path": "kantei-us2025/gov.html",
+      "license": "米国政府の著作物（public domain）",
+      "attribution": "Daily Compilation of Presidential Documents DCPD-202500237「The President's News Conference With Prime Minister Shigeru Ishiba of Japan」(govinfo.gov)"
+    },
+    "ingcrowd-01-mix": {
+      "url": "https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/e2eed8769400269f20821deb0e47e68b40012e8b/japanese-themed-dialogue01/japanese-themed-dialogue01_audio.wav",
+      "sha256": "ea1138f2b05e6b3cc9580ed1196748ed67c5847f222c1cf4a54de6bf4d9d3282",
+      "path": "ingcrowd/dialogue01/mix.wav",
+      "license": "CC BY-NC 4.0（非営利の利用に限る。音声・書き起こしを再配布しない）",
+      "attribution": "IngCrowd「Japanese Themed Casual Conversation Corpus」japanese-themed-dialogue01（趣味・娯楽。2 話者の混合音声）, Hugging Face IngCrowd/japanese-themed-dialogue（revision e2eed87）, CC BY-NC 4.0"
+    },
+    "ingcrowd-01-a": {
+      "url": "https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/e2eed8769400269f20821deb0e47e68b40012e8b/japanese-themed-dialogue01/japanese-themed-dialogue01_individual_audio1.wav",
+      "sha256": "9ab7c49391960428920b89b4206da6e9281092651d039d2e1ffbbae001448b54",
+      "path": "ingcrowd/dialogue01/a.wav",
+      "license": "CC BY-NC 4.0（非営利の利用に限る。音声・書き起こしを再配布しない）",
+      "attribution": "IngCrowd「Japanese Themed Casual Conversation Corpus」japanese-themed-dialogue01（趣味・娯楽。話者 1 の音声）, Hugging Face IngCrowd/japanese-themed-dialogue（revision e2eed87）, CC BY-NC 4.0"
+    },
+    "ingcrowd-01-b": {
+      "url": "https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/e2eed8769400269f20821deb0e47e68b40012e8b/japanese-themed-dialogue01/japanese-themed-dialogue01_individual_audio2.wav",
+      "sha256": "686a626dae1572cb32e977a9e60300e9acafacd11a9dfbfaaa373ca21ac80566",
+      "path": "ingcrowd/dialogue01/b.wav",
+      "license": "CC BY-NC 4.0（非営利の利用に限る。音声・書き起こしを再配布しない）",
+      "attribution": "IngCrowd「Japanese Themed Casual Conversation Corpus」japanese-themed-dialogue01（趣味・娯楽。話者 2 の音声）, Hugging Face IngCrowd/japanese-themed-dialogue（revision e2eed87）, CC BY-NC 4.0"
+    },
+    "ingcrowd-01-eaf": {
+      "url": "https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/e2eed8769400269f20821deb0e47e68b40012e8b/japanese-themed-dialogue01/japanese-themed-dialogue01.eaf",
+      "sha256": "c59daa71d0ffa34e50b4c532d33f5c0d2a51ceaa8aea4435a68a87d924f61b32",
+      "path": "ingcrowd/dialogue01/eaf.eaf",
+      "license": "CC BY-NC 4.0（非営利の利用に限る。音声・書き起こしを再配布しない）",
+      "attribution": "IngCrowd「Japanese Themed Casual Conversation Corpus」japanese-themed-dialogue01（趣味・娯楽。ELAN の書き起こし）, Hugging Face IngCrowd/japanese-themed-dialogue（revision e2eed87）, CC BY-NC 4.0"
+    },
+    "ingcrowd-05-mix": {
+      "url": "https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/e2eed8769400269f20821deb0e47e68b40012e8b/japanese-themed-dialogue05/japanese-themed-dialogue05_audio.wav",
+      "sha256": "f8623a6fbf37e4f612930a2bdfda031265bc4d78697acc501292bb0dc6215aaa",
+      "path": "ingcrowd/dialogue05/mix.wav",
+      "license": "CC BY-NC 4.0（非営利の利用に限る。音声・書き起こしを再配布しない）",
+      "attribution": "IngCrowd「Japanese Themed Casual Conversation Corpus」japanese-themed-dialogue05（人生・恋愛・人間関係。2 話者の混合音声）, Hugging Face IngCrowd/japanese-themed-dialogue（revision e2eed87）, CC BY-NC 4.0"
+    },
+    "ingcrowd-05-a": {
+      "url": "https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/e2eed8769400269f20821deb0e47e68b40012e8b/japanese-themed-dialogue05/japanese-themed-dialogue05_individual_audio1.wav",
+      "sha256": "19dc480725ec06f06e17f1f21880da80ef8f173f7e03010f74047160b62e607c",
+      "path": "ingcrowd/dialogue05/a.wav",
+      "license": "CC BY-NC 4.0（非営利の利用に限る。音声・書き起こしを再配布しない）",
+      "attribution": "IngCrowd「Japanese Themed Casual Conversation Corpus」japanese-themed-dialogue05（人生・恋愛・人間関係。話者 1 の音声）, Hugging Face IngCrowd/japanese-themed-dialogue（revision e2eed87）, CC BY-NC 4.0"
+    },
+    "ingcrowd-05-b": {
+      "url": "https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/e2eed8769400269f20821deb0e47e68b40012e8b/japanese-themed-dialogue05/japanese-themed-dialogue05_individual_audio2.wav",
+      "sha256": "2c86a59aa81fa0565d7043a6a6e149eebd148512ff17b01e350a706acbd15691",
+      "path": "ingcrowd/dialogue05/b.wav",
+      "license": "CC BY-NC 4.0（非営利の利用に限る。音声・書き起こしを再配布しない）",
+      "attribution": "IngCrowd「Japanese Themed Casual Conversation Corpus」japanese-themed-dialogue05（人生・恋愛・人間関係。話者 2 の音声）, Hugging Face IngCrowd/japanese-themed-dialogue（revision e2eed87）, CC BY-NC 4.0"
+    },
+    "ingcrowd-05-eaf": {
+      "url": "https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/e2eed8769400269f20821deb0e47e68b40012e8b/japanese-themed-dialogue05/japanese-themed-dialogue05.eaf",
+      "sha256": "e728b5e9cc74c91dfc2541dee1a404f98e3ff1b71b744512e4622d57a1dd5bdd",
+      "path": "ingcrowd/dialogue05/eaf.eaf",
+      "license": "CC BY-NC 4.0（非営利の利用に限る。音声・書き起こしを再配布しない）",
+      "attribution": "IngCrowd「Japanese Themed Casual Conversation Corpus」japanese-themed-dialogue05（人生・恋愛・人間関係。ELAN の書き起こし）, Hugging Face IngCrowd/japanese-themed-dialogue（revision e2eed87）, CC BY-NC 4.0"
+    },
+    "ingcrowd-09-mix": {
+      "url": "https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/e2eed8769400269f20821deb0e47e68b40012e8b/japanese-themed-dialogue09/japanese-themed-dialogue09_audio.wav",
+      "sha256": "b5458a5d9f495515b5d1a34d1ffdc15de4abad71c3282e07a2c138675bb481d4",
+      "path": "ingcrowd/dialogue09/mix.wav",
+      "license": "CC BY-NC 4.0（非営利の利用に限る。音声・書き起こしを再配布しない）",
+      "attribution": "IngCrowd「Japanese Themed Casual Conversation Corpus」japanese-themed-dialogue09（コンピューター技術。2 話者の混合音声）, Hugging Face IngCrowd/japanese-themed-dialogue（revision e2eed87）, CC BY-NC 4.0"
+    },
+    "ingcrowd-09-a": {
+      "url": "https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/e2eed8769400269f20821deb0e47e68b40012e8b/japanese-themed-dialogue09/japanese-themed-dialogue09_individual_audio1.wav",
+      "sha256": "c8980cb7aa34a9445fc9956a1f494224b94d32f4a39f521f9e6a74fe215271a8",
+      "path": "ingcrowd/dialogue09/a.wav",
+      "license": "CC BY-NC 4.0（非営利の利用に限る。音声・書き起こしを再配布しない）",
+      "attribution": "IngCrowd「Japanese Themed Casual Conversation Corpus」japanese-themed-dialogue09（コンピューター技術。話者 1 の音声）, Hugging Face IngCrowd/japanese-themed-dialogue（revision e2eed87）, CC BY-NC 4.0"
+    },
+    "ingcrowd-09-b": {
+      "url": "https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/e2eed8769400269f20821deb0e47e68b40012e8b/japanese-themed-dialogue09/japanese-themed-dialogue09_individual_audio2.wav",
+      "sha256": "32d2df8402d74576363ac94b472e7b30a8811139362273920eb62f6f17caea36",
+      "path": "ingcrowd/dialogue09/b.wav",
+      "license": "CC BY-NC 4.0（非営利の利用に限る。音声・書き起こしを再配布しない）",
+      "attribution": "IngCrowd「Japanese Themed Casual Conversation Corpus」japanese-themed-dialogue09（コンピューター技術。話者 2 の音声）, Hugging Face IngCrowd/japanese-themed-dialogue（revision e2eed87）, CC BY-NC 4.0"
+    },
+    "ingcrowd-09-eaf": {
+      "url": "https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/e2eed8769400269f20821deb0e47e68b40012e8b/japanese-themed-dialogue09/japanese-themed-dialogue09.eaf",
+      "sha256": "7d9fe991093a438a9412020f9c8129a8206f45b87e2e48dfc2dc23d265ab9c21",
+      "path": "ingcrowd/dialogue09/eaf.eaf",
+      "license": "CC BY-NC 4.0（非営利の利用に限る。音声・書き起こしを再配布しない）",
+      "attribution": "IngCrowd「Japanese Themed Casual Conversation Corpus」japanese-themed-dialogue09（コンピューター技術。ELAN の書き起こし）, Hugging Face IngCrowd/japanese-themed-dialogue（revision e2eed87）, CC BY-NC 4.0"
     }
   },
   "datasets": [
@@ -117,9 +269,10 @@
     {
       "id": "kantei-us",
       "kind": "govinfo",
-      "title": "日米共同記者会見 2017-02-10（日英が交互。正解は冒頭の英語のみ）",
+      "title": "日米共同記者会見 2017-02-10（日英が交互。正解は冒頭の英語と安倍総理の冒頭発言）",
       "audio": "kantei-us-video",
       "record": "kantei-us-record",
+      "ja_record": "kantei-us-record-ja",
       "max_seconds": 1200,
       "unit": "word",
       "langs": ["ja", "auto"],
@@ -135,6 +288,90 @@
       "ja_source": {"dataset": "kantei-toron"},
       "unit": "word",
       "langs": ["ja", "auto"]
+    },
+    {
+      "id": "kaiken-kishida",
+      "kind": "kaiken",
+      "title": "岸田総理 記者会見 2022-03-03（冒頭発言の終わりと質疑。整文済みの会見録が正解）",
+      "audio": "kaiken-kishida-video",
+      "record": "kaiken-kishida-record",
+      "max_seconds": 1200,
+      "qa_lead_seconds": 300,
+      "unit": "char",
+      "langs": ["ja", "auto"],
+      "ref_window": "calibrated",
+      "summary": true
+    },
+    {
+      "id": "kaiken-suga",
+      "kind": "kaiken",
+      "title": "菅総理 記者会見 2021-09-09（冒頭発言の終わりと質疑。整文済みの会見録が正解）",
+      "audio": "kaiken-suga-video",
+      "record": "kaiken-suga-record",
+      "max_seconds": 1200,
+      "qa_lead_seconds": 300,
+      "unit": "char",
+      "langs": ["ja", "auto"],
+      "ref_window": "calibrated"
+    },
+    {
+      "id": "kaiken-ishiba",
+      "kind": "kaiken",
+      "title": "石破総理 記者会見 2025-10-10（冒頭発言の終わりと質疑。整文済みの会見録が正解）",
+      "audio": "kaiken-ishiba-video",
+      "record": "kaiken-ishiba-record",
+      "max_seconds": 1200,
+      "qa_lead_seconds": 300,
+      "unit": "char",
+      "langs": ["ja", "auto"],
+      "ref_window": "calibrated"
+    },
+    {
+      "id": "kantei-us2025",
+      "kind": "govinfo",
+      "title": "日米共同記者会見 2025-02-07 の質疑（トランプ大統領・石破総理。英語、日本語の発言は同時通訳の英語。正解は大統領文書の該当範囲）",
+      "audio": "kantei-us2025-video",
+      "record": "kantei-us2025-record",
+      "unit": "word",
+      "langs": ["ja", "auto"],
+      "en_paragraphs": true,
+      "ref_window": "calibrated",
+      "notes": "Commons の動画（21.6 分）は会見の後半（質疑）だけ。石破総理と日本の記者の日本語は同時通訳の英語の下にかすかに残るだけで、ほぼ聞こえない（ライブ・auto の 191 発話のうち日本語は 2 つ）。日英の切り替えの評価にはならない。測るのは英語の WER（大統領文書の、動画に当たる範囲。通訳の英語を含む）、想定外の文字種、--lang ja と auto の差。日本語の CER は採点しない。官邸の冒頭発言は動画に入っていないので使わない"
+    },
+    {
+      "id": "ingcrowd-01",
+      "kind": "eaf",
+      "title": "IngCrowd 雑談 01（趣味・娯楽。40 代女性と 20 代男性、Zoom。逐語・時刻つき。非営利限定）",
+      "audio": "ingcrowd-01-mix",
+      "record": "ingcrowd-01-eaf",
+      "tracks": {"me": {"audio": "ingcrowd-01-a", "tier": "speaker_1"}, "other": {"audio": "ingcrowd-01-b", "tier": "speaker_2"}},
+      "unit": "char",
+      "langs": ["ja", "auto"],
+      "noncommercial": true
+    },
+    {
+      "id": "ingcrowd-05",
+      "kind": "eaf",
+      "title": "IngCrowd 雑談 05（人生・恋愛・人間関係。40 代女性 2 人、Zoom。逐語・時刻つき。非営利限定）",
+      "audio": "ingcrowd-05-mix",
+      "record": "ingcrowd-05-eaf",
+      "tracks": {"me": {"audio": "ingcrowd-05-a", "tier": "speaker_2"}, "other": {"audio": "ingcrowd-05-b", "tier": "speaker_1"}},
+      "notes": "この対話だけ、話者 1 の音声（_individual_audio1.wav）が ELAN の層 speaker_2 に当たる（README の対応と逆。2026-11-19 に文字起こしとの突き合わせで確認: audio1 の出力は speaker_2 に CER 0.36、speaker_1 に 0.86）",
+      "unit": "char",
+      "langs": ["ja", "auto"],
+      "noncommercial": true
+    },
+    {
+      "id": "ingcrowd-09",
+      "kind": "eaf",
+      "title": "IngCrowd 雑談 09（コンピューター技術。40 代女性と 30 代女性、Zoom。逐語・時刻つき。非営利限定）",
+      "audio": "ingcrowd-09-mix",
+      "record": "ingcrowd-09-eaf",
+      "tracks": {"me": {"audio": "ingcrowd-09-a", "tier": "speaker_1"}, "other": {"audio": "ingcrowd-09-b", "tier": "speaker_2"}},
+      "unit": "char",
+      "langs": ["ja", "auto"],
+      "noncommercial": true,
+      "summary": true
     },
     {
       "id": "rwcp-sp01",
