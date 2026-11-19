@@ -105,6 +105,12 @@ class OutputMetricTests(unittest.TestCase):
         self.assertFalse(metrics.is_repetitive("ははは"))  # 1-char laughter is not a hallucination loop
         self.assertFalse(metrics.is_repetitive("今日はいい天気です"))
 
+    def test_near_duplicate_loop_across_utterances(self):
+        loop = ["次は、この音声を使うことができる", "この音声を使うことができる", "そして、この音声を使うことができる",
+                "この音声を使うことができる"]
+        self.assertEqual(metrics.repetition(["今日は晴れ"] + loop)["utterances"], 4)
+        self.assertEqual(metrics.repetition(["はい", "はい", "そうですね", "はい"])["utterances"], 0)
+
     def test_repeated_utterances(self):
         self.assertEqual(metrics.repetition(["a b", "x", "x", "x", "日本の大会社の大会社の大会社"])["utterances"], 4)
 

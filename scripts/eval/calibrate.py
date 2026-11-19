@@ -7,7 +7,8 @@
   1. 先頭 max_seconds 秒に当たる会議録の範囲 → calibration.json（ref_start_char / ref_end_char）。
      これで、どのビルドも同じ正解の範囲で採点される（出力に合わせて範囲が動く採点を避ける）。
   2. max_seconds 以降から、出力と会議録がよく合う発話のまとまり（15〜35 秒）を選ぶ → mixed-spans.json の ja 区間。
-     区間の切れ目は確定版の発話の時刻なので、境界の数語がずれることがある（区間内の CER が 15% 以下のものだけ選ぶ）。
+     切れ目は、確定版の発話の境目に音声の無音（silencedetect -35 dB・0.3 秒以上）が重なる所の、無音の中央。
+     正解の範囲は確定版の出力との整列で決めるので境界の数文字がずれうる（区間内の CER が 15% 以下のものだけ選ぶ）。
 - 英語の区間は AMI TS3003c の後半から、語の時刻で前後 0.5 秒に他の発話がないまとまり（12〜30 秒）を選ぶ。
 - 結果のファイルには時刻と文字位置（数値）だけを書く。本文は書かない。
 """
@@ -73,30 +74,44 @@ def ja_calibration(decl, toron, autonote, model):
         k = owner[h]
         first.setdefault(k, r)
         last[k] = r
+    # 確定版の発話は隙間なく続くので、切れ目は音声の無音（silencedetect）が発話の境目にかかる所だけにする。
+    silences = detect_silences(full_wav, limit + 30)
+    cuts = {}   # k → 発話 k の終わり（= k+1 の始まり）に置く切れ目の時刻
+    for k in range(len(tail) - 1):
+        b = tail[k]["end"]
+        for s0, s1 in silences:
+            if s0 - 0.5 <= b <= s1 + 0.5:
+                cuts[k] = (s0 + s1) / 2.0
+                break
+    keys = sorted(cuts)
     candidates = []
-    i = 0
-    while i < len(tail):
-        j = i
-        while j < len(tail) and tail[j]["end"] - tail[i]["start"] < JA_MIN:
-            j += 1
-        if j >= len(tail) or tail[j]["end"] - tail[i]["start"] > JA_MAX:
-            i += 1
-            continue
-        gap_before = tail[i]["start"] - (tail[i - 1]["end"] if i > 0 else 0)
-        gap_after = (tail[j + 1]["start"] if j + 1 < len(tail) else 1e9) - tail[j]["end"]
-        if gap_before >= 0.4 and gap_after >= 0.4 and i in first and j in last:
-            r0, r1 = first[i], last[j] + 1
-            span_hyp = [c for k in range(i, j + 1) for c in norm_chars(tail[k]["text"])]
-            cer = metrics.distance(window[r0:r1], span_hyp) / max(1, r1 - r0)
-            if cer <= 0.15:
-                candidates.append((tail[i]["start"], tail[j]["end"], r0, r1, cer))
-                i = j + 1
+    a = 0
+    while a < len(keys):
+        i = keys[a] + 1                          # first utterance of the span
+        found = None
+        for b in keys[a + 1:]:
+            t0, t1 = cuts[keys[a]], cuts[b]
+            if t1 - t0 < JA_MIN:
                 continue
-        i += 1
+            if t1 - t0 > JA_MAX:
+                break
+            j = b                                # last utterance of the span
+            if i in first and j in last:
+                r0, r1 = first[i], last[j] + 1
+                span_hyp = [c for k in range(i, j + 1) for c in norm_chars(tail[k]["text"])]
+                cer = metrics.distance(window[r0:r1], span_hyp) / max(1, r1 - r0)
+                if cer <= 0.15:
+                    found = (t0, t1, r0, r1, cer, b)
+            break
+        if found:
+            candidates.append(found[:5])
+            a = keys.index(found[5])
+        else:
+            a += 1
     picked = spread(candidates, PAIRS)
     spans = []
     for start, end, r0, r1, cer in picked:
-        spans.append({"lang": "ja", "start": round(max(0.0, start - 0.15), 3), "end": round(end + 0.25, 3),
+        spans.append({"lang": "ja", "start": round(start, 3), "end": round(end, 3),
                       "ref_start": fetch.raw_to_char_offset(raw, e + ts + r0),
                       "ref_end": fetch.raw_to_char_offset(raw, e + ts + r1), "calibration_cer": round(cer, 4)})
     print("日本語の区間: 候補 %d → %d" % (len(candidates), len(spans)))
@@ -135,6 +150,17 @@ def en_spans(decl, mixed):
     picked = spread(candidates, PAIRS)
     print("英語の区間: 候補 %d → %d" % (len(candidates), len(picked)))
     return [{"lang": "en", "start": round(t0 - 0.2, 3), "end": round(t1 + 0.2, 3)} for t0, t1, *_ in picked]
+
+
+def detect_silences(wav, from_seconds):
+    """ffmpeg silencedetect（-35 dB・0.3 秒以上）の無音区間 [(start, end)]（音声の先頭からの秒）。"""
+    import re
+    import subprocess
+    res = subprocess.run(["ffmpeg", "-nostdin", "-ss", str(from_seconds), "-i", wav, "-af",
+                          "silencedetect=noise=-35dB:d=0.3", "-f", "null", "-"], capture_output=True, text=True)
+    starts = [float(x) for x in re.findall(r"silence_start: ([0-9.]+)", res.stderr)]
+    ends = [float(x) for x in re.findall(r"silence_end: ([0-9.]+)", res.stderr)]
+    return [(from_seconds + s0, from_seconds + s1) for s0, s1 in zip(starts, ends)]
 
 
 def spread(candidates, n):

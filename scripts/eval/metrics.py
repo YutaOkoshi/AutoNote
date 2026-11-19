@@ -209,16 +209,32 @@ def is_repetitive(text):
     return False
 
 
-def repetition(utterances):
-    """繰り返しの幻覚: 発話の中のループと、同じ発話が 3 回以上続くもの（数えるのは発話の数）。"""
+def _near(a, b):
+    if a == b:
+        return True
+    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
+    return short in long_ and len(short) >= 0.6 * len(long_)
+
+
+def repetition(utterances, window=4, min_chars=6):
+    """繰り返しの幻覚: 発話の中のループ、同じ発話が 3 回以上続くもの、発話をまたぐループ（直前 window 発話の
+    うち 2 つ以上が、同じか、一方が他方を含み長さが 6 割以上の発話。min_chars 文字未満の発話はこの判定に使わない）。
+    数えるのは発話の数。"""
     flagged = set(i for i, u in enumerate(utterances) if is_repetitive(u))
+    keys = ["".join(textnorm.normalize(u, "norm").split()) for u in utterances]
     i = 0
-    while i < len(utterances):
+    while i < len(keys):   # the same utterance three or more times in a row
         j = i
-        key = textnorm.normalize(utterances[i], "norm")
-        while j + 1 < len(utterances) and textnorm.normalize(utterances[j + 1], "norm") == key and key:
+        while j + 1 < len(keys) and keys[i] and keys[j + 1] == keys[i]:
             j += 1
         if j - i + 1 >= 3:
             flagged.update(range(i, j + 1))
         i = j + 1
+    for i, key in enumerate(keys):
+        if len(key) < min_chars:
+            continue
+        near = [j for j in range(max(0, i - window), i) if len(keys[j]) >= min_chars and _near(key, keys[j])]
+        if len(near) >= 2:
+            flagged.add(i)
+            flagged.update(near)
     return {"utterances": len(flagged)}

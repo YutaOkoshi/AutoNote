@@ -4,7 +4,9 @@ import Foundation
 public struct DevSummarizeArguments: Equatable, Sendable {
     public static let usage = """
         usage: autonote dev summarize --fake <transcript.json> --out <dir> [--minutes <minutes.json>] [--fail-summary] [--claude]
-               (--minutes is required unless --fail-summary or --claude is given)
+               [--minutes-out <path>]
+               (--minutes is required unless --fail-summary or --claude is given;
+                --minutes-out copies the generated minutes.json (MinutesOutput) to <path>)
         """
 
     public enum ParseError: Error, Equatable {
@@ -16,10 +18,12 @@ public struct DevSummarizeArguments: Equatable, Sendable {
     public var minutes: URL?
     public var failSummary: Bool
     public var useClaude: Bool
+    public var minutesOut: URL?
 
-    public init(transcript: URL, out: URL, minutes: URL? = nil, failSummary: Bool = false, useClaude: Bool = false) {
+    public init(transcript: URL, out: URL, minutes: URL? = nil, failSummary: Bool = false, useClaude: Bool = false,
+                minutesOut: URL? = nil) {
         self.transcript = transcript; self.out = out; self.minutes = minutes
-        self.failSummary = failSummary; self.useClaude = useClaude
+        self.failSummary = failSummary; self.useClaude = useClaude; self.minutesOut = minutesOut
     }
 
     public static func parse(_ args: [String]) throws -> DevSummarizeArguments {
@@ -28,18 +32,20 @@ public struct DevSummarizeArguments: Equatable, Sendable {
         var minutes: URL?
         var failSummary = false
         var useClaude = false
+        var minutesOut: URL?
         var index = 0
         while index < args.count {
             let arg = args[index]
             switch arg {
             case "--fail-summary": failSummary = true; index += 1
             case "--claude": useClaude = true; index += 1
-            case "--fake", "--out", "--minutes":
+            case "--fake", "--out", "--minutes", "--minutes-out":
                 guard index + 1 < args.count else { throw ParseError.invalid("\(arg) needs a value") }
                 let url = URL(filePath: args[index + 1])
                 switch arg {
                 case "--fake": transcript = url
                 case "--out": out = URL(filePath: args[index + 1], directoryHint: .isDirectory)
+                case "--minutes-out": minutesOut = url
                 default: minutes = url
                 }
                 index += 2
@@ -53,6 +59,15 @@ public struct DevSummarizeArguments: Equatable, Sendable {
             throw ParseError.invalid("--minutes is required unless --fail-summary or --claude is given")
         }
         return DevSummarizeArguments(transcript: transcript, out: out, minutes: minutes,
-                                     failSummary: failSummary, useClaude: useClaude)
+                                     failSummary: failSummary, useClaude: useClaude, minutesOut: minutesOut)
+    }
+
+    /// `--minutes-out`: copies the generated `minutes.json` to `destination` (creating its folder) after checking that
+    /// it decodes as `MinutesOutput`, so an evaluation script gets the structured minutes, not the Markdown note.
+    public static func exportMinutes(from source: URL, to destination: URL) throws {
+        let data = try Data(contentsOf: source)
+        _ = try AutoNoteJSON.decoder().decode(MinutesOutput.self, from: data)
+        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: destination, options: .atomic)
     }
 }
