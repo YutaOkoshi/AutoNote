@@ -55,10 +55,19 @@ def transcribe(autonote, audio, engine, lang, model, out, timeout):
     os.makedirs(app_dir, exist_ok=True)
     cmd = [autonote, "dev", "transcribe", audio, "--engine", engine, "--model-path", model, "--lang", lang,
            "--data", app_dir]
-    with open(out + ".tmp", "w", encoding="utf-8") as so, open(out[:-len(".jsonl")] + ".err", "w") as se:
+    stem = out[:-len(".jsonl")]
+    with open(out + ".tmp", "w", encoding="utf-8") as so, open(stem + ".err", "w") as se:
         code = subprocess.run(cmd, stdout=so, stderr=se, timeout=timeout).returncode
     if code != 0:
-        raise RuntimeError("autonote dev transcribe が %d で終了（%s）" % (code, out[:-len(".jsonl")] + ".err"))
+        _, summary = common.read_jsonl(out + ".tmp")
+        if summary is None:
+            raise RuntimeError("autonote dev transcribe が %d で終了（%s）" % (code, stem + ".err"))
+        # 出力を書き終えた後に落ちた（終了処理など）。結果は使い、終了コードを残して採点の表に出す。
+        print("  警告: 出力の後に終了コード %d（%s）" % (code, stem + ".err"), flush=True)
+        with open(stem + ".exit", "w") as f:
+            f.write("%d\n" % code)
+    elif os.path.exists(stem + ".exit"):
+        os.remove(stem + ".exit")
     os.replace(out + ".tmp", out)
 
 

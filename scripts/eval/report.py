@@ -64,7 +64,8 @@ def render(res, base):
                 lines.append("- **警告**: %s が基準と違う（基準 %s）。差は参考値" % (key, base.get(key)))
     lines += ["", "列: er = 正規化後の誤り率（主指標）、raw = 素の値、en WER / ja CER = 混在の言語別、"
               "en 残存 = 正解の英語の語が英語のまま出た割合、想定外 = 日本語・ラテン以外の文字種を含む確定発話、"
-              "反復 = 繰り返しの幻覚らしい発話数、最長脱落 = 連続して落ちた正解の単位数、RTF = 処理時間 ÷ 音声長", ""]
+              "反復 = 繰り返しの幻覚らしい発話数、最長脱落 = 連続して落ちた正解の単位数、RTF = 処理時間 ÷ 音声長。"
+              "⚠exit = 出力を書き終えた後に 0 以外で終了した（結果は採用）", ""]
     for ds_id, ds in res["datasets"].items():
         bds = (base or {}).get("datasets", {}).get(ds_id, {})
         unit = {"word": "語", "char": "字"}.get(ds["unit"], ds["unit"])
@@ -90,6 +91,8 @@ def render(res, base):
             if brun.get("rtf") and run.get("rtf"):
                 rtf_ratio = "%.2f" % (run["rtf"] / brun["rtf"])
             ret = run.get("en_retention", {})
+            if run.get("exit_code"):
+                key = "%s ⚠exit %d" % (key, run["exit_code"])
             lines.append("| %s | %s | %s%s | %s | %s | %s | %s | %s | %s | %d | %s | %s | %s |" % (
                 key, pct(er), d, mark, pct(rate(run, "er_raw")), pct(rate(run, "en_wer")), pct(rate(run, "ja_cer")),
                 pct(ret.get("rate")) if ret else "–", foreign_cell(run), fdelta, run.get("repetition", 0),

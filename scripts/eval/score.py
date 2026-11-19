@@ -120,7 +120,12 @@ def main(argv):
                 continue
             engine, lang = name[:-len(".jsonl")].rsplit("-", 1)
             print("採点: %s %s %s" % (ds["id"], engine, lang), flush=True)
-            entry["runs"]["%s/%s" % (engine, lang)] = score_run(ds, ref, finals, summary)
+            scored = score_run(ds, ref, finals, summary)
+            exit_path = os.path.join(run_dir, name[:-len(".jsonl")] + ".exit")
+            if os.path.exists(exit_path):
+                with open(exit_path) as f:
+                    scored["exit_code"] = int(f.read().strip() or 0)
+            entry["runs"]["%s/%s" % (engine, lang)] = scored
         result["datasets"][ds["id"]] = entry
     if private:
         result["private"] = True   # 手元の録音を含む。集計値だけだが、共有するかは利用者が決める
