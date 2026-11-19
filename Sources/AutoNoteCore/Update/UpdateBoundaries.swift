@@ -35,6 +35,7 @@ public struct URLSessionFeedFetcher: UpdateFeedFetching {
         var request = URLRequest(url: url)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(UpdateURLPolicy.acceptLanguage, forHTTPHeaderField: "Accept-Language")
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         guard (200..<300).contains(http.statusCode) else { throw UpdateFetchError.http(http.statusCode) }

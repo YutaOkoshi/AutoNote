@@ -10,9 +10,17 @@ import AutoNoteTestSupport
     }
 
     func decide(_ r: RecorderState = .idle, queue: [QueueItemDTO] = [], translation: [TranslationJobState] = [],
-                window: Bool = false, user: Bool = false) -> UpdateInstallGate.Decision {
-        UpdateInstallGate.decide(recorder: r, queue: queue, translationJobs: translation, mainWindowOpen: window,
+                busy: UpdateBusyWork = .none, window: Bool = false, user: Bool = false) -> UpdateInstallGate.Decision {
+        UpdateInstallGate.decide(recorder: r, queue: queue, translationJobs: translation, busy: busy, mainWindowOpen: window,
                                  userRequested: user)
+    }
+
+    @Test func waitsForDownloadsImportsAndAutomationsUnlessAsked() {
+        #expect(decide(busy: UpdateBusyWork(audioImport: true)) == .wait("音声を取り込んでいます"))
+        #expect(decide(busy: UpdateBusyWork(modelDownload: true)) == .wait("モデルをダウンロードしています"))
+        #expect(decide(busy: UpdateBusyWork(automation: true)) == .wait("Automation を実行しています"))
+        #expect(decide(busy: UpdateBusyWork(modelDownload: true, audioImport: true, automation: true), user: true) == .install)
+        #expect(decide(.recording, busy: UpdateBusyWork(automation: true), user: true) == .wait("録音中です"))
     }
 
     @Test func installsWhenNothingIsGoingOn() {
@@ -52,6 +60,33 @@ import AutoNoteTestSupport
         #expect(!UpdateSchedule.isDue(lastCheckedAt: t0.addingTimeInterval(30), now: t0))
     }
 
+    @Test func afterNoConnectionTheWaitDoublesUpToADay() {
+        #expect([1, 2, 3, 4, 5, 6, 20].map { UpdateSchedule.retryDelay(failures: $0) }
+            == [3_600, 7_200, 14_400, 28_800, 57_600, 86_400, 86_400])
+        // The retry time replaces the daily deadline, both ways.
+        #expect(!UpdateSchedule.isDue(lastCheckedAt: nil, retryAt: t0.addingTimeInterval(3_600), now: t0))
+        #expect(UpdateSchedule.isDue(lastCheckedAt: t0, retryAt: t0.addingTimeInterval(3_600), now: t0.addingTimeInterval(3_600)))
+        // A clock set far back does not wait for it.
+        #expect(UpdateSchedule.isDue(lastCheckedAt: nil, retryAt: t0.addingTimeInterval(200_000), now: t0))
+    }
+
+    @Test func schedulerFollowsTheRetryTime() async throws {
+        let clock = FakeQueueClock(now: t0)
+        let log = CheckLog()
+        await log.setRetry(t0.addingTimeInterval(7_200))
+        let scheduler = UpdateScheduler(clock: clock, tick: 3_600, isEnabled: { true }, lastCheckedAt: { nil },
+                                        retryAt: { await log.retry }, check: { await log.check(clock.now()) })
+        await scheduler.start()
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(await log.count == 0)
+        clock.advance(by: 3_600)
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(await log.count == 0)
+        clock.advance(by: 3_600)
+        try await waitFor { await log.count == 1 }
+        await scheduler.stop()
+    }
+
     @Test func schedulerChecksAtStartThenOnceADayAndNotWhenOff() async throws {
         let clock = FakeQueueClock(now: t0)
         let log = CheckLog()
@@ -88,7 +123,9 @@ private actor CheckLog {
     var count = 0
     var last: Date?
     var enabled = true
-    func check(_ now: Date) { count += 1; last = now }
+    var retry: Date?
+    func check(_ now: Date) { count += 1; last = now; retry = nil }
+    func setRetry(_ at: Date) { retry = at }
     func setEnabled(_ on: Bool) { enabled = on }
 }
 
@@ -101,6 +138,12 @@ private actor CheckLog {
         let when = Date(timeIntervalSince1970: 1_800_000_000)
         try await store.update { $0.lastCheckedAt = when; $0.failedVersion = "0.7.0" }
         #expect(await store.load() == UpdateState(lastCheckedAt: when, failedVersion: "0.7.0"))
+        try await store.update { $0.networkFailures = 2; $0.retryAt = when }
+        let retrying = await store.load()
+        #expect(retrying.networkFailures == 2 && retrying.retryAt == when)
+        // A state file from before the retry fields still reads.
+        let old = try AutoNoteJSON.decoder().decode(UpdateState.self, from: Data(#"{"failed_version":"0.7.0"}"#.utf8))
+        #expect(old == UpdateState(failedVersion: "0.7.0"))
 
         // The helper's own line format.
         try Data(#"{"from":"0.6.0","to":"0.7.0","result":"restored","reason":"launch"}"#.utf8)
@@ -113,22 +156,24 @@ private actor CheckLog {
 }
 
 @Suite struct UpdateInstallPlanTests {
-    @Test func backupSitsNextToTheAppAndArgumentsAreOrdered() {
+    @Test func swapSlotSitsNextToTheAppAndArgumentsAreOrdered() {
         var plan = UpdateInstallPlan(
             pid: 42, target: URL(filePath: "/Applications/AutoNote.app"), staged: URL(filePath: "/tmp/u/0.7.0/unpacked/AutoNote.app"),
-            requirement: #"identifier "x" and certificate leaf = H"ab""#, resultFile: URL(filePath: "/tmp/u/last-install.json"),
-            logFile: URL(filePath: "/tmp/u/install.log"), fromVersion: "0.6.0", toVersion: "0.7.0",
+            requirement: #"identifier "x" and certificate leaf = H"ab""#, directory: URL(filePath: "/tmp/u"),
+            fromVersion: "0.6.0", toVersion: "0.7.0",
             environment: ["AUTONOTE_UPDATE_FEED_URL": "http://x", "AUTONOTE_DATA_DIR": "/tmp/d"])
-        #expect(plan.backup.path == "/Applications/.AutoNote-update-backup.app")
+        #expect(plan.swapPath.path == "/Applications/.AutoNote-update.app")
         plan.launchCheckSeconds = 3
         #expect(plan.arguments == ["42", "/Applications/AutoNote.app", "/tmp/u/0.7.0/unpacked/AutoNote.app",
-                                   "/Applications/.AutoNote-update-backup.app", #"identifier "x" and certificate leaf = H"ab""#,
-                                   "/tmp/u/last-install.json", "/tmp/u/install.log", "0.6.0", "0.7.0", "60", "3",
+                                   "/Applications/.AutoNote-update.app", #"identifier "x" and certificate leaf = H"ab""#,
+                                   "/tmp/u/last-install.json", "/tmp/u/install.log", "/tmp/u/launched.pid", "/tmp/u/install.lock",
+                                   "0.6.0", "0.7.0", "60", "3",
                                    "AUTONOTE_DATA_DIR=/tmp/d", "AUTONOTE_UPDATE_FEED_URL=http://x"])
     }
 
     @Test func onlyAutoNoteVariablesTravelToTheRelaunch() {
-        let env = UpdateInstallPlan.relaunchEnvironment(["AUTONOTE_DATA_DIR": "/d", "HOME": "/Users/x", "GH_TOKEN": "t"])
+        let env = UpdateInstallPlan.relaunchEnvironment(["AUTONOTE_DATA_DIR": "/d", "HOME": "/Users/x", "GH_TOKEN": "t",
+                                                         "AUTONOTE_UPDATE_LAUNCH_MARKER": "/d/updates/launched.pid"])
         #expect(env == ["AUTONOTE_DATA_DIR": "/d"])
     }
 
@@ -143,6 +188,50 @@ private actor CheckLog {
         try p.run()
         p.waitUntilExit()
         #expect(p.terminationStatus == 0)
+    }
+
+    @Test func swapExchangesTwoFoldersInOneStep() throws {
+        let dir = try TemporaryDirectory.make()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let a = dir.appending(path: "A.app"), b = dir.appending(path: ".A-update.app")
+        try writeApp(a, bundleID: "x", version: "1")
+        try writeApp(b, bundleID: "x", version: "2")
+        try UpdateInstaller.swap(a, b)
+        #expect(BundleFacts.read(a)?.shortVersion == "2")
+        #expect(BundleFacts.read(b)?.shortVersion == "1")
+        #expect(throws: UpdateSwapError.self) { try UpdateInstaller.swap(a, dir.appending(path: "missing")) }
+        #expect(BundleFacts.read(a)?.shortVersion == "2")
+    }
+
+    @Test func leftoversAreSweptOnlyWhenNoHelperRuns() throws {
+        let dir = try TemporaryDirectory.make()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let target = dir.appending(path: "AutoNote.app")
+        try writeApp(target, bundleID: "x", version: "1")
+        let slot = UpdateInstallPlan.swapPath(for: target), legacy = UpdateInstallPlan.legacyBackupPath(for: target)
+        try writeApp(slot, bundleID: "x", version: "0")
+        try writeApp(legacy, bundleID: "x", version: "0")
+        let lock = dir.appending(path: "install.lock")
+        try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
+        try Data("\(ProcessInfo.processInfo.processIdentifier)".utf8).write(to: lock.appending(path: "pid"))
+        #expect(UpdateInstaller.sweepLeftovers(target: target, lockDirectory: lock).isEmpty)
+        try Data("999999".utf8).write(to: lock.appending(path: "pid"))
+        #expect(UpdateInstaller.sweepLeftovers(target: target, lockDirectory: lock).count == 2)
+        #expect(!FileManager.default.fileExists(atPath: slot.path) && !FileManager.default.fileExists(atPath: legacy.path))
+        #expect(FileManager.default.fileExists(atPath: target.path))
+    }
+
+    @Test func theLaunchMarkerIsWrittenOnlyIntoTheOwnUpdatesFolder() throws {
+        let dir = try TemporaryDirectory.make()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let updates = dir.appending(path: "updates")
+        try FileManager.default.createDirectory(at: updates, withIntermediateDirectories: true)
+        let elsewhere = dir.appending(path: "elsewhere.pid")
+        UpdateInstaller.writeLaunchMarker(environment: [UpdateInstallPlan.launchMarkerKey: elsewhere.path], directory: updates, pid: 7)
+        #expect(!FileManager.default.fileExists(atPath: elsewhere.path))
+        let marker = updates.appending(path: "launched.pid")
+        UpdateInstaller.writeLaunchMarker(environment: [UpdateInstallPlan.launchMarkerKey: marker.path], directory: updates, pid: 7)
+        #expect(try String(contentsOf: marker, encoding: .utf8) == "7\n")
     }
 }
 
@@ -176,19 +265,20 @@ private actor CheckLog {
     }
 }
 
-/// Runs the real helper on a target that is not there: it must record `move-aside` and touch nothing else.
+/// Runs the real helper (`/bin/bash`, the script as written) against folders in a temporary directory.
 @Suite struct UpdateHelperRunTests {
-    @Test func missingTargetIsReportedAsMoveAside() async throws {
-        let dir = try TemporaryDirectory.make()
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let staged = dir.appending(path: "staged/AutoNote.app")
-        try writeApp(staged, bundleID: "com.yutaokoshi.autonote", version: "0.7.0")
-        var plan = UpdateInstallPlan(
-            pid: 999_999, target: dir.appending(path: "missing/AutoNote.app"), staged: staged, requirement: "never",
-            resultFile: dir.appending(path: "last-install.json"), logFile: dir.appending(path: "install.log"),
-            fromVersion: "0.6.0", toVersion: "0.7.0", environment: [:])
+    struct Run {
+        var status: Int32
+        var result: UpdateInstallResult?
+        var log: String
+    }
+
+    func run(target: URL, staged: URL, directory: URL) throws -> Run {
+        var plan = UpdateInstallPlan(pid: 999_999, target: target, staged: staged, requirement: "never", directory: directory,
+                                     fromVersion: "0.6.0", toVersion: "0.7.0", environment: [:])
         plan.launchCheckSeconds = 0
-        let script = dir.appending(path: "install.sh")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let script = directory.appending(path: "install.sh")
         try Data(UpdateInstaller.script.utf8).write(to: script)
         let p = Process()
         p.executableURL = URL(filePath: "/bin/bash")
@@ -198,12 +288,84 @@ private actor CheckLog {
         p.standardError = FileHandle.nullDevice
         try p.run()
         p.waitUntilExit()
-        #expect(p.terminationStatus == 1)
-        let result = try JSONDecoder().decode(UpdateInstallResult.self, from: Data(contentsOf: plan.resultFile))
-        #expect(result == UpdateInstallResult(from: "0.6.0", to: "0.7.0", result: .restored, reason: "move-aside"))
+        let result = (try? Data(contentsOf: plan.resultFile)).flatMap { try? JSONDecoder().decode(UpdateInstallResult.self, from: $0) }
+        return Run(status: p.terminationStatus, result: result,
+                   log: (try? String(contentsOf: plan.logFile, encoding: .utf8)) ?? "")
+    }
+
+    @Test func missingTargetIsReportedAsMoveAside() async throws {
+        let dir = try TemporaryDirectory.make()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let staged = dir.appending(path: "u/0.7.0/unpacked/AutoNote.app")
+        try writeApp(staged, bundleID: "com.yutaokoshi.autonote", version: "0.7.0")
+        let r = try run(target: dir.appending(path: "missing/AutoNote.app"), staged: staged, directory: dir.appending(path: "u"))
+        #expect(r.status == 1)
+        #expect(r.result == UpdateInstallResult(from: "0.6.0", to: "0.7.0", result: .restored, reason: "move-aside"))
         #expect(FileManager.default.fileExists(atPath: staged.path))
-        let log = try String(contentsOf: plan.logFile, encoding: .utf8)
-        #expect(log.contains("開始: 0.6.0 → 0.7.0"))
-        #expect(!log.contains("unbound variable"))
+        #expect(r.log.contains("開始: 0.6.0 → 0.7.0"))
+        #expect(!r.log.contains("unbound variable"))
+    }
+
+    @Test func aStagedAppReplacedByALinkIsNotMovedIn() async throws {
+        let dir = try TemporaryDirectory.make()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let target = dir.appending(path: "Apps/AutoNote.app")
+        try writeApp(target, bundleID: "com.yutaokoshi.autonote", version: "0.6.0")
+        let elsewhere = dir.appending(path: "evil/AutoNote.app")
+        try writeApp(elsewhere, bundleID: "com.yutaokoshi.autonote", version: "0.7.0")
+        let staged = dir.appending(path: "u/0.7.0/unpacked/AutoNote.app")
+        try FileManager.default.createDirectory(at: staged.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: staged, withDestinationURL: elsewhere)
+        let r = try run(target: target, staged: staged, directory: dir.appending(path: "u"))
+        #expect(r.result?.reason == "staged")
+        #expect(BundleFacts.read(target)?.shortVersion == "0.6.0")
+        #expect(FileManager.default.fileExists(atPath: elsewhere.path))
+        #expect(!FileManager.default.fileExists(atPath: UpdateInstallPlan.swapPath(for: target).path))
+    }
+
+    @Test func anUnsignedStagedAppFailsTheDeepCheckAndTheAppStays() async throws {
+        let dir = try TemporaryDirectory.make()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let target = dir.appending(path: "Apps/AutoNote.app")
+        try writeApp(target, bundleID: "com.yutaokoshi.autonote", version: "0.6.0")
+        let staged = dir.appending(path: "u/0.7.0/unpacked/AutoNote.app")
+        try writeApp(staged, bundleID: "com.yutaokoshi.autonote", version: "0.7.0")
+        let r = try run(target: target, staged: staged, directory: dir.appending(path: "u"))
+        #expect(r.result?.reason == "verify")
+        #expect(BundleFacts.read(target)?.shortVersion == "0.6.0")
+        #expect(!FileManager.default.fileExists(atPath: UpdateInstallPlan.swapPath(for: target).path))
+    }
+
+    @Test func anInterruptedSwapIsRecoveredFirst() async throws {
+        let dir = try TemporaryDirectory.make()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // An earlier helper stopped with the app moved aside (the old two-move design) — the app is missing.
+        let target = dir.appending(path: "Apps/AutoNote.app")
+        try writeApp(UpdateInstallPlan.legacyBackupPath(for: target), bundleID: "com.yutaokoshi.autonote", version: "0.6.0")
+        let staged = dir.appending(path: "u/0.7.0/unpacked/AutoNote.app")
+        try writeApp(staged, bundleID: "com.yutaokoshi.autonote", version: "0.7.0")
+        let r = try run(target: target, staged: staged, directory: dir.appending(path: "u"))
+        #expect(r.log.contains("から戻す"))
+        #expect(BundleFacts.read(target)?.shortVersion == "0.6.0")
+        #expect(!FileManager.default.fileExists(atPath: UpdateInstallPlan.legacyBackupPath(for: target).path))
+    }
+
+    @Test func aSecondHelperKeepsOut() async throws {
+        let dir = try TemporaryDirectory.make()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let updates = dir.appending(path: "u")
+        let lock = updates.appending(path: "install.lock")
+        try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
+        try Data("\(ProcessInfo.processInfo.processIdentifier)".utf8).write(to: lock.appending(path: "pid"))
+        let target = dir.appending(path: "Apps/AutoNote.app")
+        try writeApp(target, bundleID: "com.yutaokoshi.autonote", version: "0.6.0")
+        let staged = updates.appending(path: "0.7.0/unpacked/AutoNote.app")
+        try writeApp(staged, bundleID: "com.yutaokoshi.autonote", version: "0.7.0")
+        let r = try run(target: target, staged: staged, directory: updates)
+        #expect(r.status == 1 && r.result == nil)
+        #expect(r.log.contains("別の補助"))
+        #expect(FileManager.default.fileExists(atPath: staged.path))
+        // The live helper's lock is left alone.
+        #expect(FileManager.default.fileExists(atPath: lock.appending(path: "pid").path))
     }
 }

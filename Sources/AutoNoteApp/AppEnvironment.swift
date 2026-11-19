@@ -264,6 +264,14 @@ final class AppEnvironment {
             update: AppUpdatePort(updater: updater))
         let model = AppModel(ports: ports)
         updater.model = model
+        let recorderPort = ports.recorder, translationManager = translationModels.manager
+        updater.recorderState = { await recorderPort.current().state }
+        updater.busyWork = {
+            let whisper = await models.isDownloading()
+            let translationModel = await translationManager.isDownloading()
+            return UpdateBusyWork(modelDownload: whisper || translationModel, audioImport: importer.isImporting,
+                                  automation: await runner.isRunning())
+        }
         model.withdrawNotice = { [notifier] id in await notifier.withdraw(id: id) }
         routing.model = model
         let server = SocketServer(socketURL: paths.socketFile, handler: CommandRouter(ports: ports))

@@ -7,15 +7,26 @@ import Foundation
 ///   --check    in this process: read the feed, and when newer, download and verify into a temporary folder
 ///              (nothing is installed). `--feed <url>` (debug builds only) replaces the feed; `--app <path>` is the
 ///              app whose signature the download must match (default: the .app this CLI is in).
+///   --swap <a> <b>  swap the two paths in one step (`renamex_np` RENAME_SWAP). The install helper uses it so the
+///              app's path never goes missing; nothing else needs it.
 /// Exit codes: 0 done (also "up to date"), 1 error or refused update, 2 usage.
 enum DevUpdate {
-    static let usage = "usage: autonote dev update --status | --now | --check [--feed <url>] [--app <path>]"
+    static let usage = "usage: autonote dev update --status | --now | --check [--feed <url>] [--app <path>] | --swap <a> <b>"
 
     static func run(_ args: [String]) async -> Int32 {
         switch args.first {
         case "--status": return args.count == 1 ? await socket(.updateStatus) : DevCommands.usageError(usage)
         case "--now": return args.count == 1 ? await socket(.updateCheck) : DevCommands.usageError(usage)
         case "--check": return await check(Array(args.dropFirst()))
+        case "--swap":
+            guard args.count == 3 else { return DevCommands.usageError(usage) }
+            do {
+                try UpdateInstaller.swap(URL(filePath: args[1]), URL(filePath: args[2]))
+                return 0
+            } catch {
+                DevCommands.printError("error: 入れ替えに失敗しました（\(error)）")
+                return 1
+            }
         default: return DevCommands.usageError(usage)
         }
     }

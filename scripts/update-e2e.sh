@@ -79,6 +79,24 @@ JSON
 make_variant good 9.9.9 "${CERT}" || { result FAIL "15" "写しの署名に失敗（good）"; exit 1; }
 make_variant adhoc 9.9.7 - || { result FAIL "15" "写しの署名に失敗（adhoc）"; exit 1; }
 make_variant broken 9.9.8 "${CERT}" 99.0 || { result FAIL "15" "写しの署名に失敗（broken）"; exit 1; }
+# 悪性の zip（レビュー M1）: 正しく署名した写しの zip に、展開先の外へ書く項目／外を指すシンボリックリンクを足す
+mkdir -p "${T}/tools"
+cat >"${T}/tools/evil.py" <<'PY'
+import shutil, stat, sys, zipfile
+src, out, kind = sys.argv[1], sys.argv[2], sys.argv[3]
+shutil.copy(src, out)
+with zipfile.ZipFile(out, "a") as z:
+    def add(name, data, mode):
+        i = zipfile.ZipInfo(name); i.create_system = 3; i.external_attr = mode << 16
+        z.writestr(i, data)
+    if kind == "dotdot":
+        add("../../../escape-e2e.txt", b"escaped", stat.S_IFREG | 0o644)
+    else:
+        add("AutoNote.app/Contents/out", sys.argv[4].encode(), stat.S_IFLNK | 0o755)
+PY
+python3 -I "${T}/tools/evil.py" "${SRV}/good.zip" "${SRV}/evil-dotdot.zip" dotdot
+python3 -I "${T}/tools/evil.py" "${SRV}/good.zip" "${SRV}/evil-link.zip" link "${T}/outside"
+mkdir -p "${T}/outside"
 
 PORT="$(python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')"
 python3 -I -m http.server "${PORT}" --bind 127.0.0.1 --directory "${SRV}" >"${T}/server.log" 2>&1 &
@@ -89,7 +107,7 @@ for _ in $(seq 1 50); do curl -s -o /dev/null "http://127.0.0.1:${PORT}/" && bre
 DATA=""
 launch() {
     stop_ours
-    rm -rf "${T}/inst" "${T}/inst"/.AutoNote-update-backup.app
+    rm -rf "${T}/inst" "${T}/inst"/.AutoNote-update.app
     mkdir -p "${T}/inst"
     ditto "${SRC_APP}" "${INST}"
     DATA="${T}/d$1"
@@ -139,6 +157,21 @@ else
     result FAIL "15.2 署名が違う zip を拒否" "状態 ${LAST:-なし}"
 fi
 
+# ---- 15.7 / 15.8 展開先の外へ書く zip・外を指すシンボリックリンクを含む zip は、署名を見る前に拒否する
+for case in "15.7 展開先の外へ書く項目（../）を含む zip を拒否|evil-dotdot|9.9.6" \
+            "15.8 アプリの外を指すシンボリックリンクを含む zip を拒否|evil-link|9.9.5"; do
+    IFS='|' read -r name zip version <<<"${case}"
+    feed "${version}" "${zip}"
+    launch "${version//./}"
+    if wait_state failed 30 && [[ "$(field message <<<"${LAST}")" == *想定外* ]] && kill -0 "${APP_PID}" 2>/dev/null \
+        && [[ "$(installed_version)" == "${CUR}" && -z "$(find "${T}" -name escape-e2e.txt 2>/dev/null)" ]] \
+        && [[ -z "$(ls -A "${T}/outside")" && ! -e "${DATA}/updates/${version}" ]]; then
+        result PASS "${name}" "$(field message <<<"${LAST}")"
+    else
+        result FAIL "${name}" "状態 ${LAST:-なし}、外に書かれた: $(find "${T}" -name escape-e2e.txt 2>/dev/null | head -n 1)"
+    fi
+done
+
 # ---- 15.3 起動できない版（LSMinimumSystemVersion 99.0）への入れ替えは、元の版に戻して起動し直す
 feed 9.9.8 broken
 launch 3
@@ -150,7 +183,7 @@ for _ in $(seq 1 120); do
     if [[ -n "${pids}" ]] && [[ "$(field last_install.result <<<"$(status_json)")" == restored ]]; then ok=1; break; fi
 done
 LAST="$(status_json)"
-if [[ "${ok}" -eq 1 && "$(installed_version)" == "${CUR}" && ! -e "${T}/inst/.AutoNote-update-backup.app" ]] \
+if [[ "${ok}" -eq 1 && "$(installed_version)" == "${CUR}" && ! -e "${T}/inst/.AutoNote-update.app" ]] \
     && grep -q '"failed_version" : "9.9.8"' "${DATA}/updates/state.json" 2>/dev/null; then
     result PASS "15.3 起動できない版は元に戻して再起動" "$(field message <<<"${LAST}")"
 else
@@ -190,7 +223,7 @@ for _ in $(seq 1 40); do grep -q '完了' "${DATA}/updates/install.log" 2>/dev/n
 LAST="$(status_json)"
 DR_AFTER="$(codesign -d -r- "${INST}" 2>&1 | sed -n 's/^designated => //p')"
 if [[ "${ok}" -eq 1 && "$(installed_version)" == 9.9.9 && "$(field current_version <<<"${LAST}")" == 9.9.9 ]] \
-    && codesign --verify --strict "${INST}" 2>/dev/null && [[ ! -e "${T}/inst/.AutoNote-update-backup.app" ]]; then
+    && codesign --verify --strict "${INST}" 2>/dev/null && [[ ! -e "${T}/inst/.AutoNote-update.app" ]]; then
     result PASS "15.5 新しい版の検出 → 取得 → 検証 → 入れ替え → 再起動" "${CUR} → $(installed_version)"
 else
     result FAIL "15.5 新しい版の検出 → 取得 → 検証 → 入れ替え → 再起動" "版 $(installed_version)、状態 ${LAST:-なし}、log: $(tail -n 3 "${DATA}/updates/install.log" 2>/dev/null | LC_ALL=C tr '\n' ' ')"

@@ -22,6 +22,11 @@ final class AppUpdater {
     @ObservationIgnored var model: AppModel? { didSet { publishMenu() } }
     /// Set by AppDelegate (`AppShell.isMainWindowOpen`).
     @ObservationIgnored var isMainWindowOpen: @MainActor () -> Bool = { false }
+    /// The recorder's state read from the coordinator itself (the model's copy arrives by subscription, a moment
+    /// late), asked once more right before the quit (review L2).
+    @ObservationIgnored var recorderState: @MainActor () async -> RecorderState? = { nil }
+    /// Downloads, imports and Automations in progress (review L4); set by the environment.
+    @ObservationIgnored var busyWork: @MainActor () async -> UpdateBusyWork = { .none }
 
     @ObservationIgnored private let checker: UpdateChecker
     @ObservationIgnored private let store: UpdateStateStore
@@ -31,6 +36,9 @@ final class AppUpdater {
     @ObservationIgnored private var scheduler: UpdateScheduler?
     @ObservationIgnored private var gateTask: Task<Void, Never>?
     @ObservationIgnored private var busy = false
+    /// The swap to start from `applicationWillTerminate`, once the quit is certain (review L2).
+    @ObservationIgnored private var pendingPlan: UpdateInstallPlan?
+    @ObservationIgnored private var quitWatchdog: Task<Void, Never>?
 
     /// How often a waiting update asks the gate again.
     private static let gateInterval: Duration = .seconds(10)
@@ -51,6 +59,8 @@ final class AppUpdater {
         if feed.policy == .development {
             NSLog("AutoNote: update: development feed %@", feed.url.absoluteString)
         }
+        // Started by the helper after a swap: tell it this process is up (it waits for the pid).
+        UpdateInstaller.writeLaunchMarker(environment: environment, directory: directory)
     }
 
     /// Launch: report the previous swap, clear old downloads, then the daily schedule.
@@ -63,11 +73,17 @@ final class AppUpdater {
             await record(result)
         }
         checker.removeStaleDownloads()
+        if let target = checker.context.runningApp {
+            for left in UpdateInstaller.sweepLeftovers(target: target, lockDirectory: lockDirectory) {
+                NSLog("AutoNote: update: removed %@ left by an interrupted swap", left.path)
+            }
+        }
         if !enabled { status = .disabled }
         let store = store, settings = settings
         let scheduler = UpdateScheduler(
             isEnabled: { (try? await settings.load().autoUpdateEnabled) ?? true },
             lastCheckedAt: { await store.load().lastCheckedAt },
+            retryAt: { await store.load().retryAt },
             check: { [weak self] in await self?.check(manual: false) })
         self.scheduler = scheduler
         await scheduler.start()
@@ -96,7 +112,12 @@ final class AppUpdater {
         enabled = on
         if on {
             status = .idle
-            if UpdateSchedule.isDue(lastCheckedAt: lastCheckedAt, now: Date()) { Task { await check(manual: false) } }
+            Task {
+                let state = await store.load()
+                if UpdateSchedule.isDue(lastCheckedAt: state.lastCheckedAt, retryAt: state.retryAt, now: Date()) {
+                    await check(manual: false)
+                }
+            }
         } else {
             staged = nil
             gateTask?.cancel()
@@ -122,9 +143,19 @@ final class AppUpdater {
             outcome = try await checker.check()
         } catch {
             NSLog("AutoNote: update: check failed (%@)", String(describing: error))
+            if error == .network {
+                // Not reached: try again after a growing wait (1, 2, 4… hours, then daily; review L7). The last
+                // check time is not moved.
+                let now = Date()
+                let state = try? await store.update {
+                    $0.networkFailures += 1
+                    $0.retryAt = now.addingTimeInterval(UpdateSchedule.retryDelay(failures: $0.networkFailures))
+                }
+                NSLog("AutoNote: update: no connection (%d in a row); next try %@", state?.networkFailures ?? 0,
+                      String(describing: state?.retryAt))
+            }
             if error == .network && !manual {
-                // Quiet: the next hourly tick tries again (the last check time is not moved).
-                if staged == nil { status = .idle } else { status = .readyToInstall(version: staged!.version.description, waiting: nil) }
+                if let staged { status = .readyToInstall(version: staged.version.description, waiting: nil) } else { status = .idle }
             } else {
                 status = .failed(error.message)
             }
@@ -145,7 +176,11 @@ final class AppUpdater {
     private func markChecked() async {
         let now = Date()
         lastCheckedAt = now
-        _ = try? await store.update { $0.lastCheckedAt = now }
+        _ = try? await store.update {
+            $0.lastCheckedAt = now
+            $0.networkFailures = 0
+            $0.retryAt = nil
+        }
     }
 
     private func download(_ release: UpdateRelease, manual: Bool) async {
@@ -156,7 +191,7 @@ final class AppUpdater {
         }
         if let staged, staged.version == release.version, FileManager.default.fileExists(atPath: staged.app.path) {
             status = .readyToInstall(version: version, waiting: nil)
-            evaluateGate(userRequested: false)
+            await evaluateGate(userRequested: false)
             return
         }
         // Up front: a swap that can never work is a manual update, not a download.
@@ -182,7 +217,7 @@ final class AppUpdater {
             self.staged = staged
             NSLog("AutoNote: update: %@ verified (signature matches the running app)", version)
             status = .readyToInstall(version: version, waiting: nil)
-            evaluateGate(userRequested: false)
+            await evaluateGate(userRequested: false)
         } catch {
             NSLog("AutoNote: update: %@ refused (%@)", version, String(describing: error))
             status = .failed(error.message)
@@ -191,24 +226,28 @@ final class AppUpdater {
 
     /// 「アップデートして再起動」: now unless a recording is going on.
     func installNow() {
-        evaluateGate(userRequested: true)
+        Task { await evaluateGate(userRequested: true) }
     }
 
     /// Asks the gate; installs, or waits and asks again every `gateInterval`.
-    private func evaluateGate(userRequested: Bool) {
-        guard let staged, enabled || userRequested else { return }
+    private func evaluateGate(userRequested: Bool) async {
+        guard let staged, enabled || userRequested, pendingPlan == nil else { return }
         let version = staged.version.description
         let decision: UpdateInstallGate.Decision
         if let model {
-            decision = UpdateInstallGate.decide(recorder: model.recorder.state, queue: model.queue.items,
+            let recorder = await recorderState() ?? model.recorder.state
+            decision = UpdateInstallGate.decide(recorder: recorder, queue: model.queue.items,
                                                 translationJobs: Array(model.translationJobs.values),
-                                                mainWindowOpen: isMainWindowOpen(), userRequested: userRequested)
+                                                busy: await busyWork(), mainWindowOpen: isMainWindowOpen(),
+                                                userRequested: userRequested)
         } else {
             decision = .wait("起動中です")
         }
+        // The awaits above may have let the staged update go (switched off, a newer check) or start installing.
+        guard self.staged == staged, pendingPlan == nil else { return }
         switch decision {
         case .install:
-            install(staged)
+            await install(staged)
         case .wait(let reason):
             if status != .readyToInstall(version: version, waiting: reason) {
                 NSLog("AutoNote: update: %@ waiting (%@)", version, reason)
@@ -217,40 +256,79 @@ final class AppUpdater {
             publishMenu()
             guard gateTask == nil else { return }
             gateTask = Task { [weak self] in
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: Self.gateInterval)
-                    guard let self, !Task.isCancelled else { return }
-                    self.gateTask = nil
-                    self.evaluateGate(userRequested: false)
-                    return
-                }
+                try? await Task.sleep(for: Self.gateInterval)
+                guard let self, !Task.isCancelled else { return }
+                self.gateTask = nil
+                await self.evaluateGate(userRequested: false)
             }
         }
     }
 
-    private func install(_ staged: StagedUpdate) {
+    private var lockDirectory: URL { checker.context.directory.appending(path: "install.lock", directoryHint: .isDirectory) }
+
+    /// Checks the staged app once more, then quits. The helper starts from `applicationWillTerminate`, so a quit that
+    /// is cancelled leaves nothing running that could swap or relaunch later (review L2).
+    private func install(_ staged: StagedUpdate) async {
         gateTask?.cancel()
         gateTask = nil
         guard let target = checker.context.runningApp else {
             status = .manualRequired(UpdateFailure.notInstalledApp.message)
             return
         }
-        let plan = UpdateInstallPlan(
-            pid: ProcessInfo.processInfo.processIdentifier, target: target, staged: staged.app,
-            requirement: staged.requirement, resultFile: checker.context.directory.appending(path: "last-install.json"),
-            logFile: checker.context.directory.appending(path: "install.log"), fromVersion: currentVersion,
-            toVersion: staged.version.description, environment: UpdateInstallPlan.relaunchEnvironment(environment))
-        do {
-            try UpdateInstaller.launch(plan, directory: checker.context.directory)
+        // It may have waited for days in a folder the person can write (review L1).
+        do throws(UpdateFailure) {
+            try checker.verifyStaged(staged)
         } catch {
-            NSLog("AutoNote: update: helper did not start (%@)", String(describing: error))
-            status = .failed(UpdateFailure.installFailed(version: plan.toVersion, reason: "補助を起動できませんでした").message)
+            NSLog("AutoNote: update: staged %@ refused on the second check (%@)", staged.version.description,
+                  String(describing: error))
+            self.staged = nil
+            status = .failed(error.message)
             return
         }
-        NSLog("AutoNote: update: installing %@; quitting for the swap", plan.toVersion)
-        status = .installing(version: plan.toVersion)
+        guard !UpdateInstaller.helperIsRunning(lockDirectory: lockDirectory) else {
+            NSLog("AutoNote: update: a helper is already running; not starting another")
+            return
+        }
+        pendingPlan = UpdateInstallPlan(
+            pid: ProcessInfo.processInfo.processIdentifier, target: target, staged: staged.app,
+            requirement: staged.requirement, directory: checker.context.directory, fromVersion: currentVersion,
+            toVersion: staged.version.description, environment: UpdateInstallPlan.relaunchEnvironment(environment))
+        NSLog("AutoNote: update: installing %@; quitting for the swap", staged.version.description)
+        status = .installing(version: staged.version.description)
         publishMenu()
         NSApp.terminate(nil)
+        // Still here: the quit was cancelled or is waiting (a recording stopping takes at most ~13 s). If it has not
+        // happened in a while, it is not going to.
+        quitWatchdog?.cancel()
+        quitWatchdog = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled else { return }
+            self?.terminationCancelled()
+        }
+    }
+
+    /// From `applicationWillTerminate`: the quit is certain, so the helper starts now and waits for this pid.
+    func launchPendingHelper() {
+        guard let plan = pendingPlan else { return }
+        quitWatchdog?.cancel()
+        do {
+            try UpdateInstaller.launch(plan, directory: checker.context.directory)
+            NSLog("AutoNote: update: helper started for %@", plan.toVersion)
+        } catch {
+            NSLog("AutoNote: update: helper did not start (%@)", String(describing: error))
+        }
+    }
+
+    /// The quit for the swap was cancelled (the person chose キャンセル, or it never came): back to waiting.
+    func terminationCancelled() {
+        guard let plan = pendingPlan else { return }
+        pendingPlan = nil
+        quitWatchdog?.cancel()
+        quitWatchdog = nil
+        NSLog("AutoNote: update: quit for %@ was cancelled; waiting again", plan.toVersion)
+        // Not asked again at once (that could quit again and again): the menu item stays, and the next check asks.
+        status = .readyToInstall(version: plan.toVersion, waiting: nil)
+        publishMenu()
     }
 
     private func publishMenu() {

@@ -254,6 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.addButton(withTitle: "キャンセル")
             guard alert.runModal() == .alertFirstButtonReturn else {
                 resetQuitReason()
+                env?.updater.terminationCancelled()
                 return .terminateCancel
             }
             replyAfter { [env] in await Self.stopAndAwaitJob(model: model, env: env) }
@@ -297,6 +298,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func resetQuitReason() { quitReason = .user }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // First: the quit is certain now, so an update's helper may start (it waits for this process to exit).
+        env?.updater.launchPendingHelper()
         liveSummaryTask?.cancel()
         translationTask?.cancel()
         // The translation model's Metal resources must be freed before exit (research note §2.2: an assert

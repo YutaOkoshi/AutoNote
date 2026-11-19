@@ -6,10 +6,27 @@ public struct UpdateState: Codable, Equatable, Sendable {
     public var lastCheckedAt: Date?
     /// A version whose swap failed and was rolled back: not installed again automatically (「今すぐ確認」 clears it).
     public var failedVersion: String?
+    /// Checks in a row that could not reach GitHub, and when the next one may run (`UpdateSchedule.retryDelay`).
+    /// Both clear on the next check that connects.
+    public var networkFailures: Int
+    public var retryAt: Date?
 
-    public init(lastCheckedAt: Date? = nil, failedVersion: String? = nil) {
+    public init(lastCheckedAt: Date? = nil, failedVersion: String? = nil, networkFailures: Int = 0, retryAt: Date? = nil) {
         self.lastCheckedAt = lastCheckedAt
         self.failedVersion = failedVersion
+        self.networkFailures = networkFailures
+        self.retryAt = retryAt
+    }
+
+    // Camel case here: `AutoNoteJSON` converts to and from snake case (`last_checked_at`).
+    enum CodingKeys: String, CodingKey { case lastCheckedAt, failedVersion, networkFailures, retryAt }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        lastCheckedAt = try c.decodeIfPresent(Date.self, forKey: .lastCheckedAt)
+        failedVersion = try c.decodeIfPresent(String.self, forKey: .failedVersion)
+        networkFailures = try c.decodeIfPresent(Int.self, forKey: .networkFailures) ?? 0
+        retryAt = try c.decodeIfPresent(Date.self, forKey: .retryAt)
     }
 }
 
@@ -27,7 +44,7 @@ public struct UpdateInstallResult: Codable, Equatable, Sendable {
     public var from: String
     public var to: String
     public var result: Outcome
-    /// Short step name (`move-aside`, `move-new`, `verify`, `launch`, `timeout`); empty on success.
+    /// Short step name (`move-aside`, `staged`, `move-new`, `verify`, `swap`, `launch`, `timeout`); empty on success.
     public var reason: String
 
     public init(from: String, to: String, result: Outcome, reason: String) {
@@ -41,7 +58,9 @@ public struct UpdateInstallResult: Codable, Equatable, Sendable {
     public var reasonText: String {
         switch reason {
         case "move-aside": "今のアプリを退避できませんでした"
+        case "staged": "取得したアプリが置き場所に無いか、別の場所へのリンクに替わっていました"
         case "move-new": "新しいアプリを置けませんでした"
+        case "swap": "アプリを入れ替えられませんでした"
         case "verify": "置いたアプリの署名を確かめられませんでした"
         case "launch": "新しいアプリを起動できませんでした"
         case "timeout": "アプリが時間内に終了しませんでした"

@@ -13,6 +13,8 @@ public enum UpdateURLPolicy: Equatable, Sendable {
     /// GitHub's API needs a User-Agent; it names the app only (no version, no machine), so the request says nothing
     /// beyond "is there a newer release".
     public static let userAgent = "AutoNote"
+    /// Sent instead of the Mac's languages (URLSession would add them), so the request says nothing about the Mac.
+    public static let acceptLanguage = "en"
 
     static let githubHosts: Set<String> = ["github.com", "api.github.com"]
 
@@ -93,6 +95,7 @@ public struct UpdateDownloader: ModelDownloading {
         defer { session.finishTasksAndInvalidate() }
         var request = URLRequest(url: url)
         request.setValue(Self.userAgentValue, forHTTPHeaderField: "User-Agent")
+        request.setValue(UpdateURLPolicy.acceptLanguage, forHTTPHeaderField: "Accept-Language")
         let (temp, response) = try await session.download(for: request)
         let fm = FileManager.default
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),

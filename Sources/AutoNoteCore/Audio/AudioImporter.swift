@@ -19,6 +19,10 @@ public struct AudioImporter: Sendable {
     private let paths: AppPaths
     private let manifests: ManifestStore
     private let timeZone: TimeZone
+    private let activity = ImportActivity()
+
+    /// True while an import runs (the updater waits for it before restarting the app). Copies share the count.
+    public var isImporting: Bool { activity.isActive }
 
     public init(paths: AppPaths, manifests: ManifestStore, timeZone: TimeZone = .current) {
         self.paths = paths
@@ -28,6 +32,8 @@ public struct AudioImporter: Sendable {
 
     public func importFile(_ url: URL, startedAt: Date? = nil, language: Language,
                            progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> Manifest {
+        activity.begin()
+        defer { activity.end() }
         let ext = url.pathExtension.lowercased()
         guard Self.supportedExtensions.contains(ext) else { throw ImportError.unsupportedFormat(ext) }
         guard FileManager.default.isReadableFile(atPath: url.path) else {
@@ -167,4 +173,12 @@ public struct AudioImporter: Sendable {
                                                     dataBytes: bytesWritten))
         return bytesWritten / 2
     }
+}
+
+/// How many imports are running, shared by copies of an `AudioImporter`.
+final class ImportActivity: Sendable {
+    private let count = Mutex(0)
+    var isActive: Bool { count.withLock { $0 > 0 } }
+    func begin() { count.withLock { $0 += 1 } }
+    func end() { count.withLock { $0 -= 1 } }
 }
