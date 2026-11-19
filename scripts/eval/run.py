@@ -6,6 +6,8 @@
 
 - 出力: <data>/runs/<label>/<dataset>/<engine>-<lang>.jsonl（と .err）、<data>/runs/<label>/meta.json。
 - 言語は datasets.json の langs（--langs で絞れる）。確定版 = whisper、ライブ = whisper-live。
+- 話者別の音声があるデータ（tracks）は、トラックごとにも回す: <data>/runs/<label>/<dataset>/tracks/<トラック>-<engine>-<lang>.jsonl。
+  アプリは「自分」（マイク）と「相手」（システム音声）を別々に文字起こしするので、その形を再現する。
 - RTF を比べられるよう 1 本ずつ順に回す。--realtime は付けない（処理時間だけを測る）。
 - --data には評価専用の一時ディレクトリを渡し、利用者の設定・録音には触れない。
 - 1 つの label は 1 つのビルド（実行ファイルの SHA-256）だけ。違うビルドで続けようとすると止まる。
@@ -124,11 +126,19 @@ def main(argv):
                 continue
             for engine in engines:
                 out = os.path.join(common.run_dir(args.label, ds["id"]), "%s-%s.jsonl" % (engine, lang))
-                if is_done(out) and not args.force:
-                    continue
-                os.makedirs(os.path.dirname(out), exist_ok=True)
-                print("文字起こし: %s %s %s %s" % (args.label, ds["id"], engine, lang), flush=True)
-                transcribe(args.autonote, audio, engine, lang, model, out, args.timeout)
+                if not is_done(out) or args.force:
+                    os.makedirs(os.path.dirname(out), exist_ok=True)
+                    print("文字起こし: %s %s %s %s" % (args.label, ds["id"], engine, lang), flush=True)
+                    transcribe(args.autonote, audio, engine, lang, model, out, args.timeout)
+                for track in sorted(ds.get("tracks", {})):
+                    track_audio = os.path.join(common.prepared_dir(ds["id"]), "track-%s.wav" % track)
+                    track_out = os.path.join(common.run_dir(args.label, ds["id"]), "tracks",
+                                             "%s-%s-%s.jsonl" % (track, engine, lang))
+                    if is_done(track_out) and not args.force:
+                        continue
+                    os.makedirs(os.path.dirname(track_out), exist_ok=True)
+                    print("文字起こし: %s %s（%s）%s %s" % (args.label, ds["id"], track, engine, lang), flush=True)
+                    transcribe(args.autonote, track_audio, engine, lang, model, track_out, args.timeout)
     print("run: 完了（%s）" % args.label)
     return 0
 
