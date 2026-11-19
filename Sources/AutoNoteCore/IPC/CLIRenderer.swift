@@ -50,6 +50,7 @@ public enum CLIRenderer {
         case .import, .regenerate, .merge: return CLIOutput(stdout: "受け付けました: \(result.meetingID ?? inv.args.meetingID ?? "")\n")
         case .automationsList: return CLIOutput(stdout: automationsText(result.automations ?? []))
         case .automationsRun: return runOutput(result.run)
+        case .updateStatus, .updateCheck: return CLIOutput(stdout: (result.update?.message ?? "") + "\n")
         }
     }
 

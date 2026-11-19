@@ -71,6 +71,9 @@ public struct Settings: Codable, Equatable, Sendable {
     /// Whether transcript lines show their translation under the original (the 「訳文」 switch, app-wide).
     /// JSON `translation_shown`.
     public var translationShown: Bool = true
+    /// Check once a day for a new release and swap it in when nothing is going on (on by default).
+    /// JSON `auto_update_enabled`.
+    public var autoUpdateEnabled: Bool = true
 
     public static let liveSummaryIntervalRange: ClosedRange<Int> = 10...120
     public static let defaultLiveSummaryModel = "haiku"
@@ -151,6 +154,7 @@ public struct Settings: Codable, Equatable, Sendable {
         translationModel = try c.decodeIfPresent(String.self, forKey: .translationModel)
         translationLicenseVersion = try c.decodeIfPresent(String.self, forKey: .translationLicenseVersion)
         translationShown = try c.decodeIfPresent(Bool.self, forKey: .translationShown) ?? translationShown
+        autoUpdateEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoUpdateEnabled) ?? autoUpdateEnabled
         // Backward compatibility: settings written while the consent notice existed carry `consent_notice_shown`.
         // Either key being true means the first run is done; only `first_run_completed` is written.
         let legacy = try decoder.container(keyedBy: LegacyKeys.self)

@@ -82,6 +82,8 @@ public enum UserAction: Equatable, Sendable {
     public private(set) var translationAvailability: TranslationAvailability = .runtimeUnavailable
     /// The 「訳文」 switch. The app sets it at launch and after a settings save; `.setTranslationShown` changes it.
     public var translationShown = true
+    /// The updater's menu line (`UpdateStatus.menuItem`); the app's updater sets it.
+    public var updateMenuItem: MenuItem?
     @ObservationIgnored public var hasUnsavedEdits: @MainActor () -> Bool = { false }
     @ObservationIgnored public var withdrawNotice: (@MainActor (String) async -> Void)?
 
@@ -190,7 +192,8 @@ public enum UserAction: Equatable, Sendable {
         MenuBarPresentation.make(recorder: recorder, elapsedSeconds: elapsedSeconds, queue: queue,
                                  readiness: readiness,
                                  latestMinutesAvailable: meetings.contains { $0.filePath != nil }, rows: meetings,
-                                 automationFailures: automationFailures, shortcuts: shortcuts, now: now, timeZone: timeZone)
+                                 automationFailures: automationFailures, shortcuts: shortcuts, update: updateMenuItem,
+                                 now: now, timeZone: timeZone)
     }
 
     /// `origin` is where the person asked (the recorder logs it with the transition). The main window's views use the

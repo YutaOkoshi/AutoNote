@@ -38,6 +38,8 @@ final class AppEnvironment {
     let automationsFile: AutomationsFile
     let retention: Retention
     let retentionScheduler: RetentionScheduler
+    /// The daily update check and the swap (spec: アプリ内の自動アップデート).
+    let updater: AppUpdater
     let ports: AppPorts
     let readiness: LiveReadinessPort
     let model: AppModel
@@ -70,7 +72,7 @@ final class AppEnvironment {
                  translationRuntimeAvailable: Bool, crashRecovery: CrashRecovery,
                  catalog: EngineCatalog, models: ModelManager,
                  automationsFile: AutomationsFile, retention: Retention, retentionScheduler: RetentionScheduler,
-                 ports: AppPorts, readiness: LiveReadinessPort, model: AppModel, notifier: SystemUserNotifier,
+                 updater: AppUpdater, ports: AppPorts, readiness: LiveReadinessPort, model: AppModel, notifier: SystemUserNotifier,
                  server: SocketServer, routing: NoticeRouting) {
         self.environment = environment
         self.paths = paths
@@ -95,6 +97,7 @@ final class AppEnvironment {
         self.automationsFile = automationsFile
         self.retention = retention
         self.retentionScheduler = retentionScheduler
+        self.updater = updater
         self.ports = ports
         self.readiness = readiness
         self.model = model
@@ -239,6 +242,7 @@ final class AppEnvironment {
         let importer = AudioImporter(paths: paths, manifests: manifests)
         let readiness = LiveReadinessPort(settings: settings, outputFolder: PortableOutputFolderPort(output: output),
                                           models: models, catalog: catalog, opener: WorkspaceOpener())
+        let updater = AppUpdater(paths: paths, settings: settings, environment: environment)
         let ports = AppPorts(
             recorder: CoordinatorRecorderPort(coordinator: coordinator, elapsed: { await session.elapsed() },
                                               levels: { await session.levels() }),
@@ -256,8 +260,10 @@ final class AppEnvironment {
             readiness: readiness,
             liveSummary: liveSummary,
             questions: questions,
-            translation: translation)
+            translation: translation,
+            update: AppUpdatePort(updater: updater))
         let model = AppModel(ports: ports)
+        updater.model = model
         model.withdrawNotice = { [notifier] id in await notifier.withdraw(id: id) }
         routing.model = model
         let server = SocketServer(socketURL: paths.socketFile, handler: CommandRouter(ports: ports))
@@ -274,7 +280,7 @@ final class AppEnvironment {
             translationRuntimeAvailable: onDevice != nil, crashRecovery: crashRecovery, catalog: catalog,
             models: models,
             automationsFile: automationsFile, retention: retention, retentionScheduler: retentionScheduler,
-            ports: ports, readiness: readiness, model: model, notifier: notifier, server: server, routing: routing)
+            updater: updater, ports: ports, readiness: readiness, model: model, notifier: notifier, server: server, routing: routing)
     }
 
     /// What a save did beyond writing `settings.json`, for the settings screen to show.
@@ -297,6 +303,7 @@ final class AppEnvironment {
         model.translationShown = new.translationShown
         let hotKeys = shortcutsChanged(new.shortcuts)
         let loginItem = reconcileLoginItem(launchAtLogin: new.launchAtLogin)
+        updater.setEnabled(new.autoUpdateEnabled)
         logger.notice("settings save applied: hot keys re-registered (\(hotKeys.count, privacy: .public)), login item \(String(describing: loginItem), privacy: .public)")
         return SaveResult(hotKeys: hotKeys, loginItem: loginItem)
     }

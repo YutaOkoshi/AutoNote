@@ -102,6 +102,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tasks.append(Task { await env.relayQueueNotices() })
         tasks.append(Task { await env.relayOutputFolderNotices() })
         await env.retentionScheduler.start()
+        // The daily update check (at launch when a day has passed since the last one). It waits for the window to
+        // close before a swap, so it reads the shell's flag.
+        env.updater.isMainWindowOpen = { [shell] in shell.isMainWindowOpen }
+        let updater = env.updater
+        tasks.append(Task { await updater.start() })
         // Nothing on the launch path waits for the permission prompt.
         tasks.append(Task { await notifier.requestAuthorization() })
         // Off the launch path: fill `claudePath` from the login shell when unset (ruling X8), then re-read readiness.
