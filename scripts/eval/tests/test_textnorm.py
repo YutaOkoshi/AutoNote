@@ -71,6 +71,10 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(textnorm.unexpected_scripts("Привет мир"), {"CYRILLIC"})
         self.assertEqual(textnorm.unexpected_scripts("今日はremote 々ー、café！"), set())
 
+    def test_replacement_character_counts(self):
+        # A token split inside a multi-byte character decodes to U+FFFD.
+        self.assertEqual(textnorm.unexpected_scripts("ルモデルに c\ufffd錬"), {"REPLACEMENT"})
+
 
 if __name__ == "__main__":
     unittest.main()

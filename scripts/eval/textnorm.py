@@ -131,9 +131,13 @@ _ALLOWED_PREFIXES = ("LATIN", "CJK", "HIRAGANA", "KATAKANA", "IDEOGRAPHIC", "HAL
 
 
 def unexpected_scripts(text):
-    """日本語・ラテン文字以外の文字（キリル・ハングルなど）の文字種名の集合。数字・記号・空白は数えない。"""
+    """日本語・ラテン文字以外の文字（キリル・ハングルなど）の文字種名の集合。数字・記号・空白は数えない。
+    U+FFFD（文字の途中で切れたトークンの名残）は REPLACEMENT として数える。"""
     found = set()
     for c in text:
+        if c == "\ufffd":   # 文字の途中で切れたトークン（他言語の文字の断片）
+            found.add("REPLACEMENT")
+            continue
         cat = unicodedata.category(c)
         if not (cat.startswith("L") or cat.startswith("M")):
             continue
