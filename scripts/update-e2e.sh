@@ -6,6 +6,13 @@
 #   各項目の結果を「PASS|FAIL|SKIP  <番号> <名前>[ — 理由]」の 1 行で出す（scripts/e2e-check.sh の項目 16 が読む）。
 #   FAIL が 1 つでもあれば終了コード 1。詳細なログは E2E_UPDATE_KEEP=1 のとき一時ディレクトリに残す（パスを最後に出す）。
 # 前提: 署名証明書「AutoNote Dev」がある（写しの版を書き換えて署名し直すため）、python3、GUI のログイン中。
+#
+# E2E_UPDATE_IDENTITY=untrusted: 「AutoNote Dev」の代わりに、その場で作った使い捨ての自己署名証明書（どこにも信頼設定が
+#   無い）でアプリの写しと各版を署名し、署名し終えたら証明書のキーチェーンを消してから試す。利用者の Mac と同じく、
+#   署名者の証明書が信頼されていない（キーチェーンにも無い）状態で、アプリと同じ署名の検査（`autonote dev update --check`
+#   が使う UpdateChecker / SecStaticCodeCheckValidity）と、入れ替えの補助が使う `codesign --verify -R=` が通ることを見る。
+#   項目の番号は 16u.N。アプリ（GUI）は起動しない: 署名が変わったアプリはマイクの許可を改めて求め、その答えが
+#   この Mac の AutoNote の許可（TCC の項目は bundle identifier ごとに 1 つ）を上書きしてしまうため。
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -14,8 +21,10 @@ source "${ROOT}/scripts/config.sh"
 SRC_APP="${1:-${ROOT}/build/AutoNote.app}"
 CERT="${AUTONOTE_CERT_NAME}"
 BUNDLE_ID="${AUTONOTE_BUNDLE_ID}"
-CLI="${SRC_APP}/Contents/MacOS/autonote"
 PB=/usr/libexec/PlistBuddy
+UNTRUSTED=0; N=16
+[[ "${E2E_UPDATE_IDENTITY:-}" == untrusted ]] && { UNTRUSTED=1; N=16u; }
+KEYCHAIN=""
 
 T="$(mktemp -d /tmp/an-upd.XXXXXX)"   # 短いパス（ソケットのパス上限）
 INST="${T}/inst/AutoNote.app"
@@ -38,15 +47,59 @@ stop_ours() {
 }
 cleanup() {
     stop_ours
+    [[ -n "${KEYCHAIN}" ]] && "${ROOT}/scripts/signing.sh" delete-keychain "${KEYCHAIN}" >/dev/null 2>&1
     [[ -n "${SERVER_PID}" ]] && kill "${SERVER_PID}" 2>/dev/null
     if [[ "${E2E_UPDATE_KEEP:-0}" == 1 ]]; then echo "ログ: ${T}"; else rm -rf "${T}"; fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-[[ -x "${SRC_APP}/Contents/MacOS/AutoNoteApp" ]] || { result SKIP "16" "アプリが無い: ${SRC_APP}"; exit 0; }
-security find-identity -v -p codesigning 2>/dev/null | grep -q "\"${CERT}\"" || { result SKIP "16" "署名証明書「${CERT}」が無い"; exit 0; }
-command -v python3 >/dev/null || { result SKIP "16" "python3 が無い"; exit 0; }
+[[ -x "${SRC_APP}/Contents/MacOS/AutoNoteApp" ]] || { result SKIP "${N}" "アプリが無い: ${SRC_APP}"; exit 0; }
+if [[ "${UNTRUSTED}" -eq 0 ]]; then
+    security find-identity -v -p codesigning 2>/dev/null | grep -q "\"${CERT}\"" || { result SKIP "${N}" "署名証明書「${CERT}」が無い"; exit 0; }
+fi
+command -v python3 >/dev/null || { result SKIP "${N}" "python3 が無い"; exit 0; }
+
+# 使い捨ての証明書（信頼設定なし）で、アプリの写しを中から外へ署名し直す。以後の写しと各版はこれが元
+if [[ "${UNTRUSTED}" -eq 1 ]]; then
+    O="$(command -v /opt/homebrew/bin/openssl || command -v openssl)"
+    mkdir -p "${T}/cert" && chmod 700 "${T}/cert"
+    printf '[ req ]\ndistinguished_name = dn\nx509_extensions = e\nprompt = no\n[ dn ]\nCN = AutoNote E2E Untrusted\n[ e ]\nbasicConstraints = critical, CA:false\nkeyUsage = critical, digitalSignature\nextendedKeyUsage = critical, codeSigning\nsubjectKeyIdentifier = hash\n' >"${T}/cert/c.cnf"
+    "${O}" req -x509 -newkey rsa:2048 -days 1 -nodes -config "${T}/cert/c.cnf" -keyout "${T}/cert/k.pem" -out "${T}/cert/c.pem" 2>/dev/null
+    export AUTONOTE_E2E_P12_PASS; AUTONOTE_E2E_P12_PASS="$("${O}" rand -hex 16)"
+    compat=(); "${O}" version | grep -q '^LibreSSL' || compat=(-certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1)
+    "${O}" pkcs12 -export "${compat[@]}" -inkey "${T}/cert/k.pem" -in "${T}/cert/c.pem" -passout env:AUTONOTE_E2E_P12_PASS -out "${T}/cert/id.p12"
+    rm -f "${T}/cert/k.pem"
+    if security verify-cert -c "${T}/cert/c.pem" -p codeSign >/dev/null 2>&1; then result FAIL "${N}" "使い捨ての証明書が信頼されている"; exit 1; fi
+    sha1="$("${O}" x509 -in "${T}/cert/c.pem" -noout -fingerprint -sha1 | sed 's/.*=//; s/://g' | tr '[:upper:]' '[:lower:]')"
+    KEYCHAIN="${T}/cert/e2e.keychain-db"
+    CERT="$(AUTONOTE_SIGNING_P12_BASE64="$(base64 -i "${T}/cert/id.p12")" AUTONOTE_SIGNING_P12_PASSWORD="${AUTONOTE_E2E_P12_PASS}" \
+        AUTONOTE_EXPECT_CERT_SHA1="${sha1}" "${ROOT}/scripts/signing.sh" import-ci "${KEYCHAIN}" 2>"${T}/cert/import.log")" \
+        || { result FAIL "${N}" "使い捨ての証明書を取り込めない: $(tail -n 1 "${T}/cert/import.log")"; exit 1; }
+    mkdir -p "${T}/base"
+    ditto "${SRC_APP}" "${T}/base/AutoNote.app"
+    AUTONOTE_CODESIGN_KEYCHAIN="${KEYCHAIN}" "${ROOT}/scripts/sign-app.sh" "${T}/base/AutoNote.app" "${CERT}" >"${T}/cert/sign.log" 2>&1 \
+        || { result FAIL "${N}" "使い捨ての証明書で署名できない: $(tail -n 1 "${T}/cert/sign.log")"; exit 1; }
+    SRC_APP="${T}/base/AutoNote.app"
+    # アプリの起動時の検査（SecCodeCopySelf → SecCodeCheckValidity → designated requirement）と同じ手順の小さなプログラム
+    cat >"${T}/cert/probe.swift" <<'SWIFT'
+import Foundation
+import Security
+var me: SecCode?
+guard SecCodeCopySelf([], &me) == errSecSuccess, let me else { print("copy-self-failed"); exit(1) }
+let v = SecCodeCheckValidity(me, [], nil)
+guard v == errSecSuccess else { print("invalid \(v)"); exit(1) }
+var r: SecRequirement?
+guard SecCodeCopyDesignatedRequirement(unsafeBitCast(me, to: SecStaticCode.self), [], &r) == errSecSuccess, let r else { exit(1) }
+var t: CFString?
+SecRequirementCopyString(r, [], &t)
+print((t as String?) ?? "")
+SWIFT
+    swiftc -o "${T}/cert/probe" "${T}/cert/probe.swift" 2>"${T}/cert/probe.log" \
+        && codesign --force --sign "${CERT}" --keychain "${KEYCHAIN}" --timestamp=none "${T}/cert/probe" 2>>"${T}/cert/probe.log" \
+        || { result FAIL "${N}" "検査用のプログラムを作れない: $(tail -n 1 "${T}/cert/probe.log")"; exit 1; }
+fi
+CLI="${SRC_APP}/Contents/MacOS/autonote"
 
 CUR="$("${PB}" -c 'Print :CFBundleShortVersionString' "${SRC_APP}/Contents/Info.plist")"
 DR_BEFORE="$(codesign -d -r- "${SRC_APP}" 2>&1 | sed -n 's/^designated => //p')"
@@ -60,7 +113,8 @@ make_variant() {
     ditto "${SRC_APP}" "${app}"
     "${PB}" -c "Set :CFBundleShortVersionString ${version}" "${app}/Contents/Info.plist"
     [[ -n "${minos}" ]] && "${PB}" -c "Set :LSMinimumSystemVersion ${minos}" "${app}/Contents/Info.plist"
-    codesign --force --sign "${identity}" --identifier "${BUNDLE_ID}" --timestamp=none "${app}" >/dev/null 2>&1 || return 1
+    local kc=(); [[ -n "${KEYCHAIN}" && "${identity}" != - ]] && kc=(--keychain "${KEYCHAIN}")
+    codesign --force --sign "${identity}" ${kc[@]+"${kc[@]}"} --identifier "${BUNDLE_ID}" --timestamp=none "${app}" >/dev/null 2>&1 || return 1
     ditto -c -k --keepParent "${app}" "${SRV}/${name}.zip"
 }
 sha() { shasum -a 256 "$1" | awk '{print $1}'; }
@@ -76,9 +130,15 @@ JSON
     mv "${SRV}/latest.json.tmp" "${SRV}/latest.json"
 }
 
-make_variant good 9.9.9 "${CERT}" || { result FAIL "16" "写しの署名に失敗（good）"; exit 1; }
-make_variant adhoc 9.9.7 - || { result FAIL "16" "写しの署名に失敗（adhoc）"; exit 1; }
-make_variant broken 9.9.8 "${CERT}" 99.0 || { result FAIL "16" "写しの署名に失敗（broken）"; exit 1; }
+make_variant good 9.9.9 "${CERT}" || { result FAIL "${N}" "写しの署名に失敗（good）"; exit 1; }
+make_variant adhoc 9.9.7 - || { result FAIL "${N}" "写しの署名に失敗（adhoc）"; exit 1; }
+make_variant broken 9.9.8 "${CERT}" 99.0 || { result FAIL "${N}" "写しの署名に失敗（broken）"; exit 1; }
+# 署名し終えたので、使い捨ての証明書はこの Mac のどこにも残さない（利用者の Mac と同じ: 署名者の証明書を持っていない）
+if [[ -n "${KEYCHAIN}" ]]; then
+    "${ROOT}/scripts/signing.sh" delete-keychain "${KEYCHAIN}" >/dev/null 2>&1
+    KEYCHAIN=""
+    security find-identity -p codesigning 2>/dev/null | grep -qi "${CERT}" && { result FAIL "${N}" "使い捨ての証明書が残っている"; exit 1; }
+fi
 # 悪性の zip（レビュー M1）: 正しく署名した写しの zip に、展開先の外へ書く項目／外を指すシンボリックリンクを足す
 mkdir -p "${T}/tools"
 cat >"${T}/tools/evil.py" <<'PY'
@@ -137,14 +197,60 @@ wait_state() {
 }
 installed_version() { "${PB}" -c 'Print :CFBundleShortVersionString' "${INST}/Contents/Info.plist" 2>/dev/null; }
 
+# ---- 信頼の無い証明書: アプリを起動せず、CLI で同じ検査を通す（上の E2E_UPDATE_IDENTITY=untrusted の説明）
+if [[ "${UNTRUSTED}" -eq 1 ]]; then
+    DATA="${T}/du"; mkdir -p "${DATA}"
+    check_cli() { AUTONOTE_DATA_DIR="${DATA}" "${CLI}" dev update --check --feed "http://127.0.0.1:${PORT}/latest.json" --app "${SRC_APP}" 2>/dev/null | tail -n 1; }
+    expect_refused() {   # <番号と名前> <message に含む語> <版> <zip> [digest]
+        feed "$3" "$4" ${5:+"$5"}
+        LAST="$(check_cli)"
+        if [[ "$(field state <<<"${LAST}")" == refused && "$(field message <<<"${LAST}")" == *"$2"* ]]; then
+            result PASS "$1" "$(field message <<<"${LAST}")"
+        else
+            result FAIL "$1" "${LAST:-出力なし}"
+        fi
+    }
+    expect_refused "${N}.1 SHA-256 違いの zip を拒否" SHA-256 9.9.9 good "$(printf '0%.0s' $(seq 1 64))"
+    expect_refused "${N}.2 署名が違う zip を拒否" 署名 9.9.7 adhoc
+    expect_refused "${N}.7 展開先の外へ書く項目（../）を含む zip を拒否" 想定外の項目 9.9.6 evil-dotdot
+    expect_refused "${N}.8 アプリの外を指すシンボリックリンクを含む zip を拒否" 想定外の項目 9.9.5 evil-link
+    result SKIP "${N}.3 起動できない版は元に戻して再起動" "アプリを起動しない（マイクの許可を上書きしないため。16.3 で見る）"
+    result SKIP "${N}.4 録音中は入れ替えを延期" "アプリを起動しない（16.4 で見る）"
+    # 16u.5: 正しく署名した版は、信頼の無い証明書でもアプリと同じ検査（UpdateChecker.prepare）に通る
+    feed 9.9.9 good
+    LAST="$(check_cli)"
+    if [[ "$(field state <<<"${LAST}")" == verified && "$(field latest <<<"${LAST}")" == 9.9.9 ]]; then
+        result PASS "${N}.5 信頼の無い証明書の版がアプリと同じ検査に通る" "$(field message <<<"${LAST}")"
+    else
+        result FAIL "${N}.5 信頼の無い証明書の版がアプリと同じ検査に通る" "${LAST:-出力なし}"
+    fi
+    # 16u.6: 入れ替えの補助と同じ検査（codesign --verify --deep --strict -R=）と、DR が元と同じこと
+    good_app="${T}/variants/good/AutoNote.app"
+    DR_GOOD="$(codesign -d -r- "${good_app}" 2>&1 | sed -n 's/^designated => //p')"
+    if [[ -n "${DR_BEFORE}" && "${DR_GOOD}" == "${DR_BEFORE}" && "${DR_BEFORE}" == *"certificate leaf = H\"${sha1}\""* ]] \
+        && codesign --verify --deep --strict "-R=${DR_BEFORE}" "${good_app}" >"${T}/verify.log" 2>&1; then
+        result PASS "${N}.6 入れ替えの補助の検査（codesign -R=）が通り、DR が元と同じ" "${DR_GOOD}"
+    else
+        result FAIL "${N}.6 入れ替えの補助の検査（codesign -R=）が通り、DR が元と同じ" "前 ${DR_BEFORE} / 新 ${DR_GOOD} / $(tail -n 1 "${T}/verify.log")"
+    fi
+    # 16u.9: 起動中のアプリが自分の requirement を読む手順（SecCodeCopySelf → SecCodeCheckValidity）も通る
+    probe_out="$("${T}/cert/probe" 2>&1)"
+    if [[ "${probe_out}" == *"certificate leaf = H\"${sha1}\""* ]]; then
+        result PASS "${N}.9 起動中のプロセスが自分の署名を確かめて requirement を読める" "${probe_out}"
+    else
+        result FAIL "${N}.9 起動中のプロセスが自分の署名を確かめて requirement を読める" "${probe_out:-出力なし}"
+    fi
+    exit $(( N_FAIL > 0 ? 1 : 0 ))
+fi
+
 # ---- 16.1 SHA-256 が合わない zip は入れ替えない
 feed 9.9.9 good "$(printf '0%.0s' $(seq 1 64))"
 launch 1
 if wait_state failed 30 && [[ "$(field message <<<"${LAST}")" == *SHA-256* ]] && kill -0 "${APP_PID}" 2>/dev/null \
     && [[ "$(installed_version)" == "${CUR}" ]]; then
-    result PASS "16.1 SHA-256 違いの zip を拒否" "$(field message <<<"${LAST}")"
+    result PASS "${N}.1 SHA-256 違いの zip を拒否" "$(field message <<<"${LAST}")"
 else
-    result FAIL "16.1 SHA-256 違いの zip を拒否" "状態 ${LAST:-なし}"
+    result FAIL "${N}.1 SHA-256 違いの zip を拒否" "状態 ${LAST:-なし}"
 fi
 
 # ---- 16.2 署名が違う（アドホック）zip は入れ替えない
@@ -152,14 +258,14 @@ feed 9.9.7 adhoc
 launch 2
 if wait_state failed 30 && [[ "$(field message <<<"${LAST}")" == *署名* ]] && kill -0 "${APP_PID}" 2>/dev/null \
     && [[ "$(installed_version)" == "${CUR}" ]]; then
-    result PASS "16.2 署名が違う zip を拒否" "$(field message <<<"${LAST}")"
+    result PASS "${N}.2 署名が違う zip を拒否" "$(field message <<<"${LAST}")"
 else
-    result FAIL "16.2 署名が違う zip を拒否" "状態 ${LAST:-なし}"
+    result FAIL "${N}.2 署名が違う zip を拒否" "状態 ${LAST:-なし}"
 fi
 
 # ---- 16.7 / 16.8 展開先の外へ書く zip・外を指すシンボリックリンクを含む zip は、署名を見る前に拒否する
-for case in "16.7 展開先の外へ書く項目（../）を含む zip を拒否|evil-dotdot|9.9.6" \
-            "16.8 アプリの外を指すシンボリックリンクを含む zip を拒否|evil-link|9.9.5"; do
+for case in "${N}.7 展開先の外へ書く項目（../）を含む zip を拒否|evil-dotdot|9.9.6" \
+            "${N}.8 アプリの外を指すシンボリックリンクを含む zip を拒否|evil-link|9.9.5"; do
     IFS='|' read -r name zip version <<<"${case}"
     feed "${version}" "${zip}"
     launch "${version//./}"
@@ -185,15 +291,15 @@ done
 LAST="$(status_json)"
 if [[ "${ok}" -eq 1 && "$(installed_version)" == "${CUR}" && ! -e "${T}/inst/.AutoNote-update.app" ]] \
     && grep -q '"failed_version" : "9.9.8"' "${DATA}/updates/state.json" 2>/dev/null; then
-    result PASS "16.3 起動できない版は元に戻して再起動" "$(field message <<<"${LAST}")"
+    result PASS "${N}.3 起動できない版は元に戻して再起動" "$(field message <<<"${LAST}")"
 else
-    result FAIL "16.3 起動できない版は元に戻して再起動" "版 $(installed_version)、状態 ${LAST:-なし}、log: $(tail -n 3 "${DATA}/updates/install.log" 2>/dev/null | LC_ALL=C tr '\n' ' ')"
+    result FAIL "${N}.3 起動できない版は元に戻して再起動" "版 $(installed_version)、状態 ${LAST:-なし}、log: $(tail -n 3 "${DATA}/updates/install.log" 2>/dev/null | LC_ALL=C tr '\n' ' ')"
 fi
 
 # ---- 16.4 録音中は入れ替えを待ち、止めたあとに入れ替えて再起動する（許可が保たれる根拠: DR が同じ）
 feed "${CUR}" good   # まずは「最新」
 launch 4
-wait_state up_to_date 30 || result FAIL "16.4 準備" "最初の確認が up_to_date にならない: ${LAST:-なし}"
+wait_state up_to_date 30 || result FAIL "${N}.4 準備" "最初の確認が up_to_date にならない: ${LAST:-なし}"
 first="${APP_PID}"
 recording=0
 if AUTONOTE_DATA_DIR="${DATA}" "${CLI}" start >"${T}/start.log" 2>&1; then recording=1; fi
@@ -204,13 +310,13 @@ if [[ "${recording}" -eq 1 ]]; then
     LAST="$(status_json)"
     if [[ "$(field state <<<"${LAST}")" == ready_to_install && "$(field waiting <<<"${LAST}")" == 録音中です ]] \
         && kill -0 "${first}" 2>/dev/null && [[ "$(installed_version)" == "${CUR}" ]]; then
-        result PASS "16.4 録音中は入れ替えを延期" "$(field message <<<"${LAST}")"
+        result PASS "${N}.4 録音中は入れ替えを延期" "$(field message <<<"${LAST}")"
     else
-        result FAIL "16.4 録音中は入れ替えを延期" "状態 ${LAST:-なし}"
+        result FAIL "${N}.4 録音中は入れ替えを延期" "状態 ${LAST:-なし}"
     fi
     AUTONOTE_DATA_DIR="${DATA}" "${CLI}" stop >/dev/null 2>&1
 else
-    result SKIP "16.4 録音中は入れ替えを延期" "autonote start が失敗（マイク許可が無い環境か）: $(tail -n 1 "${T}/start.log")"
+    result SKIP "${N}.4 録音中は入れ替えを延期" "autonote start が失敗（マイク許可が無い環境か）: $(tail -n 1 "${T}/start.log")"
 fi
 ok=0
 for _ in $(seq 1 240); do
@@ -224,14 +330,14 @@ LAST="$(status_json)"
 DR_AFTER="$(codesign -d -r- "${INST}" 2>&1 | sed -n 's/^designated => //p')"
 if [[ "${ok}" -eq 1 && "$(installed_version)" == 9.9.9 && "$(field current_version <<<"${LAST}")" == 9.9.9 ]] \
     && codesign --verify --strict "${INST}" 2>/dev/null && [[ ! -e "${T}/inst/.AutoNote-update.app" ]]; then
-    result PASS "16.5 新しい版の検出 → 取得 → 検証 → 入れ替え → 再起動" "${CUR} → $(installed_version)"
+    result PASS "${N}.5 新しい版の検出 → 取得 → 検証 → 入れ替え → 再起動" "${CUR} → $(installed_version)"
 else
-    result FAIL "16.5 新しい版の検出 → 取得 → 検証 → 入れ替え → 再起動" "版 $(installed_version)、状態 ${LAST:-なし}、log: $(tail -n 3 "${DATA}/updates/install.log" 2>/dev/null | LC_ALL=C tr '\n' ' ')"
+    result FAIL "${N}.5 新しい版の検出 → 取得 → 検証 → 入れ替え → 再起動" "版 $(installed_version)、状態 ${LAST:-なし}、log: $(tail -n 3 "${DATA}/updates/install.log" 2>/dev/null | LC_ALL=C tr '\n' ' ')"
 fi
 if [[ "${ok}" -eq 1 && -n "${DR_BEFORE}" && "${DR_AFTER}" == "${DR_BEFORE}" ]]; then
-    result PASS "16.6 入れ替え後の designated requirement が入れ替え前と同じ" "${DR_AFTER}"
+    result PASS "${N}.6 入れ替え後の designated requirement が入れ替え前と同じ" "${DR_AFTER}"
 else
-    result FAIL "16.6 入れ替え後の designated requirement が入れ替え前と同じ" "前 ${DR_BEFORE} / 後 ${DR_AFTER}"
+    result FAIL "${N}.6 入れ替え後の designated requirement が入れ替え前と同じ" "前 ${DR_BEFORE} / 後 ${DR_AFTER}"
 fi
 
 [[ "${N_FAIL}" -eq 0 ]]

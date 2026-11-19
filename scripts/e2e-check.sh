@@ -1194,21 +1194,28 @@ check_auto_update() {
     [[ -x "${APP}/Contents/MacOS/AutoNoteApp" ]] || { skip "build/AutoNote.app が無い"; return; }
     have_cert || { skip "署名証明書「${CERT_NAME}」が無い"; return; }
     have_gui || { skip "GUI が無い環境（CI か WindowServer なし）"; return; }
-    run_timeout 600 "${ROOT}/scripts/update-e2e.sh" "${APP}"; local code=$?
-    local lines; lines="$(grep -E '^(PASS|FAIL|SKIP)  ' "${LAST_LOG}")"
-    [[ -n "${lines}" ]] || { fail "結果の行が無い（exit ${code}）"; return; }
-    local log="${LAST_LOG}" kind rest name reason
-    while IFS= read -r line; do
-        kind="${line%%  *}"; rest="${line#*  }"
-        name="${rest%% — *}"; reason=""; [[ "${rest}" == *" — "* ]] && reason="${rest#* — }"
-        CURRENT="${name}"; LAST_LOG="${log}"
-        case "${kind}" in
-            PASS) pass "${reason}" ;;
-            SKIP) skip "${reason}" ;;
-            *) LAST_LOG=""; fail "${reason}" ;;
-        esac
-    done <<<"${lines}"
-    [[ ${code} -eq 124 ]] && { CURRENT="16. 自動アップデート"; LAST_LOG="${log}"; fail "600 秒で終わらない"; }
+    # 2 回: 「AutoNote Dev」（この Mac では信頼済み）で 16.N、その場で作った信頼の無い証明書で 16u.N（利用者の Mac と同じ条件）
+    local mode
+    for mode in trusted untrusted; do
+        CURRENT="16. 自動アップデート（scripts/update-e2e.sh、${mode}）"
+        export E2E_UPDATE_IDENTITY="${mode}"
+        run_timeout 600 "${ROOT}/scripts/update-e2e.sh" "${APP}"; local code=$?
+        unset E2E_UPDATE_IDENTITY
+        local lines; lines="$(grep -E '^(PASS|FAIL|SKIP)  ' "${LAST_LOG}")"
+        [[ -n "${lines}" ]] || { fail "結果の行が無い（exit ${code}）"; continue; }
+        local log="${LAST_LOG}" kind rest name reason
+        while IFS= read -r line; do
+            kind="${line%%  *}"; rest="${line#*  }"
+            name="${rest%% — *}"; reason=""; [[ "${rest}" == *" — "* ]] && reason="${rest#* — }"
+            CURRENT="${name}"; LAST_LOG="${log}"
+            case "${kind}" in
+                PASS) pass "${reason}" ;;
+                SKIP) skip "${reason}" ;;
+                *) LAST_LOG=""; fail "${reason}" ;;
+            esac
+        done <<<"${lines}"
+        [[ ${code} -eq 124 ]] && { CURRENT="16. 自動アップデート（${mode}）"; LAST_LOG="${log}"; fail "600 秒で終わらない"; }
+    done
     return 0
 }
 

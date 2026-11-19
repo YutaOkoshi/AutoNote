@@ -131,7 +131,10 @@ autonote dev translate <transcript.json> [--target auto|ja|en] [--model <gguf>] 
 - 鍵（p12 とそのパスワード）の正は 1Password（「AutoNote release signing (p12)」「AutoNote release signing (p12 password)」）。GitHub には Environment「release」の Secrets にだけ写しを置く。リポジトリ全体の Secrets には置かない。「release」の deployment branch は `main` だけ（PR や他のブランチのワークフローからは読めない）
 - 1Password と Secrets に入れる: `scripts/signing.sh export-to-1password`（`op` のサインインと `swift` が要る。「AutoNote Dev」の 1 件だけを書き出し（`scripts/export-identity.swift`）、macOS がキーチェーンのパスワードを 1 回たずねる。同名の項目が 1Password にあれば止まる）
 - 別の Mac で手元のビルドを同じ証明書にそろえる: `scripts/signing.sh import-login`（1Password から login キーチェーンへ。管理者認証のダイアログが出る）。その Mac に別の「AutoNote Dev」があると止まる（削除するとその Mac の手元ビルドの許可は一度外れる）
-- release.yml と同じ手順を手元で確かめる: `scripts/signing.sh selftest`（使い捨ての証明書と一時キーチェーンで import-ci → sign-app.sh → check。login キーチェーンと検索リストは変えない）
+- release.yml と同じ手順を手元で確かめる: `scripts/signing.sh selftest`（使い捨ての証明書と一時キーチェーンで import-ci → sign-app.sh → check。login キーチェーンは変えない。検索リストは途中で一時キーチェーンを足し、終わると戻す）
+  - 使い捨ての証明書には信頼設定が無い（ランナーと同じ）。codesign が `--keychain` なしでも識別子を引けることを確かめる
+  - import-ci は一時キーチェーンを検索リストの先頭に足し、delete-keychain が外す。足さないと、macOS 26 のランナーの codesign は `--keychain` を渡しても `<SHA-1>: no identity found` で止まる（v0.7.0 の sign ジョブ）
+- 利用者の Mac と同じ条件（署名者の証明書が信頼されておらず、キーチェーンにも無い）で更新の検査を確かめる: `E2E_UPDATE_IDENTITY=untrusted scripts/update-e2e.sh`（項目 16u。`scripts/e2e-check.sh` の項目 16 は 16 と 16u の両方を回す。アプリは起動しない。署名が変わるとマイクの許可を求め直し、この Mac の AutoNote の許可を上書きするため）
 - 推奨（未設定）: main にブランチ保護（直接 push の禁止・レビュー必須）を掛けると、鍵で署名されるコードを変えられる経路がさらに狭まる。自動マージの流れを止めるので、今は掛けていない
 
 ### 前提と、それが成り立たない場合（開発者の Mac）
