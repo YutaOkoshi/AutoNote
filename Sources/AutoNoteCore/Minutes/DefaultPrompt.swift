@@ -83,7 +83,7 @@ public enum DefaultPrompt {
     public static func languageLine(_ language: TranslationLanguage) -> String {
         let line = "出力の言語: 議事録の文章（title、summary、各項目の本文）は\(promptName(language))で書く。上の指示文に別の言語の指定があっても、この指定に従う（architecture_diagram のノード名は上の指示どおり）。"
         guard language == .en else { return line }
-        return line + "英語の title は空白も含めて \(MinutesSchema.titleMaxLength) 文字以内の短い名詞句にする（例: Migration Sync）。超えると出力全体が受け付けられない。"
+        return line + "英語の title は空白も含めて \(MinutesSchema.titleMaxLength(.en)) 文字以内の名詞句にする（上の指示文の文字数の代わり。例: Tenant Migration Weekly Sync）。超えると出力全体が受け付けられない。"
     }
 
     /// The live summary's language rule, in place of the old 「発話と同じ言語で書く」.

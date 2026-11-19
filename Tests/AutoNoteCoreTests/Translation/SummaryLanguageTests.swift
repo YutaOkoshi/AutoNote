@@ -60,15 +60,37 @@ import Testing
     /// `maxLength`, the structured output is rejected and `--max-turns 1` leaves no turn to redo it. The English line
     /// names the schema's own limit (read from the schema, so the two cannot drift) and says spaces count.
     @Test func theEnglishLineNamesTheTitleLimitOfTheSchema() throws {
-        let schema = try #require(try JSONSerialization.jsonObject(with: Data(MinutesSchema.json.utf8)) as? [String: Any])
-        let title = try #require((schema["properties"] as? [String: Any])?["title"] as? [String: Any])
-        let limit = try #require(title["maxLength"] as? Int)
+        let limit = try titleLimit(MinutesSchema.json(for: .en))
         let en = DefaultPrompt.languageLine(.en)
-        #expect(limit == MinutesSchema.titleMaxLength)
         #expect(en.contains("title は空白も含めて \(limit) 文字以内"))
         #expect(en.contains("超えると出力全体が受け付けられない"))
         // The Japanese line is as before (Japanese titles already fit).
         #expect(!DefaultPrompt.languageLine(.ja).contains("空白も含めて"))
+    }
+
+    private func schema(_ json: String) throws -> NSMutableDictionary {
+        try #require(try JSONSerialization.jsonObject(with: Data(json.utf8), options: .mutableContainers) as? NSMutableDictionary)
+    }
+
+    private func titleLimit(_ json: String) throws -> Int {
+        let title = try #require((try schema(json)["properties"] as? [String: Any])?["title"] as? [String: Any])
+        return try #require(title["maxLength"] as? Int)
+    }
+
+    /// Lead 差し戻し 2-5: the schema itself gives English titles room (60), Japanese keep 20; nothing else differs,
+    /// the Japanese schema is the one in scripts/minutes-schema.json, and the limit fits a file name untruncated.
+    @Test func theSchemasTitleLimitFollowsTheLanguage() throws {
+        #expect(MinutesSchema.json(for: .ja) == MinutesSchema.json)
+        #expect(try titleLimit(MinutesSchema.json(for: .ja)) == 20)
+        #expect(try titleLimit(MinutesSchema.json(for: .en)) == 60)
+        #expect(MinutesSchema.titleMaxLength(.ja) == 20 && MinutesSchema.titleMaxLength(.en) == 60)
+        let ja = try schema(MinutesSchema.json(for: .ja)), en = try schema(MinutesSchema.json(for: .en))
+        let jaProps = try #require(ja["properties"] as? NSMutableDictionary)
+        let enProps = try #require(en["properties"] as? NSMutableDictionary)
+        jaProps.removeObject(forKey: "title")
+        enProps.removeObject(forKey: "title")
+        #expect(ja == en)
+        #expect(MeetingFileName.maxTitleLength >= MinutesSchema.titleMaxLength(.en))
     }
 
     @Test func anEditedPromptStillGetsTheLanguage() {
