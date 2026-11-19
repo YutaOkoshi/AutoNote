@@ -1,0 +1,20 @@
+<!doctype html><meta charset="utf-8"><title>bt-verify tone</title>
+<body style="font:16px sans-serif;margin:2em">
+<h2>bt-verify: tone（ローカルのテストページ）</h2>
+<pre id="st">starting</pre>
+<script>
+// 440 Hz を小さめ（0.05）で鳴らし続ける。状態を 1 秒ごとに /status へ送る（スクリプトが記録する）。
+const q = new URLSearchParams(location.search);
+const freq = Number(q.get('freq') || 440), level = Number(q.get('level') || 0.05);
+const ctx = new AudioContext();
+const osc = ctx.createOscillator(); osc.frequency.value = freq;
+const gain = ctx.createGain(); gain.gain.value = level;
+osc.connect(gain).connect(ctx.destination); osc.start();
+async function report() {
+  const s = { page: 'tone', ctx: ctx.state, ctx_time: ctx.currentTime, freq, level };
+  document.getElementById('st').textContent = JSON.stringify(s, null, 1);
+  try { await fetch('/status', { method: 'POST', body: JSON.stringify(s) }); } catch (e) {}
+}
+ctx.resume().then(report);
+setInterval(() => { if (ctx.state !== 'running') ctx.resume(); report(); }, 1000);
+</script>

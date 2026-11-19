@@ -632,15 +632,15 @@ check_claude_probe_files() {
 }
 
 check_bt_verify_script() {
-    CURRENT="15. scripts/bt-verify.sh の静的確認（構文・端末なしで止まる・--dry-run）"
+    CURRENT="15. scripts/bt-verify.sh の静的確認（構文・計測プログラムのコンパイル・--dry-run）"
     if ! run bash -n scripts/bt-verify.sh; then fail "bt-verify.sh に構文エラー"; return; fi
-    run scripts/bt-verify.sh --out "${WORK}/bt-verify-notty" </dev/null; local code=$?
-    [[ ${code} -eq 2 ]] || { fail "端末なしの本番実行が exit ${code}（期待 2）"; return; }
-    # --dry-run は音・マイク・アプリ・Chrome を使わない（既定の入出力を読むだけ）。前提が欠けていても exit 0
-    run_timeout 120 scripts/bt-verify.sh --dry-run --out "${WORK}/bt-verify-dry" </dev/null; code=$?
+    if ! run python3 -I -m py_compile scripts/bt-verify.py; then fail "bt-verify.py に構文エラー"; return; fi
+    # --dry-run は何も鳴らさず・つながず・起動しない（既定の入出力を読むだけ）。--bt-name なしでも exit 0
+    local code
+    run_timeout 180 scripts/bt-verify.sh --dry-run --out "${WORK}/bt-verify-dry" </dev/null; code=$?
     [[ ${code} -eq 0 ]] || { fail "--dry-run が exit ${code}"; return; }
-    grep -q '\[dry-run\] ここまで' "${LAST_LOG}" || { fail "--dry-run の終わりの行が無い"; return; }
-    LAST_LOG=""; pass "（実機の Bluetooth での実行は利用者が端末で行う）"
+    grep -q '\[dry-run\] nothing was played' "${LAST_LOG}" || { fail "--dry-run の終わりの行が無い"; return; }
+    LAST_LOG=""; pass "（実機の Bluetooth での実行は scripts/bt-verify.sh --bt-name <名前の一部>）"
 }
 
 check_render_fixture() {
