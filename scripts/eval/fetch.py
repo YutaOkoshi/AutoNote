@@ -3,7 +3,8 @@
 
 使い方: python3 -I scripts/eval/fetch.py [--datasets id,id] [--force-prepare]
 
-- 取得は datasets.json の sources。User-Agent は汎用名、要求の間は 3 秒以上空け、429/5xx は待って再試行する。
+- 取得は datasets.json の sources。curl があれば curl（なければ urllib）。User-Agent は汎用名、要求の間は 3 秒以上
+  空け、429/5xx は待って再試行する。
 - SHA-256 を照合する。宣言が空なら値を表示する（確かめて datasets.json に書く）。sha256_may_change の
   もの（API の応答など）は一致しなくても警告だけにする。
 - 用意: <data>/prepared/<id>/audio.wav（ffmpeg で 16 kHz モノラル・先頭 max_seconds 秒）と ref.json。
@@ -41,6 +42,17 @@ def _wait_turn():
 def download(url, dest):
     tmp = dest + ".part"
     os.makedirs(os.path.dirname(dest), exist_ok=True)
+    curl = shutil.which("curl")
+    if curl:
+        # upload.wikimedia.org は Python の urllib からの要求を 429 で断る（同じ User-Agent の curl は通る。
+        # 2026-11-19 に確認）ので、curl があれば curl で取る。429/5xx は curl の --retry が待って再試行する。
+        _wait_turn()
+        res = subprocess.run([curl, "-fsSL", "-A", common.USER_AGENT, "--retry", "4", "--retry-delay", "30",
+                              "--connect-timeout", "60", "-o", tmp, url])
+        if res.returncode != 0:
+            raise RuntimeError("download failed (curl %d): %s" % (res.returncode, url))
+        os.replace(tmp, dest)
+        return
     for attempt in range(5):
         _wait_turn()
         req = urllib.request.Request(url, headers={"User-Agent": common.USER_AGENT})
