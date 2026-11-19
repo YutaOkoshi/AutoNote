@@ -166,7 +166,7 @@ autonote dev translate <transcript.json> [--target auto|ja|en] [--model <gguf>] 
 - 設定の「一般 › アップデート」で切れる（`settings.json` の `auto_update_enabled`、既定はオン）。「今すぐ確認」は切っていても動き、前に入れ替えに失敗した版も試し直す
 - アプリの場所に書き込めない、アドホック署名の版から動いている、.app として動いていない、のどれかなら自動では入れ替えず「手動での更新が必要」と出す
 - 開発用: `AUTONOTE_UPDATE_FEED_URL` で確認先を差し替えられる。効くのは debug 構成のビルドで `AUTONOTE_DATA_DIR` も設定したときだけ（リリースビルドでは無視する）。`autonote dev update --status | --now | --check [--feed <url>] [--app <path>]`（`--feed` も debug ビルドだけ）
-- E2E: `scripts/update-e2e.sh`（`scripts/e2e-check.sh` の項目 15）。一時ディレクトリに置いたアプリの写しと python3 の偽サーバーで、SHA-256 違い・署名違い・展開先の外へ書く zip・外を指すリンクを含む zip の拒否、起動できない版からの復旧、録音中の延期、入れ替えと再起動、入れ替え前後の designated requirement の一致を見る
+- E2E: `scripts/update-e2e.sh`（`scripts/e2e-check.sh` の項目 16）。一時ディレクトリに置いたアプリの写しと python3 の偽サーバーで、SHA-256 違い・署名違い・展開先の外へ書く zip・外を指すリンクを含む zip の拒否、起動できない版からの復旧、録音中の延期、入れ替えと再起動、入れ替え前後の designated requirement の一致を見る
 
 ## バージョンの上げ方
 

@@ -3,7 +3,7 @@
 # 確認 → 取得 → 検証 → 入れ替え → 再起動と、拒否・延期・復旧を確かめる。/Applications のアプリと利用者のデータには触れない。
 #
 # 使い方: scripts/update-e2e.sh [<AutoNote.app>]   （既定は build/AutoNote.app。debug 構成で「AutoNote Dev」署名のもの）
-#   各項目の結果を「PASS|FAIL|SKIP  <番号> <名前>[ — 理由]」の 1 行で出す（scripts/e2e-check.sh の項目 15 が読む）。
+#   各項目の結果を「PASS|FAIL|SKIP  <番号> <名前>[ — 理由]」の 1 行で出す（scripts/e2e-check.sh の項目 16 が読む）。
 #   FAIL が 1 つでもあれば終了コード 1。詳細なログは E2E_UPDATE_KEEP=1 のとき一時ディレクトリに残す（パスを最後に出す）。
 # 前提: 署名証明書「AutoNote Dev」がある（写しの版を書き換えて署名し直すため）、python3、GUI のログイン中。
 set -uo pipefail
@@ -44,9 +44,9 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-[[ -x "${SRC_APP}/Contents/MacOS/AutoNoteApp" ]] || { result SKIP "15" "アプリが無い: ${SRC_APP}"; exit 0; }
-security find-identity -v -p codesigning 2>/dev/null | grep -q "\"${CERT}\"" || { result SKIP "15" "署名証明書「${CERT}」が無い"; exit 0; }
-command -v python3 >/dev/null || { result SKIP "15" "python3 が無い"; exit 0; }
+[[ -x "${SRC_APP}/Contents/MacOS/AutoNoteApp" ]] || { result SKIP "16" "アプリが無い: ${SRC_APP}"; exit 0; }
+security find-identity -v -p codesigning 2>/dev/null | grep -q "\"${CERT}\"" || { result SKIP "16" "署名証明書「${CERT}」が無い"; exit 0; }
+command -v python3 >/dev/null || { result SKIP "16" "python3 が無い"; exit 0; }
 
 CUR="$("${PB}" -c 'Print :CFBundleShortVersionString' "${SRC_APP}/Contents/Info.plist")"
 DR_BEFORE="$(codesign -d -r- "${SRC_APP}" 2>&1 | sed -n 's/^designated => //p')"
@@ -76,9 +76,9 @@ JSON
     mv "${SRV}/latest.json.tmp" "${SRV}/latest.json"
 }
 
-make_variant good 9.9.9 "${CERT}" || { result FAIL "15" "写しの署名に失敗（good）"; exit 1; }
-make_variant adhoc 9.9.7 - || { result FAIL "15" "写しの署名に失敗（adhoc）"; exit 1; }
-make_variant broken 9.9.8 "${CERT}" 99.0 || { result FAIL "15" "写しの署名に失敗（broken）"; exit 1; }
+make_variant good 9.9.9 "${CERT}" || { result FAIL "16" "写しの署名に失敗（good）"; exit 1; }
+make_variant adhoc 9.9.7 - || { result FAIL "16" "写しの署名に失敗（adhoc）"; exit 1; }
+make_variant broken 9.9.8 "${CERT}" 99.0 || { result FAIL "16" "写しの署名に失敗（broken）"; exit 1; }
 # 悪性の zip（レビュー M1）: 正しく署名した写しの zip に、展開先の外へ書く項目／外を指すシンボリックリンクを足す
 mkdir -p "${T}/tools"
 cat >"${T}/tools/evil.py" <<'PY'
@@ -137,29 +137,29 @@ wait_state() {
 }
 installed_version() { "${PB}" -c 'Print :CFBundleShortVersionString' "${INST}/Contents/Info.plist" 2>/dev/null; }
 
-# ---- 15.1 SHA-256 が合わない zip は入れ替えない
+# ---- 16.1 SHA-256 が合わない zip は入れ替えない
 feed 9.9.9 good "$(printf '0%.0s' $(seq 1 64))"
 launch 1
 if wait_state failed 30 && [[ "$(field message <<<"${LAST}")" == *SHA-256* ]] && kill -0 "${APP_PID}" 2>/dev/null \
     && [[ "$(installed_version)" == "${CUR}" ]]; then
-    result PASS "15.1 SHA-256 違いの zip を拒否" "$(field message <<<"${LAST}")"
+    result PASS "16.1 SHA-256 違いの zip を拒否" "$(field message <<<"${LAST}")"
 else
-    result FAIL "15.1 SHA-256 違いの zip を拒否" "状態 ${LAST:-なし}"
+    result FAIL "16.1 SHA-256 違いの zip を拒否" "状態 ${LAST:-なし}"
 fi
 
-# ---- 15.2 署名が違う（アドホック）zip は入れ替えない
+# ---- 16.2 署名が違う（アドホック）zip は入れ替えない
 feed 9.9.7 adhoc
 launch 2
 if wait_state failed 30 && [[ "$(field message <<<"${LAST}")" == *署名* ]] && kill -0 "${APP_PID}" 2>/dev/null \
     && [[ "$(installed_version)" == "${CUR}" ]]; then
-    result PASS "15.2 署名が違う zip を拒否" "$(field message <<<"${LAST}")"
+    result PASS "16.2 署名が違う zip を拒否" "$(field message <<<"${LAST}")"
 else
-    result FAIL "15.2 署名が違う zip を拒否" "状態 ${LAST:-なし}"
+    result FAIL "16.2 署名が違う zip を拒否" "状態 ${LAST:-なし}"
 fi
 
-# ---- 15.7 / 15.8 展開先の外へ書く zip・外を指すシンボリックリンクを含む zip は、署名を見る前に拒否する
-for case in "15.7 展開先の外へ書く項目（../）を含む zip を拒否|evil-dotdot|9.9.6" \
-            "15.8 アプリの外を指すシンボリックリンクを含む zip を拒否|evil-link|9.9.5"; do
+# ---- 16.7 / 16.8 展開先の外へ書く zip・外を指すシンボリックリンクを含む zip は、署名を見る前に拒否する
+for case in "16.7 展開先の外へ書く項目（../）を含む zip を拒否|evil-dotdot|9.9.6" \
+            "16.8 アプリの外を指すシンボリックリンクを含む zip を拒否|evil-link|9.9.5"; do
     IFS='|' read -r name zip version <<<"${case}"
     feed "${version}" "${zip}"
     launch "${version//./}"
@@ -172,7 +172,7 @@ for case in "15.7 展開先の外へ書く項目（../）を含む zip を拒否
     fi
 done
 
-# ---- 15.3 起動できない版（LSMinimumSystemVersion 99.0）への入れ替えは、元の版に戻して起動し直す
+# ---- 16.3 起動できない版（LSMinimumSystemVersion 99.0）への入れ替えは、元の版に戻して起動し直す
 feed 9.9.8 broken
 launch 3
 first="${APP_PID}" ok=0
@@ -185,15 +185,15 @@ done
 LAST="$(status_json)"
 if [[ "${ok}" -eq 1 && "$(installed_version)" == "${CUR}" && ! -e "${T}/inst/.AutoNote-update.app" ]] \
     && grep -q '"failed_version" : "9.9.8"' "${DATA}/updates/state.json" 2>/dev/null; then
-    result PASS "15.3 起動できない版は元に戻して再起動" "$(field message <<<"${LAST}")"
+    result PASS "16.3 起動できない版は元に戻して再起動" "$(field message <<<"${LAST}")"
 else
-    result FAIL "15.3 起動できない版は元に戻して再起動" "版 $(installed_version)、状態 ${LAST:-なし}、log: $(tail -n 3 "${DATA}/updates/install.log" 2>/dev/null | LC_ALL=C tr '\n' ' ')"
+    result FAIL "16.3 起動できない版は元に戻して再起動" "版 $(installed_version)、状態 ${LAST:-なし}、log: $(tail -n 3 "${DATA}/updates/install.log" 2>/dev/null | LC_ALL=C tr '\n' ' ')"
 fi
 
-# ---- 15.4 録音中は入れ替えを待ち、止めたあとに入れ替えて再起動する（許可が保たれる根拠: DR が同じ）
+# ---- 16.4 録音中は入れ替えを待ち、止めたあとに入れ替えて再起動する（許可が保たれる根拠: DR が同じ）
 feed "${CUR}" good   # まずは「最新」
 launch 4
-wait_state up_to_date 30 || result FAIL "15.4 準備" "最初の確認が up_to_date にならない: ${LAST:-なし}"
+wait_state up_to_date 30 || result FAIL "16.4 準備" "最初の確認が up_to_date にならない: ${LAST:-なし}"
 first="${APP_PID}"
 recording=0
 if AUTONOTE_DATA_DIR="${DATA}" "${CLI}" start >"${T}/start.log" 2>&1; then recording=1; fi
@@ -204,13 +204,13 @@ if [[ "${recording}" -eq 1 ]]; then
     LAST="$(status_json)"
     if [[ "$(field state <<<"${LAST}")" == ready_to_install && "$(field waiting <<<"${LAST}")" == 録音中です ]] \
         && kill -0 "${first}" 2>/dev/null && [[ "$(installed_version)" == "${CUR}" ]]; then
-        result PASS "15.4 録音中は入れ替えを延期" "$(field message <<<"${LAST}")"
+        result PASS "16.4 録音中は入れ替えを延期" "$(field message <<<"${LAST}")"
     else
-        result FAIL "15.4 録音中は入れ替えを延期" "状態 ${LAST:-なし}"
+        result FAIL "16.4 録音中は入れ替えを延期" "状態 ${LAST:-なし}"
     fi
     AUTONOTE_DATA_DIR="${DATA}" "${CLI}" stop >/dev/null 2>&1
 else
-    result SKIP "15.4 録音中は入れ替えを延期" "autonote start が失敗（マイク許可が無い環境か）: $(tail -n 1 "${T}/start.log")"
+    result SKIP "16.4 録音中は入れ替えを延期" "autonote start が失敗（マイク許可が無い環境か）: $(tail -n 1 "${T}/start.log")"
 fi
 ok=0
 for _ in $(seq 1 240); do
@@ -224,14 +224,14 @@ LAST="$(status_json)"
 DR_AFTER="$(codesign -d -r- "${INST}" 2>&1 | sed -n 's/^designated => //p')"
 if [[ "${ok}" -eq 1 && "$(installed_version)" == 9.9.9 && "$(field current_version <<<"${LAST}")" == 9.9.9 ]] \
     && codesign --verify --strict "${INST}" 2>/dev/null && [[ ! -e "${T}/inst/.AutoNote-update.app" ]]; then
-    result PASS "15.5 新しい版の検出 → 取得 → 検証 → 入れ替え → 再起動" "${CUR} → $(installed_version)"
+    result PASS "16.5 新しい版の検出 → 取得 → 検証 → 入れ替え → 再起動" "${CUR} → $(installed_version)"
 else
-    result FAIL "15.5 新しい版の検出 → 取得 → 検証 → 入れ替え → 再起動" "版 $(installed_version)、状態 ${LAST:-なし}、log: $(tail -n 3 "${DATA}/updates/install.log" 2>/dev/null | LC_ALL=C tr '\n' ' ')"
+    result FAIL "16.5 新しい版の検出 → 取得 → 検証 → 入れ替え → 再起動" "版 $(installed_version)、状態 ${LAST:-なし}、log: $(tail -n 3 "${DATA}/updates/install.log" 2>/dev/null | LC_ALL=C tr '\n' ' ')"
 fi
 if [[ "${ok}" -eq 1 && -n "${DR_BEFORE}" && "${DR_AFTER}" == "${DR_BEFORE}" ]]; then
-    result PASS "15.6 入れ替え後の designated requirement が入れ替え前と同じ" "${DR_AFTER}"
+    result PASS "16.6 入れ替え後の designated requirement が入れ替え前と同じ" "${DR_AFTER}"
 else
-    result FAIL "15.6 入れ替え後の designated requirement が入れ替え前と同じ" "前 ${DR_BEFORE} / 後 ${DR_AFTER}"
+    result FAIL "16.6 入れ替え後の designated requirement が入れ替え前と同じ" "前 ${DR_BEFORE} / 後 ${DR_AFTER}"
 fi
 
 [[ "${N_FAIL}" -eq 0 ]]

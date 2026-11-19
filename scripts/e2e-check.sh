@@ -1175,10 +1175,10 @@ check_translation_default_off() {
     pass "translation_mode ${mode:-（未設定）}、models/translation は空"
 }
 
-# 15.x: 自動アップデート。scripts/update-e2e.sh（一時ディレクトリのアプリの写しと偽の配布サーバー）の各行をそのまま項目にする。
+# 16.x: 自動アップデート。scripts/update-e2e.sh（一時ディレクトリのアプリの写しと偽の配布サーバー）の各行をそのまま項目にする。
 # 項目 7 のアプリとは別のデータ領域・別の写しで動き、/Applications のアプリには触れない
 check_auto_update() {
-    CURRENT="15. 自動アップデート（scripts/update-e2e.sh）"
+    CURRENT="16. 自動アップデート（scripts/update-e2e.sh）"
     [[ -x "${APP}/Contents/MacOS/AutoNoteApp" ]] || { skip "build/AutoNote.app が無い"; return; }
     have_cert || { skip "署名証明書「${CERT_NAME}」が無い"; return; }
     have_gui || { skip "GUI が無い環境（CI か WindowServer なし）"; return; }
@@ -1196,7 +1196,7 @@ check_auto_update() {
             *) LAST_LOG=""; fail "${reason}" ;;
         esac
     done <<<"${lines}"
-    [[ ${code} -eq 124 ]] && { CURRENT="15. 自動アップデート"; LAST_LOG="${log}"; fail "600 秒で終わらない"; }
+    [[ ${code} -eq 124 ]] && { CURRENT="16. 自動アップデート"; LAST_LOG="${log}"; fail "600 秒で終わらない"; }
     return 0
 }
 
