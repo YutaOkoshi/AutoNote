@@ -18,10 +18,12 @@
 #       login キーチェーンの「AutoNote Dev」（証明書と秘密鍵）を p12 にして 1Password に保存し、GitHub の Environment
 #       「release」の Secrets に入れる。要: `op` にサインイン済み（1Password アプリの CLI 連携）、`gh` にログイン済み。
 #       鍵の書き出しで macOS がキーチェーンのパスワードを 1 回たずねる（秘密鍵の ACL は codesign だけを許すため）。
-#       OP_VAULT（既定 Private）、OP_ITEM_PREFIX（既定「AutoNote release signing」）、GH_REPO（既定 YutaOkoshi/AutoNote）。
+#       OP_VAULT（既定 Personal。無ければ保管庫の一覧を出して止まる）、OP_ITEM_PREFIX（既定「AutoNote release signing」）、GH_REPO（既定 YutaOkoshi/AutoNote）。
 #   scripts/signing.sh import-login
 #       1Password の p12 を login キーチェーンに取り込み、コード署名用に信頼する（別の Mac で手元とリリースを同じ証明書に
 #       そろえるとき。管理者認証のダイアログが出る）。既に「AutoNote Dev」がある Mac では何もしない。
+#   op を使う入口（export-to-1password / import-login）は最初に 1Password アプリの承認ダイアログを出す（`op whoami` は
+#   ダイアログを出さず、連携済みでも新しいプロセスでは失敗するため `op vault list` で確かめる）。承認されないと約 60 秒で止まる。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -29,7 +31,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT}/scripts/config.sh"
 BUNDLE_ID="${AUTONOTE_BUNDLE_ID}"
 OP="${OP:-$(command -v op || echo /opt/homebrew/bin/op)}"
-OP_VAULT="${OP_VAULT:-Private}"
+OP_VAULT="${OP_VAULT:-Personal}"
 OP_ITEM_PREFIX="${OP_ITEM_PREFIX:-AutoNote release signing}"
 GH_REPO="${GH_REPO:-YutaOkoshi/AutoNote}"
 LOGIN_KEYCHAIN="${HOME}/Library/Keychains/login.keychain-db"
@@ -150,15 +152,40 @@ CNF
     echo "selftest: 合格"
 }
 
+# 1Password アプリの連携の承認は親プロセスごとに要る。`op whoami` は承認ダイアログを出さないので使わず、ダイアログを出す
+# `op vault list` で確かめる（承認されれば同じシェルの続く op はそのまま通る）。続けて OP_VAULT があるかを見る
 require_op() {
     [[ -x "${OP}" ]] || die "1Password CLI（op）がありません"
-    "${OP}" whoami >/dev/null 2>&1 \
-        || die "op がサインインしていません。1Password アプリの 設定 → 開発者 → 「1Password CLI と連携」をオンにして、もう一度実行してください"
+    echo "1Password の承認ダイアログが出たら承認してください（約 60 秒で打ち切られます）" >&2
+    local out
+    if ! out="$("${OP}" vault list --format json 2>&1)"; then
+        if grep -qiE "timeout|timed out" <<<"${out}"; then
+            die "1Password の承認が時間内にありませんでした（authorization timeout）。ダイアログを承認して、もう一度実行してください"
+        fi
+        die "op で 1Password に接続できません: $(tail -n 1 <<<"${out}")（1Password アプリの 設定 → 開発者 → 「1Password CLI と連携」がオンか確かめてください）"
+    fi
+    local names
+    names="$(python3 -I -c 'import json,sys; print("\n".join(v.get("name","") for v in json.load(sys.stdin)))' <<<"${out}" 2>/dev/null)"
+    if ! grep -qxF -- "${OP_VAULT}" <<<"${names}"; then
+        echo "保管庫「${OP_VAULT}」がありません。使える保管庫:" >&2
+        sed 's/^/  - /' <<<"${names}" >&2
+        die "OP_VAULT=<保管庫の名前> を付けて、もう一度実行してください"
+    fi
+}
+
+# 同名の項目が保管庫にあるか（二重に作らないため）
+op_item_exists() {
+    "${OP}" item get "$1" --vault "${OP_VAULT}" --format json >/dev/null 2>&1
 }
 
 cmd_export_to_1password() {
     require_op
     gh auth status >/dev/null 2>&1 || die "gh がログインしていません"
+    # 既に保存済みなら何も作らない（鍵を書き出す前に止める）。作り直すなら、古い項目を 1Password で消すか名前を変えてから
+    local title
+    for title in "${OP_ITEM_PREFIX} (p12)" "${OP_ITEM_PREFIX} (p12 password)"; do
+        op_item_exists "${title}" && die "1Password の保管庫「${OP_VAULT}」に「${title}」が既にあります。二重に作らないので止めます（作り直すなら古い項目を消すか OP_ITEM_PREFIX を変える）"
+    done
     security find-certificate -c "${AUTONOTE_CERT_NAME}" -Z "${LOGIN_KEYCHAIN}" 2>/dev/null | grep -qi "SHA-1 hash: ${AUTONOTE_CERT_SHA1}" \
         || die "login キーチェーンに SHA-1 ${AUTONOTE_CERT_SHA1} の「${AUTONOTE_CERT_NAME}」がありません"
     local work; work="$(private_dir)"
