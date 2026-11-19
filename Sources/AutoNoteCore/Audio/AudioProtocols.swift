@@ -21,4 +21,10 @@ public protocol AudioSource: Sendable {
     var track: Track { get }
     func start(onBuffer: @Sendable @escaping (AudioChunk) -> Void) async throws
     func stop() async
+    /// Callback and restart counters for diagnostics (`manifest.audio_health`); nil when the source keeps none.
+    var health: SourceHealth? { get }
+}
+
+extension AudioSource {
+    public var health: SourceHealth? { nil }
 }

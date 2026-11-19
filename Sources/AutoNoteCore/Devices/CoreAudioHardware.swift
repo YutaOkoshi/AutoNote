@@ -97,7 +97,7 @@ public final class CoreAudioHardware: AudioHardwareQuerying {
         return ref.takeRetainedValue() as String
     }
 
-    private static func uint32Prop(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector) -> UInt32? {
+    static func uint32Prop(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector) -> UInt32? {
         var a = address(selector)
         guard AudioObjectHasProperty(id, &a) else { return nil }
         var value: UInt32 = 0
@@ -116,7 +116,7 @@ public final class CoreAudioHardware: AudioHardwareQuerying {
         return ids
     }
 
-    private static func channelCount(_ id: AudioObjectID, _ scope: AudioObjectPropertyScope) -> Int {
+    static func channelCount(_ id: AudioObjectID, _ scope: AudioObjectPropertyScope) -> Int {
         var a = address(kAudioDevicePropertyStreamConfiguration, scope)
         var size: UInt32 = 0
         guard AudioObjectGetPropertyDataSize(id, &a, 0, nil, &size) == noErr, size > 0 else { return 0 }
