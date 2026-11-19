@@ -73,7 +73,7 @@ public final class AVMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {  
 
     public func currentFormat() -> InputFormat? {
         guard let engine else { return nil }
-        let fmt = engine.inputNode.inputFormat(forBus: 0)
+        let fmt = engine.inputNode.outputFormat(forBus: 0)   // what `prepare` read and the tap was installed with
         guard fmt.sampleRate > 0, fmt.channelCount > 0 else { return nil }
         return InputFormat(sampleRate: fmt.sampleRate, channels: Int(fmt.channelCount))
     }

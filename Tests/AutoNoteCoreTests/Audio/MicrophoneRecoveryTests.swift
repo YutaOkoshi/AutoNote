@@ -23,7 +23,7 @@ private final class FailureMessage: Sendable {
 }
 
 let micRecoveryTestPolicy = MicrophoneRecoveryPolicy(checkInterval: .milliseconds(20), settleDelay: .milliseconds(30),
-                                            stallTimeout: .milliseconds(250), retryDelay: .milliseconds(30),
+                                            stallTimeout: .milliseconds(600), retryDelay: .milliseconds(30),
                                             maxConsecutiveFailures: 3, maxRebuilds: 30)
 
 func eventuallyTrue(_ limit: Duration = .seconds(3), _ condition: () async -> Bool) async -> Bool {
@@ -113,7 +113,7 @@ private func feed(_ engine: FakeMicrophoneEngine, host: FakeHostClock, from: Dou
         let src = makeRecoveringMicSource(engine, .fake(host))
         try await src.start { _ in }
         let feeder = feed(engine, host: host, from: 0)
-        try await Task.sleep(for: .milliseconds(700))   // well past stallTimeout
+        try await Task.sleep(for: .milliseconds(1_000))   // well past stallTimeout
         feeder.cancel(); await feeder.value
         await src.stop()
         #expect(engine.startCount == 1)
@@ -132,6 +132,37 @@ private func feed(_ engine: FakeMicrophoneEngine, host: FakeHostClock, from: Dou
         feeder.cancel(); await feeder.value
         await src.stop()
         #expect(engine.startCount == 1)
+    }
+
+    @Test func oneStopSeenTwiceRebuildsOnceEvenIfTheFirstCallbackIsSlow() async throws {
+        // The engine stops itself and also posts the configuration change; after the rebuild, the first callback
+        // takes longer than the settle delay (as right after an A2DP → HFP switch) but less than stallTimeout.
+        // The notification lands after the watchdog has already seen the stopped engine and rebuilt.
+        let engine = FakeMicrophoneEngine(); engine.stopItselfOnStarts = 1; engine.notificationDelay = 0.08
+        let src = makeRecoveringMicSource(engine, .fake())
+        try await src.start { _ in }
+        #expect(await eventuallyTrue { engine.startCount == 2 && engine.isRunning })
+        try await Task.sleep(for: .milliseconds(300))
+        await src.stop()
+        #expect(engine.startCount == 2)
+        #expect(src.health?.restarts == 1)
+    }
+
+    @Test func aFormatChangeDuringTheBackOffIsNotDropped() async throws {
+        var policy = micRecoveryTestPolicy
+        policy.retryDelay = .milliseconds(500)   // the first rebuild leaves 0.5 s of back-off
+        let host = FakeHostClock()
+        let engine = FakeMicrophoneEngine(); engine.stopItselfOnStarts = 1
+        let src = makeRecoveringMicSource(engine, .fake(host), policy: policy)
+        try await src.start { _ in }
+        #expect(await eventuallyTrue { engine.startCount == 2 && engine.isRunning })
+        let feeder = feed(engine, host: host, from: 1)   // callbacks keep flowing: only the format tells
+        engine.simulateConfigurationChange(stopEngine: false, newFormat: InputFormat(sampleRate: 16_000, channels: 1))
+        let rebuilt = await eventuallyTrue { engine.startCount == 3 }
+        feeder.cancel(); await feeder.value
+        await src.stop()
+        #expect(rebuilt)
+        #expect(src.health?.restarts == 2)
     }
 
     @Test func retriesAfterAFailedPrepareAndRecovers() async throws {

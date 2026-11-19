@@ -15,6 +15,7 @@ public final class FakeMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {
     private var _isStopped = false
     private var _isRunning = false
     private var _stopItselfOnStarts = 0
+    private var _notificationDelay = 0.003
     private var _prepareError: (any Error)?
     private var _prepareErrorsLeft = 0
     private var handler: (@Sendable () -> Void)?
@@ -47,6 +48,12 @@ public final class FakeMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {
         set { lock.withLock { _stopItselfOnStarts = newValue } }
     }
 
+    /// Seconds between stopping itself and posting the configuration change (default 3 ms, as observed).
+    public var notificationDelay: Double {
+        get { lock.withLock { _notificationDelay } }
+        set { lock.withLock { _notificationDelay = newValue } }
+    }
+
     /// The next `count` `prepare` calls throw `error`.
     public func failPrepare(_ count: Int, with error: any Error) {
         lock.withLock { _prepareErrorsLeft = count; _prepareError = error }
@@ -77,8 +84,8 @@ public final class FakeMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {
             return false
         }
         if stopsItself {
-            let handler = lock.withLock { self.handler }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.003) { handler?() }
+            let (handler, delay) = lock.withLock { (self.handler, _notificationDelay) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + delay) { handler?() }
         }
     }
 

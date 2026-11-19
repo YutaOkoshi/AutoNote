@@ -80,7 +80,7 @@ public actor MicrophoneSource: AudioSource {
     private var lastRecords = 0
     private var lastCallbackAt = ContinuousClock.now
     private var configurationChangedAt: ContinuousClock.Instant?
-    private var recordsAtConfigurationChange = 0
+    private var lastRebuildStartedAt: ContinuousClock.Instant?
     private var consecutiveFailures = 0
     private var rebuilds = 0
     private var nextRebuildAllowedAt = ContinuousClock.now
@@ -121,7 +121,8 @@ public actor MicrophoneSource: AudioSource {
 
         let engine = self.engine, voiceProcessing = self.voiceProcessing
         let handler: @Sendable () -> Void = { [weak self] in
-            Task { await self?.configurationChanged() }
+            let postedAt = ContinuousClock.now   // before the hop, so a rebuild in between can tell it is stale
+            Task { await self?.configurationChanged(postedAt: postedAt) }
         }
         let format: InputFormat
         do {
@@ -190,17 +191,22 @@ public actor MicrophoneSource: AudioSource {
         lastRecords = 0
         lastCallbackAt = .now
         configurationChangedAt = nil
+        lastRebuildStartedAt = nil
         consecutiveFailures = 0
         rebuilds = 0
         nextRebuildAllowedAt = .now
         gaveUp = false
     }
 
-    private func configurationChanged() {
+    /// A notification posted before the latest rebuild began is about the engine that rebuild replaced: ignored.
+    private func configurationChanged(postedAt: ContinuousClock.Instant) {
         guard case .running = state, !gaveUp else { return }
+        if let started = lastRebuildStartedAt, postedAt <= started {
+            Self.logger.notice("mic engine configuration change from before rebuild #\(self.rebuilds, privacy: .public) ignored")
+            return
+        }
         Self.logger.notice("mic engine configuration changed \(self.engine.routeDescription(), privacy: .public)")
         configurationChangedAt = .now
-        recordsAtConfigurationChange = pipeline?.ring.recordsWritten ?? 0
     }
 
     private func makeWatchdog() -> Task<Void, Never> {
@@ -233,13 +239,14 @@ public actor MicrophoneSource: AudioSource {
 
         var reason: String?
         if let changedAt = configurationChangedAt {
-            guard now - changedAt >= policy.settleDelay else { return }
+            // Kept pending through a back-off, so a format change is never dropped.
+            guard now - changedAt >= policy.settleDelay, now >= nextRebuildAllowedAt else { return }
             configurationChangedAt = nil
             let current = await onControlQueueValue { engine.currentFormat() }
+            // Missing callbacks after the change are left to the stall check below (`stallTimeout`): right after an
+            // A2DP → HFP switch the first callback can take longer than the settle delay.
             if pipeline == nil || !running {
                 reason = "engine stopped after configuration change"
-            } else if records == recordsAtConfigurationChange {
-                reason = "no callbacks after configuration change"
             } else if let current, current != pipeline?.format {
                 reason = "input format changed to \(Self.describe(current))"
             } else {
@@ -261,6 +268,7 @@ public actor MicrophoneSource: AudioSource {
 
     private func rebuild(reason: String) async {
         defer { rebuildTask = nil }
+        lastRebuildStartedAt = .now
         rebuilds += 1
         consecutiveFailures += 1
         health?.noteRestart()
@@ -297,16 +305,18 @@ public actor MicrophoneSource: AudioSource {
                 return (format, ring)
             }
         }, abandoned: { _ in engine.stop() })
-        // `stop()` arrived meanwhile: it stops the engine after this task ends.
-        guard case .running = state else { return }
+        // If `stop()` arrived meanwhile, it waits for this task, then stops the engine and drains `pipeline`; so a
+        // started engine still gets its pipeline here, or what it already wrote into the ring would be lost.
+        let stopping: Bool = if case .running = state { false } else { true }
         guard let result else {
+            if stopping { return }
             fail(attempt, "prepare/start", AudioSourceError.timedOut(call: "AVAudioEngine.start"), backoff: backoff)
             return
         }
         switch result {
         case .failure(let error):
             await controlQueue.runAwaiting(timeout: timeout) { engine.stop() }
-            fail(attempt, "prepare/start", error, backoff: backoff)
+            if !stopping { fail(attempt, "prepare/start", error, backoff: backoff) }
         case .success(let (format, ring)):
             guard let drain = makeDrain(ring: ring, format: format, onBuffer: onBuffer) else {
                 await controlQueue.runAwaiting(timeout: timeout) { engine.stop() }
