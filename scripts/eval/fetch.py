@@ -7,6 +7,9 @@
 - SHA-256 を照合する。宣言が空なら値を表示する（確かめて datasets.json に書く）。sha256_may_change の
   もの（API の応答など）は一致しなくても警告だけにする。
 - 用意: <data>/prepared/<id>/audio.wav（ffmpeg で 16 kHz モノラル・先頭 max_seconds 秒）と ref.json。
+  会見（kind kaiken）は calibration.json の clip_start から max_seconds 秒（質疑を含む区間）。calibration.json に
+  まだないものは飛ばす（calibrate.py --datasets <id> で作る）。
+  話者別の音声があるもの（kind eaf の tracks）は track-<名前>.wav も作る（アプリの「自分」「相手」の 2 トラックに当たる）。
 """
 
 import argparse
@@ -48,7 +51,9 @@ def download(url, dest):
             return
         except urllib.error.HTTPError as e:
             if e.code in (429, 500, 502, 503, 504) and attempt < 4:
-                wait = 10 * (attempt + 1)
+                # Retry-After があれば従う（Wikimedia は連続した要求に 429 を返す）。なければ 30 秒ずつ延ばす
+                retry_after = (e.headers or {}).get("Retry-After", "")
+                wait = int(retry_after) if retry_after.isdigit() else 30 * (attempt + 1)
                 print("  HTTP %d、%d 秒待って再試行" % (e.code, wait), file=sys.stderr)
                 time.sleep(wait)
                 continue
@@ -143,9 +148,21 @@ def prepare(decl, ds, force=False):
     if kind == "mixed":
         return prepare_mixed(decl, ds, force)
     src_path = ensure_source(ds["audio"], decl["sources"][ds["audio"]])
+    cal = calibration().get(ds["id"], {})
+    start = 0.0
+    if kind == "kaiken":
+        if "clip_start" not in cal:
+            print("飛ばす: %s（calibration.json に区間がない。calibrate.py --datasets %s で作る）" % (ds["id"], ds["id"]))
+            return
+        start = cal["clip_start"]
     if force or not os.path.exists(audio_out):
         print("音声: %s" % ds["id"])
-        to_wav(src_path, audio_out, seconds=ds.get("max_seconds"))
+        to_wav(src_path, audio_out, start=start, seconds=ds.get("max_seconds"))
+    for name, track in sorted(ds.get("tracks", {}).items()):
+        track_out = os.path.join(out_dir, "track-%s.wav" % name)
+        if force or not os.path.exists(track_out):
+            print("音声: %s（%s）" % (ds["id"], name))
+            to_wav(ensure_source(track["audio"], decl["sources"][track["audio"]]), track_out, seconds=ds.get("max_seconds"))
     seconds = wav_seconds(audio_out)
     if not force and os.path.exists(ref_out):
         return
@@ -161,7 +178,6 @@ def prepare(decl, ds, force=False):
     elif kind == "kokkai":
         rec = ensure_source(ds["record"], decl["sources"][ds["record"]])
         full = refs.kokkai_text(common.load_json(rec))
-        cal = calibration().get(ds["id"], {})
         if ds.get("ref_window") == "calibrated" and cal.get("ref_end_char"):
             ref["text"] = full[cal.get("ref_start_char", 0):cal["ref_end_char"]]
             ref["window"] = "calibrated"
@@ -169,18 +185,55 @@ def prepare(decl, ds, force=False):
             ref["text"] = full
             ref["window"] = "locate"
         ref["languages"] = ["ja"]
+    elif kind == "kaiken":
+        full, qa = refs.kaiken_text(refs.kaiken_turns(read_text(ensure_source(ds["record"], decl["sources"][ds["record"]]))))
+        lo, hi = cal["ref_start_char"], cal["ref_end_char"]
+        ref["text"] = full[lo:hi]
+        ref["window"] = "calibrated"
+        ref["languages"] = ["ja"]
+        if qa is not None and lo < qa < hi and cal.get("qa_time_in_clip") is not None:
+            t = cal["qa_time_in_clip"]
+            ref["parts"] = [{"name": "opening", "range": [0, t], "text": full[lo:qa]},
+                            {"name": "qa", "range": [t, seconds + 1], "text": full[qa:hi]}]
     elif kind == "govinfo":
-        rec = ensure_source(ds["record"], decl["sources"][ds["record"]])
-        with open(rec, encoding="utf-8", errors="replace") as f:
-            markup = f.read()
-        ref["en_text"] = refs.govinfo_excerpt(markup, ds["en_excerpt"]["start"], ds["en_excerpt"]["end"])
-        ref["en_range"] = ds["en_range"]
+        markup = read_text(ensure_source(ds["record"], decl["sources"][ds["record"]]))
+        if ds.get("en_paragraphs"):
+            full = refs.govinfo_paragraphs(markup)
+            if cal.get("en_end_char"):
+                ref["en_text"] = full[cal.get("en_start_char", 0):cal["en_end_char"]]
+                ref["window"] = "calibrated"
+            else:
+                ref["en_text"] = full
+                ref["window"] = "locate"
+        else:
+            ref["en_text"] = refs.govinfo_excerpt(markup, ds["en_excerpt"]["start"], ds["en_excerpt"]["end"])
+            ref["en_range"] = ds["en_range"]
+        if ds.get("ja_record"):
+            turns = refs.kaiken_turns(read_text(ensure_source(ds["ja_record"], decl["sources"][ds["ja_record"]])))
+            if cal.get("ja_range"):
+                ref["ja_text"] = "\n".join(t["text"] for t in turns if "冒頭発言" in (t["section"] or ""))
+                ref["ja_range"] = cal["ja_range"]
+            else:
+                print("  %s: 日本語の冒頭発言の区間が calibration.json にない（calibrate.py --datasets %s）" % (ds["id"], ds["id"]))
         ref["languages"] = ["ja", "en"]
+    elif kind == "eaf":
+        utts = refs.eaf_utterances(ensure_source(ds["record"], decl["sources"][ds["record"]]))
+        tier_to_track = {t["tier"]: name for name, t in ds["tracks"].items()}
+        utts = [dict(u, track=tier_to_track.get(u["tier"])) for u in utts if u["start"] < seconds]
+        ref["text"] = "\n".join(u["text"] for u in utts)
+        ref["tracks"] = {name: "\n".join(u["text"] for u in utts if u["track"] == name) for name in ds["tracks"]}
+        ref["utterances"] = utts
+        ref["languages"] = ["ja"]
     elif kind == "local":
         ref.update(prepare_local_ref(ds))
     else:
         sys.exit("unknown dataset kind: %s" % kind)
     common.write_json(ref_out, ref)
+
+
+def read_text(path):
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read()
 
 
 def prepare_local_ref(ds):
