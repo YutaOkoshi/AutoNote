@@ -398,13 +398,15 @@ def main(argv):
     args = ap.parse_args(argv)
     decl = common.load_datasets()
     calls = []
+    selected = [d for d in common.select(decl, args.datasets) if d.get("summary")]
+    prompt_version = PROMPT_VERSION
+    if any(d["kind"] != "ami" for d in selected):
+        prompt_version += ",faith_open=%s" % FAITH_GENERIC_VERSION
     result = {"label": args.label, "date": datetime.date.today().isoformat(), "judge_model": args.judge_model,
-              "prompt_version": PROMPT_VERSION, "summary_cache_version": SUMMARY_CACHE_VERSION,
+              "prompt_version": prompt_version, "summary_cache_version": SUMMARY_CACHE_VERSION,
               "build": runner.build_info(args.autonote), "datasets": {}}
     try:
-        for ds in common.select(decl, args.datasets):
-            if not ds.get("summary"):
-                continue
+        for ds in selected:
             if ds["kind"] == "ami":
                 fetch.ensure_source(ds["annotations"], decl["sources"][ds["annotations"]])
             for variant in [v for v in args.inputs.split(",") if v]:
