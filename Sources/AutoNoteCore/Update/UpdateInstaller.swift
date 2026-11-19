@@ -54,7 +54,8 @@ public struct UpdateInstallPlan: Equatable, Sendable {
 public enum UpdateInstaller {
     /// Steps: wait for the app to quit → move the old app aside → move the new one in → check its signature against
     /// the old app's requirement → `open -n` it → check it runs. Any failure after the old app moved puts it back and
-    /// starts it. The result goes to `last-install.json` for the next launch to read.
+    /// starts it. The result goes to `last-install.json` for the next launch to read (`installed` just before the new
+    /// app starts, `restored` when that then fails).
     public static let script = #"""
     #!/bin/bash
     # AutoNote の入れ替えの補助。アプリが終了したあとに動く（UpdateInstaller が書いて起動する）。
@@ -64,26 +65,26 @@ public enum UpdateInstaller {
     QUIT_TIMEOUT="$1"; LAUNCH_CHECK="$2"; shift 2
     OPEN_ARGS=(-n)
     for kv in "$@"; do OPEN_ARGS+=(--env "$kv"); done
-    exec >>"$LOG" 2>&1
+    exec >>"${LOG}" 2>&1
     log() { echo "$(/bin/date '+%Y-%m-%dT%H:%M:%S') $*"; }
     result() {
-        printf '{"from":"%s","to":"%s","result":"%s","reason":"%s"}\n' "$FROM" "$TO" "$1" "$2" >"$RESULT.tmp" \
-            && /bin/mv -f "$RESULT.tmp" "$RESULT"
+        printf '{"from":"%s","to":"%s","result":"%s","reason":"%s"}\n' "${FROM}" "${TO}" "$1" "$2" >"${RESULT}.tmp" \
+            && /bin/mv -f "${RESULT}.tmp" "${RESULT}"
     }
-    running() { /bin/ps -axo command= | /usr/bin/grep -F -- "$TARGET/Contents/MacOS/" | /usr/bin/grep -v -F -- "$0" >/dev/null; }
-    launch() { /usr/bin/open "${OPEN_ARGS[@]}" "$TARGET"; }
+    running() { /bin/ps -axo command= | /usr/bin/grep -F -- "${TARGET}/Contents/MacOS/" | /usr/bin/grep -v -F -- "$0" >/dev/null; }
+    launch() { /usr/bin/open "${OPEN_ARGS[@]}" "${TARGET}"; }
     restore() {
         log "失敗（$1）: 元の版に戻す"
-        /bin/rm -rf "$TARGET"
-        if /bin/mv "$BACKUP" "$TARGET"; then log "元の版を戻した"; else log "元の版を戻せない: $BACKUP"; fi
+        /bin/rm -rf "${TARGET}"
+        if /bin/mv "${BACKUP}" "${TARGET}"; then log "元の版を戻した"; else log "元の版を戻せない: ${BACKUP}"; fi
         result restored "$1"
         launch || log "元の版を起動できない"
         exit 1
     }
 
-    log "開始: $FROM → $TO（pid $PID の終了を待つ）"
+    log "開始: ${FROM} → ${TO}（pid ${PID} の終了を待つ）"
     waited=0
-    while /bin/kill -0 "$PID" 2>/dev/null; do
+    while /bin/kill -0 "${PID}" 2>/dev/null; do
         if [ "$waited" -ge $((QUIT_TIMEOUT * 5)) ]; then
             log "アプリが ${QUIT_TIMEOUT} 秒で終了しない。何もしない"
             result skipped timeout
@@ -92,21 +93,23 @@ public enum UpdateInstaller {
         /bin/sleep 0.2; waited=$((waited + 1))
     done
 
-    [ -e "$BACKUP" ] && /bin/rm -rf "$BACKUP"
-    if ! /bin/mv "$TARGET" "$BACKUP"; then
+    [ -e "${BACKUP}" ] && /bin/rm -rf "${BACKUP}"
+    if ! /bin/mv "${TARGET}" "${BACKUP}"; then
         log "今のアプリを退避できない"
         result restored move-aside
         launch
         exit 1
     fi
-    /bin/mv "$STAGED" "$TARGET" || restore move-new
-    /usr/bin/codesign --verify --strict "-R=$REQ" "$TARGET" || restore verify
-    launch || restore launch
-    /bin/sleep "$LAUNCH_CHECK"
-    running || restore launch
-    /bin/rm -rf "$BACKUP"
+    /bin/mv "${STAGED}" "${TARGET}" || restore move-new
+    /usr/bin/codesign --verify --strict "-R=${REQ}" "${TARGET}" || restore verify
+    # Written before the launch: the new app reads (and removes) it as it starts. A failed check below overwrites it
+    # with `restored`, which the restarted old app reads.
     result installed ""
-    log "完了: $TO を起動した"
+    launch || restore launch
+    /bin/sleep "${LAUNCH_CHECK}"
+    running || restore launch
+    /bin/rm -rf "${BACKUP}"
+    log "完了: ${TO} を起動した"
     """#
 
     /// Writes `install.sh` into `directory` and starts it. The helper outlives the app (it is reparented when the

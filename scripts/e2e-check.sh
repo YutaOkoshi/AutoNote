@@ -1115,6 +1115,31 @@ check_translation_default_off() {
     pass "translation_mode ${mode:-（未設定）}、models/translation は空"
 }
 
+# 15.x: 自動アップデート。scripts/update-e2e.sh（一時ディレクトリのアプリの写しと偽の配布サーバー）の各行をそのまま項目にする。
+# 項目 7 のアプリとは別のデータ領域・別の写しで動き、/Applications のアプリには触れない
+check_auto_update() {
+    CURRENT="15. 自動アップデート（scripts/update-e2e.sh）"
+    [[ -x "${APP}/Contents/MacOS/AutoNoteApp" ]] || { skip "build/AutoNote.app が無い"; return; }
+    have_cert || { skip "署名証明書「${CERT_NAME}」が無い"; return; }
+    have_gui || { skip "GUI が無い環境（CI か WindowServer なし）"; return; }
+    run_timeout 600 "${ROOT}/scripts/update-e2e.sh" "${APP}"; local code=$?
+    local lines; lines="$(grep -E '^(PASS|FAIL|SKIP)  ' "${LAST_LOG}")"
+    [[ -n "${lines}" ]] || { fail "結果の行が無い（exit ${code}）"; return; }
+    local log="${LAST_LOG}" kind rest name reason
+    while IFS= read -r line; do
+        kind="${line%%  *}"; rest="${line#*  }"
+        name="${rest%% — *}"; reason=""; [[ "${rest}" == *" — "* ]] && reason="${rest#* — }"
+        CURRENT="${name}"; LAST_LOG="${log}"
+        case "${kind}" in
+            PASS) pass "${reason}" ;;
+            SKIP) skip "${reason}" ;;
+            *) LAST_LOG=""; fail "${reason}" ;;
+        esac
+    done <<<"${lines}"
+    [[ ${code} -eq 124 ]] && { CURRENT="15. 自動アップデート"; LAST_LOG="${log}"; fail "600 秒で終わらない"; }
+    return 0
+}
+
 CHECKS=(
     check_identity_consistency
     check_swift_test
@@ -1164,6 +1189,7 @@ CHECKS=(
     check_dev_translate_shape
     check_dev_translate_fixed_target
     check_dev_translate_real_model
+    check_auto_update
 )
 
 ensure_whisper_xcframework   # 失敗しても続ける（swift test などの項目が FAIL を出す）

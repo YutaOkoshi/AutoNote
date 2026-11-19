@@ -175,3 +175,35 @@ private actor CheckLog {
         #expect(old.autoUpdateEnabled)
     }
 }
+
+/// Runs the real helper on a target that is not there: it must record `move-aside` and touch nothing else.
+@Suite struct UpdateHelperRunTests {
+    @Test func missingTargetIsReportedAsMoveAside() async throws {
+        let dir = try TemporaryDirectory.make()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let staged = dir.appending(path: "staged/AutoNote.app")
+        try writeApp(staged, bundleID: "com.yutaokoshi.autonote", version: "0.7.0")
+        var plan = UpdateInstallPlan(
+            pid: 999_999, target: dir.appending(path: "missing/AutoNote.app"), staged: staged, requirement: "never",
+            resultFile: dir.appending(path: "last-install.json"), logFile: dir.appending(path: "install.log"),
+            fromVersion: "0.6.0", toVersion: "0.7.0", environment: [:])
+        plan.launchCheckSeconds = 0
+        let script = dir.appending(path: "install.sh")
+        try Data(UpdateInstaller.script.utf8).write(to: script)
+        let p = Process()
+        p.executableURL = URL(filePath: "/bin/bash")
+        p.arguments = [script.path] + plan.arguments
+        p.environment = ["PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"]
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        try p.run()
+        p.waitUntilExit()
+        #expect(p.terminationStatus == 1)
+        let result = try JSONDecoder().decode(UpdateInstallResult.self, from: Data(contentsOf: plan.resultFile))
+        #expect(result == UpdateInstallResult(from: "0.6.0", to: "0.7.0", result: .restored, reason: "move-aside"))
+        #expect(FileManager.default.fileExists(atPath: staged.path))
+        let log = try String(contentsOf: plan.logFile, encoding: .utf8)
+        #expect(log.contains("開始: 0.6.0 → 0.7.0"))
+        #expect(!log.contains("unbound variable"))
+    }
+}
