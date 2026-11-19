@@ -955,6 +955,28 @@ check_dev_summarize_failure() {
     if grep -q 'status: transcript_only' "${WORK}/s2/vault/${file}"; then pass "${file}"; else fail "本文に status: transcript_only が無い"; fi
 }
 
+check_dev_summarize_minutes_out() {
+    CURRENT="05.3 dev summarize --minutes-out で MinutesOutput の JSON が出る（評価用）"
+    command -v jq >/dev/null 2>&1 || { skip "jq が無い"; return; }
+    cli_or_skip || return
+    write_dev_summarize_inputs
+    local out="${WORK}/summarize-3.json" minutes="${WORK}/s3-out/minutes.json"
+    run_timeout 60 sh -c '"$1" dev summarize --fake "$2" --minutes "$3" --out "$4" --minutes-out "$5" >"$6"' _ "${AUTONOTE_CLI}" \
+        "${WORK}/summarize-transcript.json" "${WORK}/summarize-minutes.json" "${WORK}/s3" "${minutes}" "${out}"; local code=$?
+    [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
+    if jq -e '.title == "架空の定例" and (.decisions | length) == 1 and has("next_actions")' "${minutes}" >/dev/null 2>&1; then
+        pass "${minutes##*/}"
+    else
+        fail "--minutes-out の JSON が MinutesOutput でない: $(head -c 200 "${minutes}" 2>/dev/null)"
+    fi
+}
+
+check_eval_unit_tests() {
+    CURRENT="15. scripts/eval の単体テスト（評価の正規化・採点）"
+    command -v python3 >/dev/null 2>&1 || { skip "python3 が無い"; return; }
+    if run python3 -I -m unittest discover -s scripts/eval/tests; then pass; else fail "python3 -I -m unittest discover -s scripts/eval/tests が失敗"; fi
+}
+
 # 09.1 / 09.2 共通: 架空の確定発話を 2 段階（live-1 は 05.x と同じ 3 発話、live-2 はそれに 2 発話を足す）で ${WORK} に書く
 write_dev_live_summary_inputs() {
     cat >"${WORK}/live-1.json" <<'JSON'
@@ -1158,6 +1180,8 @@ CHECKS=(
     check_batch_memory_flat
     check_dev_summarize
     check_dev_summarize_failure
+    check_dev_summarize_minutes_out
+    check_eval_unit_tests
     check_dev_live_summary_shape
     check_dev_live_summary_accumulates
     check_dev_live_summary_questions
