@@ -79,8 +79,9 @@ def locate(ref, hyp):
     return end - back_end, end, dist
 
 
-def align(ref, hyp):
-    """全体の整列。{"hits","sub","del","ins","max_del_run","del_runs"}。del_runs は連続した脱落の長さの一覧。"""
+def align(ref, hyp, pairs=False):
+    """全体の整列。{"hits","sub","del","ins","max_del_run","del_runs"}。del_runs は連続した脱落の長さの一覧。
+    pairs=True なら "pairs"（(ref の位置 | None, hyp の位置 | None) の並び。先頭から）も返す。"""
     n, m = len(hyp), len(ref)
     prev = list(range(m + 1))
     back = []   # per hyp row: 0 = diag, 1 = from left (deletion of ref), 2 = from up (insertion of hyp)
@@ -107,6 +108,7 @@ def align(ref, hyp):
     hits = sub = dele = ins = 0
     runs = []
     run = 0
+    path = []
     i, j = n, m
     while i > 0 or j > 0:
         if i == 0:
@@ -119,6 +121,7 @@ def align(ref, hyp):
             dele += 1
             run += 1
             j -= 1
+            path.append((j, None))
             continue
         if run:
             runs.append(run)
@@ -130,13 +133,18 @@ def align(ref, hyp):
                 sub += 1
             i -= 1
             j -= 1
+            path.append((j, i))
         else:
             ins += 1
             i -= 1
+            path.append((None, i))
     if run:
         runs.append(run)
-    return {"hits": hits, "sub": sub, "del": dele, "ins": ins, "max_del_run": max(runs) if runs else 0,
-            "del_runs": sorted(runs, reverse=True)}
+    out = {"hits": hits, "sub": sub, "del": dele, "ins": ins, "max_del_run": max(runs) if runs else 0,
+           "del_runs": sorted(runs, reverse=True)}
+    if pairs:
+        out["pairs"] = path[::-1]
+    return out
 
 
 def edits(a):

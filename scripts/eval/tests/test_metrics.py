@@ -62,6 +62,12 @@ class AlignTests(unittest.TestCase):
         a = metrics.align(list("abcdefghij"), list("abij"))
         self.assertEqual(a["max_del_run"], 6)
 
+    def test_pairs(self):
+        pairs = metrics.align(list("abcd"), list("axcde"), pairs=True)["pairs"]
+        self.assertEqual(pairs, [(0, 0), (1, 1), (2, 2), (3, 3), (None, 4)])
+        pairs = metrics.align(list("abcd"), list("ad"), pairs=True)["pairs"]
+        self.assertEqual(pairs, [(0, 0), (1, None), (2, None), (3, 1)])
+
     def test_locate(self):
         ref = list("xxxxxxabcdefghyyyyyy")
         start, end, dist = metrics.locate(ref, list("abcdefgh"))
