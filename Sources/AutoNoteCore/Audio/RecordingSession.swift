@@ -55,6 +55,9 @@ public actor RecordingSession {
     private var micSource: (any AudioSource)?
     private var systemSource: (any AudioSource)?
     private var ticker: Task<Void, Never>?
+    /// Every source each track had in this meeting (a re-attached microphone adds one), for `manifest.audioHealth`.
+    private var healthSources: [Track: [SourceHealth]] = [:]
+    private var routeMonitor: (any AudioRouteMonitoring)?
 
     // Chunk pipeline (RecordingSession+Pipeline.swift; internal rather than private for that file).
     var queue: ChunkQueue?
@@ -202,6 +205,7 @@ public actor RecordingSession {
             let mic = sources.makeMicrophoneSource(deviceUID: deviceUID, clock: clock)
             try await mic.start(onBuffer: queue.onBuffer(for: .mic))
             micSource = mic
+            if let id = meetingID { watchHealth(of: mic, track: .mic, meeting: id) }
             broadcaster.yield(.microphoneAttached(elapsed(), device: sources.inputDevice(uid: deviceUID)))
         }
     }
@@ -305,6 +309,9 @@ public actor RecordingSession {
         let queue = ChunkQueue()
         self.queue = queue; processed = 0
         consumer = Task { await self.consume(queue.stream) }
+        healthSources = [:]
+        routeMonitor = sources.makeRouteMonitor()
+        routeMonitor?.start(label: id.rawValue)
 
         // Microphone first: a permission refusal must stop the start before system audio is touched.
         var micError: (any Error)?
@@ -313,6 +320,7 @@ public actor RecordingSession {
         do {
             try await mic.start(onBuffer: queue.onBuffer(for: .mic))
             micSource = mic
+            watchHealth(of: mic, track: .mic, meeting: id)
         } catch AudioSourceError.microphonePermission(let status) {
             await abandonStart(id)
             throw RecordingError.microphonePermission(status)
@@ -323,6 +331,7 @@ public actor RecordingSession {
         do {
             try await system.start(onBuffer: queue.onBuffer(for: .system))
             systemSource = system
+            watchHealth(of: system, track: .system, meeting: id)
         } catch {
             systemError = error
         }
@@ -370,6 +379,8 @@ public actor RecordingSession {
 
         let (changes, failures) = writers.transition { try $0.close(at: end) }
         await reportWriterFailures(failures)
+        routeMonitor?.stop()
+        let health = trackHealth(until: end, meeting: id)
         let endedAt = startedAt.addingTimeInterval(end.seconds).truncatedToMilliseconds   // returned == saved
         let status: MeetingStatus = end.seconds < Self.minimumDurationSeconds ? .tooShort : .recorded
         let finish: @Sendable (inout Manifest) -> Void = { m in
@@ -377,6 +388,7 @@ public actor RecordingSession {
             m.apply(changes)
             m.endedAt = endedAt
             m.status = status
+            if let health { m.audioHealth = health }
         }
         let result: Result<Manifest, any Error>
         do {
@@ -403,6 +415,37 @@ public actor RecordingSession {
         meetingID = nil; clock = nil; monitor = nil; writers = TrackWriters(); saver = nil
         micSource = nil; systemSource = nil; ticker = nil
         queue = nil; consumer = nil
+        routeMonitor?.stop(); routeMonitor = nil
+        for list in healthSources.values { for h in list { h.setFailureObserver(nil) } }
+        healthSources = [:]
+    }
+
+    // MARK: - Source health (diagnostics)
+
+    /// Remembers `source`'s counters for the manifest, and turns its runtime give-up into the usual source failure.
+    private func watchHealth(of source: any AudioSource, track: Track, meeting id: MeetingID) {
+        guard let health = source.health else { return }
+        healthSources[track, default: []].append(health)
+        health.setFailureObserver { [weak self] message in
+            Task { await self?.sourceStoppedDelivering(track, message: message, meeting: id) }
+        }
+    }
+
+    private func sourceStoppedDelivering(_ track: Track, message: String, meeting id: MeetingID) async {
+        guard meetingID == id, state != .idle else { return }
+        await reportFailure(track, SourceRuntimeFailure(message: message))
+    }
+
+    /// Per track with counters: seconds without callbacks, seconds of all-zero samples, rebuilds. Also logged.
+    private func trackHealth(until end: TimelineTime, meeting id: MeetingID) -> [TrackHealth]? {
+        let result = [Track.mic, .system].compactMap { track -> TrackHealth? in
+            guard let list = healthSources[track], !list.isEmpty else { return nil }
+            return SourceHealth.summary(track: track, sources: list, endSeconds: end.seconds)
+        }
+        for h in result {
+            Self.logger.notice("\(id.rawValue, privacy: .public): \(h.track.rawValue, privacy: .public) health: no callbacks \(h.noCallbackSeconds, privacy: .public) s, all zero \(h.zeroSeconds, privacy: .public) s, rebuilds \(h.restarts, privacy: .public), callbacks \(h.callbacks, privacy: .public)")
+        }
+        return result.isEmpty ? nil : result
     }
 
     private func makeTicker(for id: MeetingID) -> Task<Void, Never> {

@@ -35,18 +35,22 @@ public struct Manifest: Codable, Equatable, Hashable, Sendable {
     /// (its recordings follow the retention rules) but left out of the list and the Vault. Removing this key and
     /// deleting the combined meeting undoes a merge.
     public var mergedInto: MeetingID?
+    /// Live recordings since this field was added: per track, the seconds without callbacks, the seconds of all-zero
+    /// samples and the input rebuilds (`SourceHealth`). Diagnostics only; nil on older and imported meetings.
+    public var audioHealth: [TrackHealth]?
 
     public init(id: MeetingID, title: String?, startedAt: Date, endedAt: Date?, source: MeetingSource,
                 device: DeviceRef?, language: Language, tracks: [TrackFile], pauses: [PauseInterval],
                 bookmarks: [Bookmark], status: MeetingStatus, silenceWarning: Bool, autonoteVersion: String,
                 notePath: String? = nil, noteTitle: String? = nil,
-                mergedFrom: [MeetingID]? = nil, mergedInto: MeetingID? = nil) {
+                mergedFrom: [MeetingID]? = nil, mergedInto: MeetingID? = nil, audioHealth: [TrackHealth]? = nil) {
         self.id = id; self.title = title; self.startedAt = startedAt; self.endedAt = endedAt
         self.source = source; self.device = device; self.language = language
         self.tracks = tracks; self.pauses = pauses; self.bookmarks = bookmarks
         self.status = status; self.silenceWarning = silenceWarning; self.autonoteVersion = autonoteVersion
         self.notePath = notePath; self.noteTitle = noteTitle
         self.mergedFrom = mergedFrom; self.mergedInto = mergedInto
+        self.audioHealth = audioHealth
     }
 
     /// `endedAt - startedAt` in seconds; nil while still recording.

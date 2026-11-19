@@ -28,6 +28,8 @@ public actor ProcessTapSource: AudioSource {
     public static let aggregateUIDPrefix = "com.yutaokoshi.autonote.tap."
 
     public nonisolated let track: Track = .system
+    /// Counted by the drain only (diagnostics): tells "callbacks stopped" from "zeros kept arriving".
+    public nonisolated let health: SourceHealth? = SourceHealth()
 
     private struct Objects: @unchecked Sendable {   // AudioDeviceIOProcID is a C function pointer
         var tap: AudioObjectID
@@ -138,7 +140,7 @@ public actor ProcessTapSource: AudioSource {
             throw AudioSourceError.unsupportedFormat
         }
         let drain = SourceDrain.makeTask(track: track, ring: up.ring, converter: converter, inputRate: up.format.mSampleRate,
-                                          clock: clock, onBuffer: onBuffer)
+                                          clock: clock, health: health, onBuffer: onBuffer)
         state = .running(objects: up.objects, ring: up.ring, drain: drain)
         if stopRequestedWhileStarting { await stop() }
     }
@@ -179,6 +181,7 @@ public actor ProcessTapSource: AudioSource {
             let p = try hw.createIOProc(agg, queue: ioQueue, block: makeIOBlock(ring: ring, counters: counters, channels: channels))
             proc = p
             try hw.start(agg, p)
+            logger.notice("system tap and aggregate created (\(Int(format.mSampleRate.rounded()), privacy: .public) Hz \(channels, privacy: .public) ch, layout: \(layout == .tapOnly ? "tapOnly" : "withOutputClock", privacy: .public)) \(hw.routeDescription(), privacy: .public)")
             return BringUp(objects: Objects(tap: tap.id, aggregate: agg, proc: p), ring: ring, format: format)
         } catch {
             if let aggregate, let proc { logFailure { try hw.destroyIOProc(aggregate, proc) } }
@@ -194,6 +197,7 @@ public actor ProcessTapSource: AudioSource {
         logFailure { try hw.destroyIOProc(o.aggregate, o.proc) }
         logFailure { try hw.destroyAggregate(o.aggregate) }
         logFailure { try hw.destroyTap(o.tap) }
+        logger.notice("system tap and aggregate destroyed \(hw.routeDescription(), privacy: .public)")
     }
 
     private nonisolated static func logFailure(_ body: () throws -> Void) {
