@@ -92,6 +92,29 @@ import Testing
         await follower.value
     }
 
+    /// Review M1: minutes written while the job translates the live summary (summarize finishing meanwhile, the item
+    /// leaving the queue) are translated by the same job before it ends, and the note is rewritten.
+    @Test func minutesWrittenWhileTheJobRunsAreTranslatedBeforeItEnds() async throws {
+        let f = try TranslationFixture()
+        try LiveSummaryStore(paths: f.paths).save(SummaryTranslationTests.live, for: f.id)
+        let fx = f
+        let fake = FakeTextCompleter(onCall: { call in
+            if call == 1 { try? AutoNoteJSON.encoder().encode(SummaryTranslationTests.minutes).write(to: fx.paths.minutesFile(fx.id)) }
+        })
+        let rewrites = Collected<MeetingID>()
+        let service = service(f, fake, rewrites: rewrites)
+        await service.start(f.id, automatic: true, summariesOnly: true)
+        await service.waitForJob(f.id)
+        let minutes = try #require(f.store.loadSummary(f.id, .minutes))
+        #expect(minutes.translation(of: "移行は今月末までに終える") == "EN: 移行は今月末までに終える")
+        #expect(rewrites.values == [f.id])
+        // Nothing left for a later status to start.
+        let prompts = fake.snapshot.prompts.count
+        await service.startSummariesIfDue(f.id)
+        await service.waitForJob(f.id)
+        #expect(fake.snapshot.prompts.count == prompts)
+    }
+
     @Test func nothingIsTranslatedWhenTheTargetIsTheSummarysOwnLanguage() async throws {
         let f = try TranslationFixture()
         f.settings.withLock { $0.translationTarget = .ja }

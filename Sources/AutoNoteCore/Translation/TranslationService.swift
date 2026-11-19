@@ -197,6 +197,12 @@ public actor TranslationService: TranslationPort {
         start(id, automatic: true, summariesOnly: true)
     }
 
+    /// Whether `minutes.json` exists with a modification the summaries' translation has not started from.
+    private func minutesChangedSinceAttempt(_ id: MeetingID) -> Bool {
+        guard let modified = Self.modificationDate(deps.store.paths.minutesFile(id)) else { return false }
+        return summariesAttempted[id] != modified
+    }
+
     private static func modificationDate(_ url: URL) -> Date? {
         (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
     }
@@ -233,6 +239,9 @@ public actor TranslationService: TranslationPort {
             if !summariesOnly { try await translateMeeting(id, automatic: automatic) }
             // Then the summaries (spec 2026-11-19: 文字起こしに続けて議事録も訳す).
             try await translateSummaries(id)
+            // Minutes written (or redone) while this job ran: `startSummariesIfDue` skipped them because the job was
+            // running, and the meeting may have left the queue meanwhile, so the job takes them before it ends.
+            while minutesChangedSinceAttempt(id) { try await translateSummaries(id) }
             revisions[id, default: 0] += 1
             publish(id, nil)
         } catch is CancellationError {
