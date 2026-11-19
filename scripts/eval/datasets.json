@@ -328,7 +328,8 @@
       "title": "IngCrowd 雑談 05（人生・恋愛・人間関係。40 代女性 2 人、Zoom。逐語・時刻つき。非営利限定）",
       "audio": "ingcrowd-05-mix",
       "record": "ingcrowd-05-eaf",
-      "tracks": {"me": {"audio": "ingcrowd-05-a", "tier": "speaker_1"}, "other": {"audio": "ingcrowd-05-b", "tier": "speaker_2"}},
+      "tracks": {"me": {"audio": "ingcrowd-05-a", "tier": "speaker_2"}, "other": {"audio": "ingcrowd-05-b", "tier": "speaker_1"}},
+      "notes": "この対話だけ、話者 1 の音声（_individual_audio1.wav）が ELAN の層 speaker_2 に当たる（README の対応と逆。2026-11-19 に文字起こしとの突き合わせで確認: audio1 の出力は speaker_2 に CER 0.36、speaker_1 に 0.86）",
       "unit": "char",
       "langs": ["ja", "auto"],
       "noncommercial": true
