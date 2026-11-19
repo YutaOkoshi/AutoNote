@@ -48,10 +48,20 @@ public protocol UpdateArchiveExtracting: Sendable {
     func extract(_ zip: URL, into directory: URL) async throws
 }
 
+/// `ditto -x -k`, after `UpdateArchive.check` passed on the zip's directory (throws `UpdateArchiveError` otherwise,
+/// before anything is written). `ditto` and not `bsdtar`: the release zip is made by `ditto -c -k`, whose `._*`
+/// entries only `ditto` folds back into extended attributes; written out as files they would break the seal.
 public struct DittoExtractor: UpdateArchiveExtracting {
-    public init() {}
+    public var appName: String
+    public var limits: UpdateArchiveLimits
+
+    public init(appName: String = UpdateChecker.archiveAppName, limits: UpdateArchiveLimits = .init()) {
+        self.appName = appName
+        self.limits = limits
+    }
 
     public func extract(_ zip: URL, into directory: URL) async throws {
+        try UpdateArchive.check(UpdateArchive.entries(of: zip), appName: appName, limits: limits)
         let process = Process()
         process.executableURL = URL(filePath: "/usr/bin/ditto")
         process.arguments = ["-x", "-k", zip.path, directory.path]
@@ -79,6 +89,9 @@ public protocol CodeSignatureChecking: Sendable {
     /// The designated requirement of the signed bundle at `app`, as text
     /// (`identifier "…" and certificate leaf = H"…"` for the self-signed identity).
     func designatedRequirement(of app: URL) throws(CodeSignatureError) -> String
+    /// The designated requirement of this process, from the signature the kernel validated when it started
+    /// (`SecCodeCopySelf`), not from the bundle on disk, which could have been replaced since.
+    func designatedRequirementOfRunningProcess() throws(CodeSignatureError) -> String
     /// Checks that `app` is validly signed (strict, all architectures, nested code) and satisfies `requirement`.
     func check(_ app: URL, satisfies requirement: String) throws(CodeSignatureError)
 }
@@ -93,6 +106,22 @@ public struct SecCodeSignatureChecker: CodeSignatureChecking {
         guard status == errSecSuccess, let code else { throw .noRequirement(status) }
         var requirement: SecRequirement?
         status = SecCodeCopyDesignatedRequirement(code, [], &requirement)
+        guard status == errSecSuccess, let requirement else { throw .noRequirement(status) }
+        var text: CFString?
+        status = SecRequirementCopyString(requirement, [], &text)
+        guard status == errSecSuccess, let text else { throw .noRequirement(status) }
+        return text as String
+    }
+
+    public func designatedRequirementOfRunningProcess() throws(CodeSignatureError) -> String {
+        var me: SecCode?
+        var status = SecCodeCopySelf([], &me)
+        guard status == errSecSuccess, let me else { throw .noRequirement(status) }
+        status = SecCodeCheckValidity(me, [], nil)
+        guard status == errSecSuccess else { throw .invalid(status) }
+        var requirement: SecRequirement?
+        // A SecCode is accepted wherever a SecStaticCode is (both are code objects to the API).
+        status = SecCodeCopyDesignatedRequirement(unsafeBitCast(me, to: SecStaticCode.self), [], &requirement)
         guard status == errSecSuccess, let requirement else { throw .noRequirement(status) }
         var text: CFString?
         status = SecRequirementCopyString(requirement, [], &text)

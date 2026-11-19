@@ -25,10 +25,16 @@ struct UpdateTestFakeExtractor: UpdateArchiveExtracting {
     var bundleID = "com.yutaokoshi.autonote"
     var version = "0.7.0"
     var appCount = 1
+    /// A symlink inside the app pointing at this path (a zip that passed ditto but leaves the app).
+    var linkOutTo: String? = nil
     func extract(_ zip: URL, into directory: URL) async throws {
         for i in 0..<appCount {
             let app = directory.appending(path: i == 0 ? "AutoNote.app" : "Other\(i).app")
             try writeApp(app, bundleID: bundleID, version: version)
+        }
+        if let linkOutTo {
+            try FileManager.default.createSymbolicLink(atPath: directory.appending(path: "AutoNote.app/Contents/out").path,
+                                                       withDestinationPath: linkOutTo)
         }
     }
 }
@@ -44,9 +50,15 @@ func writeApp(_ app: URL, bundleID: String, version: String) throws {
 struct UpdateTestFakeSignatures: CodeSignatureChecking {
     var runningRequirement: String? = #"identifier "com.yutaokoshi.autonote" and certificate leaf = H"9d94""#
     var check: CodeSignatureError? = nil
+    /// What `SecCodeCopySelf` reports; nil means the same as the bundle's.
+    var processRequirement: String? = nil
     func designatedRequirement(of app: URL) throws(CodeSignatureError) -> String {
         guard let runningRequirement else { throw .noRequirement(-1) }
         return runningRequirement
+    }
+    func designatedRequirementOfRunningProcess() throws(CodeSignatureError) -> String {
+        guard let own = processRequirement ?? runningRequirement else { throw .noRequirement(-1) }
+        return own
     }
     func check(_ app: URL, satisfies requirement: String) throws(CodeSignatureError) {
         if let check { throw check }
@@ -57,19 +69,19 @@ struct UpdateTestFakeSignatures: CodeSignatureChecking {
     let zipBytes = Data("pretend zip".utf8)
     var zipDigest: String { SHA256.hash(data: zipBytes).map { String(format: "%02x", $0) }.joined() }
 
-    func feed(version: String = "0.7.0", digest: String? = nil) -> Data {
+    func feed(version: String = "0.7.0", digest: String? = nil, size: Int = 11) -> Data {
         let d = digest ?? zipDigest
-        return Data(#"{"tag_name":"v\#(version)","assets":[{"name":"AutoNote-\#(version)-macos-universal.zip","browser_download_url":"https://github.com/YutaOkoshi/AutoNote/releases/download/v\#(version)/AutoNote-\#(version)-macos-universal.zip","digest":"sha256:\#(d)"}]}"#.utf8)
+        return Data(#"{"tag_name":"v\#(version)","assets":[{"name":"AutoNote-\#(version)-macos-universal.zip","browser_download_url":"https://github.com/YutaOkoshi/AutoNote/releases/download/v\#(version)/AutoNote-\#(version)-macos-universal.zip","digest":"sha256:\#(d)","size":\#(size)}]}"#.utf8)
     }
 
     func checker(dir: URL, feed: Result<Data, URLError>? = nil, download: UpdateTestFakeDownloader? = nil,
                  extractor: UpdateTestFakeExtractor = UpdateTestFakeExtractor(), signatures: UpdateTestFakeSignatures = UpdateTestFakeSignatures(),
-                 running: Bool = true) -> UpdateChecker {
+                 running: Bool = true, fromProcess: Bool = false) -> UpdateChecker {
         let context = UpdateContext(
             feedURL: URL(string: "https://api.github.com/repos/YutaOkoshi/AutoNote/releases/latest")!,
             policy: .thisRepository, currentVersion: ReleaseVersion("0.6.0")!, bundleID: "com.yutaokoshi.autonote",
             runningApp: running ? URL(filePath: "/Applications/AutoNote.app") : nil,
-            directory: dir.appending(path: "updates"))
+            directory: dir.appending(path: "updates"), requirementFromProcess: fromProcess)
         return UpdateChecker(context: context, fetcher: UpdateTestFakeFetcher(result: feed ?? .success(self.feed())),
                              downloader: download ?? UpdateTestFakeDownloader(bytes: zipBytes), extractor: extractor,
                              signatures: signatures)
@@ -139,9 +151,60 @@ struct UpdateTestFakeSignatures: CodeSignatureChecking {
         let none = checker(dir: dir, extractor: UpdateTestFakeExtractor(appCount: 0))
         guard case .available(let r1) = try await none.check() else { return }
         await #expect(throws: UpdateFailure.noApp) { try await none.prepare(r1) }
+        // Something beside the app is not "pick the first": the whole zip is refused.
         let two = checker(dir: dir, extractor: UpdateTestFakeExtractor(appCount: 2))
         guard case .available(let r2) = try await two.check() else { return }
-        await #expect(throws: UpdateFailure.noApp) { try await two.prepare(r2) }
+        await #expect(throws: UpdateFailure.unsafeArchive) { try await two.prepare(r2) }
+    }
+
+    @Test func refusesAnUnpackedAppWithALinkOutAndLeavesNothing() async throws {
+        let dir = try TemporaryDirectory.make()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for target in ["/Users", "../../../../.."] {
+            let c = checker(dir: dir, extractor: UpdateTestFakeExtractor(linkOutTo: target))
+            guard case .available(let r) = try await c.check() else { Issue.record("not available"); return }
+            await #expect(throws: UpdateFailure.unsafeArchive) { try await c.prepare(r) }
+            #expect(!FileManager.default.fileExists(atPath: dir.appending(path: "updates/0.7.0").path))
+        }
+    }
+
+    @Test func refusesAReleaseOverTheSizeLimitBeforeDownloading() async throws {
+        let dir = try TemporaryDirectory.make()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let c = checker(dir: dir, feed: .success(feed(size: 600 << 20)),
+                        download: UpdateTestFakeDownloader(bytes: Data(), fails: true))
+        guard case .available(let r) = try await c.check() else { Issue.record("not available"); return }
+        await #expect(throws: UpdateFailure.tooLarge) { try await c.prepare(r) }
+    }
+
+    @Test func theYardstickIsTheRunningProcessAndMustMatchTheDisk() async throws {
+        let dir = try TemporaryDirectory.make()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let same = checker(dir: dir, fromProcess: true)
+        #expect(try same.runningRequirement().requirement.contains("certificate leaf"))
+        let swapped = checker(dir: dir, signatures: UpdateTestFakeSignatures(
+            processRequirement: #"identifier "com.yutaokoshi.autonote" and certificate leaf = H"other""#), fromProcess: true)
+        #expect(throws: UpdateFailure.runningAppChanged) { try swapped.runningRequirement() }
+        // The CLI's `--app` check reads the bundle only.
+        let cli = checker(dir: dir, signatures: UpdateTestFakeSignatures(processRequirement: "identifier x"))
+        #expect(try cli.runningRequirement().requirement.contains("certificate leaf"))
+    }
+
+    @Test func aStagedUpdateIsCheckedAgainBeforeTheSwap() async throws {
+        let dir = try TemporaryDirectory.make()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let c = checker(dir: dir)
+        guard case .available(let r) = try await c.check() else { Issue.record("not available"); return }
+        let staged = try await c.prepare(r)
+        try c.verifyStaged(staged)
+        let broken = checker(dir: dir, signatures: UpdateTestFakeSignatures(check: .invalid(-67061)))
+        #expect(throws: UpdateFailure.signatureInvalid) { try broken.verifyStaged(staged) }
+        // Replaced by a link while it waited.
+        let fm = FileManager.default
+        let elsewhere = dir.appending(path: "elsewhere.app")
+        try fm.moveItem(at: staged.app, to: elsewhere)
+        try fm.createSymbolicLink(at: staged.app, withDestinationURL: elsewhere)
+        #expect(throws: UpdateFailure.unsafeArchive) { try c.verifyStaged(staged) }
     }
 
     @Test func anAdHocOrBareRunningAppNeedsAManualUpdate() async throws {

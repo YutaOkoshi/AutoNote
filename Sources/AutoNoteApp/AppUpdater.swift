@@ -43,7 +43,7 @@ final class AppUpdater {
         let directory = paths.root.appending(path: "updates", directoryHint: .isDirectory)
         checker = UpdateChecker(context: UpdateContext(
             feedURL: feed.url, policy: feed.policy, currentVersion: version, bundleID: AppIdentity.bundleID,
-            runningApp: runningApp, directory: directory))
+            runningApp: runningApp, directory: directory, requirementFromProcess: true))
         store = UpdateStateStore(directory: directory)
         self.settings = settings
         self.environment = environment

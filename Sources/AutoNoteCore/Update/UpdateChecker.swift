@@ -7,7 +7,11 @@ public enum UpdateFailure: Error, Equatable, Sendable {
     case feed(ReleaseFeedError)
     case download
     case hashMismatch
+    /// The release's zip (or what it unpacks to) is over `UpdateArchiveLimits`.
+    case tooLarge
     case extract
+    /// The zip has entries that would land outside the unpack folder, links that leave the app, or more than the app.
+    case unsafeArchive
     /// The zip holds no single `.app`.
     case noApp
     case signatureInvalid
@@ -17,6 +21,8 @@ public enum UpdateFailure: Error, Equatable, Sendable {
     case bundleMismatch
     /// The running app is not inside an `.app`, or its own signature cannot be read.
     case notInstalledApp
+    /// The bundle on disk is no longer signed the way the running process is (replaced while it runs).
+    case runningAppChanged
     /// The running app is ad-hoc signed (its requirement is its own hash), so no other build can ever satisfy it.
     case adHocSigned
     /// The folder that holds the app cannot be written.
@@ -39,6 +45,9 @@ public enum UpdateFailure: Error, Equatable, Sendable {
         case .feed: "最新版の情報を読めませんでした"
         case .download: "最新版をダウンロードできませんでした"
         case .hashMismatch: "ダウンロードしたファイルの SHA-256 が最新版の情報と合わないため、入れ替えませんでした"
+        case .tooLarge: "最新版のファイルが想定より大きいため、取得しませんでした"
+        case .unsafeArchive: "ダウンロードしたファイルに想定外の項目（展開先の外を指すものなど）があるため、入れ替えませんでした"
+        case .runningAppChanged: "動いているアプリとディスク上のアプリの署名が違うため、自動では入れ替えません。再起動してから確認してください"
         case .extract, .noApp: "ダウンロードしたファイルを展開できませんでした"
         case .signatureInvalid: "ダウンロードしたアプリの署名が正しくないため、入れ替えませんでした"
         case .signatureMismatch: "ダウンロードしたアプリの署名がこのアプリと違うため、入れ替えませんでした"
@@ -76,9 +85,15 @@ public struct UpdateContext: Sendable {
     public var runningApp: URL?
     /// `<data>/updates`: downloads, unpacked apps, the state and the helper's result.
     public var directory: URL
+    /// True in the app: the requirement comes from this process (`SecCodeCopySelf`) and must equal the bundle's on
+    /// disk. False for `autonote dev update --check --app`, which checks another bundle from the CLI.
+    public var requirementFromProcess: Bool
+    public var limits: UpdateArchiveLimits
 
     public init(feedURL: URL, policy: UpdateURLPolicy, currentVersion: ReleaseVersion, bundleID: String, runningApp: URL?,
-                directory: URL) {
+                directory: URL, requirementFromProcess: Bool = false, limits: UpdateArchiveLimits = .init()) {
+        self.requirementFromProcess = requirementFromProcess
+        self.limits = limits
         self.feedURL = feedURL
         self.policy = policy
         self.currentVersion = currentVersion
@@ -121,6 +136,9 @@ public struct UpdateContext: Sendable {
 /// Check → download → SHA-256 → unpack → signature, requirement, bundle id and version. Every step that fails
 /// leaves nothing to install.
 public struct UpdateChecker: Sendable {
+    /// The one top-level item of a release zip (`ditto -c -k --keepParent build/AutoNote.app`).
+    public static let archiveAppName = "AutoNote.app"
+
     public let context: UpdateContext
     private let fetcher: any UpdateFeedFetching
     private let downloader: any ModelDownloading
@@ -129,12 +147,12 @@ public struct UpdateChecker: Sendable {
 
     public init(context: UpdateContext, fetcher: (any UpdateFeedFetching)? = nil,
                 downloader: (any ModelDownloading)? = nil,
-                extractor: any UpdateArchiveExtracting = DittoExtractor(),
+                extractor: (any UpdateArchiveExtracting)? = nil,
                 signatures: any CodeSignatureChecking = SecCodeSignatureChecker()) {
         self.context = context
         self.fetcher = fetcher ?? URLSessionFeedFetcher(policy: context.policy)
         self.downloader = downloader ?? UpdateDownloader(policy: context.policy)
-        self.extractor = extractor
+        self.extractor = extractor ?? DittoExtractor(limits: context.limits)
         self.signatures = signatures
     }
 
@@ -149,10 +167,16 @@ public struct UpdateChecker: Sendable {
     /// The running app's requirement, refused up front when it can never match another build.
     public func runningRequirement() throws(UpdateFailure) -> (app: URL, requirement: String) {
         guard let app = context.runningApp else { throw .notInstalledApp }
-        let requirement: String
-        do { requirement = try signatures.designatedRequirement(of: app) } catch { throw .notInstalledApp }
-        if requirement.hasPrefix("cdhash") { throw .adHocSigned }
-        return (app, requirement)
+        let onDisk: String
+        do { onDisk = try signatures.designatedRequirement(of: app) } catch { throw .notInstalledApp }
+        if onDisk.hasPrefix("cdhash") { throw .adHocSigned }
+        guard context.requirementFromProcess else { return (app, onDisk) }
+        // The yardstick is what this process was started as (review L6); a bundle swapped under it does not count.
+        let own: String
+        do { own = try signatures.designatedRequirementOfRunningProcess() } catch { throw .notInstalledApp }
+        if own.hasPrefix("cdhash") { throw .adHocSigned }
+        guard own == onDisk else { throw .runningAppChanged }
+        return (app, own)
     }
 
     /// Whether the folder holding the running app (and the app itself) can be written, which the swap needs.
@@ -168,6 +192,7 @@ public struct UpdateChecker: Sendable {
     public func prepare(_ release: UpdateRelease,
                         progress: @Sendable @escaping (Int64, Int64) -> Void = { _, _ in }) async throws(UpdateFailure) -> StagedUpdate {
         let (_, requirement) = try runningRequirement()
+        if let size = release.size, Int64(size) > context.limits.maxDownloadBytes { throw .tooLarge }
         let fm = FileManager.default
         let work = context.directory.appending(path: release.version.description, directoryHint: .isDirectory)
         removeStaleDownloads(keeping: work)
@@ -176,6 +201,11 @@ public struct UpdateChecker: Sendable {
 
         let zip = work.appending(path: "download.zip")
         do { try await downloader.download(release.zipURL, to: zip, progress: progress) } catch { throw .download }
+        let downloaded = (try? fm.attributesOfItem(atPath: zip.path)[.size] as? Int64) ?? 0
+        guard downloaded <= context.limits.maxDownloadBytes else {
+            try? fm.removeItem(at: work)
+            throw .tooLarge
+        }
         let digest: String
         do { digest = try FileHash.sha256(of: zip) } catch { throw .download }
         guard digest == release.sha256 else {
@@ -189,14 +219,24 @@ public struct UpdateChecker: Sendable {
             try await extractor.extract(zip, into: unpacked)
         } catch {
             try? fm.removeItem(at: work)
+            if let archive = error as? UpdateArchiveError {
+                NSLog("AutoNote: update: zip refused (%@)", String(describing: archive))
+                throw archive == .tooLarge || archive == .tooManyEntries ? .tooLarge : .unsafeArchive
+            }
             throw .extract
         }
         try? fm.removeItem(at: zip)
-        let apps = ((try? fm.contentsOfDirectory(at: unpacked, includingPropertiesForKeys: nil)) ?? [])
-            .filter { $0.pathExtension == "app" }
-        guard apps.count == 1, let app = apps.first else {
+        let app: URL
+        do {
+            app = try UpdateArchive.checkUnpacked(unpacked, appName: Self.archiveAppName, limits: context.limits)
+        } catch {
             try? fm.removeItem(at: work)
-            throw .noApp
+            NSLog("AutoNote: update: unpacked tree refused (%@)", String(describing: error))
+            switch error {
+            case .unexpectedLayout(let found) where !found.contains(".app"): throw .noApp
+            case .tooLarge, .tooManyEntries: throw .tooLarge
+            default: throw .unsafeArchive
+            }
         }
 
         do {
@@ -215,6 +255,24 @@ public struct UpdateChecker: Sendable {
             throw .bundleMismatch
         }
         return StagedUpdate(version: version, app: app, requirement: requirement)
+    }
+
+    /// Checks a staged update again right before the swap (review L1): it may have waited for days in a folder the
+    /// person can write. The same checks as `prepare`, against the requirement it was staged with.
+    public func verifyStaged(_ staged: StagedUpdate) throws(UpdateFailure) {
+        let unpacked = staged.app.deletingLastPathComponent()
+        do { try UpdateArchive.checkUnpacked(unpacked, appName: Self.archiveAppName, limits: context.limits) } catch {
+            throw .unsafeArchive
+        }
+        do {
+            try signatures.check(staged.app, satisfies: staged.requirement)
+        } catch .requirementNotMet {
+            throw .signatureMismatch
+        } catch {
+            throw .signatureInvalid
+        }
+        guard let facts = BundleFacts.read(staged.app), facts.bundleID == context.bundleID,
+              ReleaseVersion(facts.shortVersion) == staged.version else { throw .bundleMismatch }
     }
 
     /// Deletes version folders under the updates directory other than `keeping` (the cache never grows).
