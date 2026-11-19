@@ -43,7 +43,8 @@ public final class WhisperContext: WhisperCore, @unchecked Sendable {
         onProgress: @Sendable @escaping (Double) -> Void,
         shouldAbort: @Sendable @escaping () -> Bool
     ) async throws -> WhisperRunOutcome {
-        let callbacks = RunCallbacks(mode: r.mode, onSegment: onSegment, onProgress: onProgress, shouldAbort: shouldAbort)
+        let callbacks = RunCallbacks(mode: r.mode, scriptFilter: model.scriptFilter(r.scripts), onSegment: onSegment,
+                                     onProgress: onProgress, shouldAbort: shouldAbort)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<WhisperRunOutcome, Error>) in
                 queue.async { [self] in
@@ -93,6 +94,13 @@ public final class WhisperContext: WhisperCore, @unchecked Sendable {
             return Unmanaged<RunCallbacks>.fromOpaque(userData).takeUnretainedValue().checkAbort()
         }
         params.abort_callback_user_data = userData
+        if callbacks.scriptFilter != nil {
+            params.logits_filter_callback = { _, _, tokens, count, logits, userData in
+                guard let logits, let userData else { return }
+                Unmanaged<RunCallbacks>.fromOpaque(userData).takeUnretainedValue().filterLogits(tokens, Int(count), logits)
+            }
+            params.logits_filter_callback_user_data = userData
+        }
 
         let code = withExtendedLifetime(callbacks) {
             Self.languageCode(r.language).withCString { language in
@@ -127,14 +135,26 @@ private func withOptionalCString<T>(_ string: String?, _ body: (UnsafePointer<CC
 /// Bridges whisper's C callbacks (passed through `user_data`) to the Swift closures of one run.
 private final class RunCallbacks: @unchecked Sendable {
     let mode: WhisperDecodeMode
+    let scriptFilter: WhisperScriptFilter?
     let onSegment: @Sendable (WhisperSegment, [TimedToken]) -> Void
     let onProgress: @Sendable (Double) -> Void
     private let shouldAbort: @Sendable () -> Bool
     private let flags = Mutex((cancelled: false, abortRequested: false))
 
-    init(mode: WhisperDecodeMode, onSegment: @Sendable @escaping (WhisperSegment, [TimedToken]) -> Void,
+    init(mode: WhisperDecodeMode, scriptFilter: WhisperScriptFilter?, onSegment: @Sendable @escaping (WhisperSegment, [TimedToken]) -> Void,
          onProgress: @Sendable @escaping (Double) -> Void, shouldAbort: @Sendable @escaping () -> Bool) {
-        self.mode = mode; self.onSegment = onSegment; self.onProgress = onProgress; self.shouldAbort = shouldAbort
+        self.mode = mode; self.scriptFilter = scriptFilter
+        self.onSegment = onSegment; self.onProgress = onProgress; self.shouldAbort = shouldAbort
+    }
+
+    /// whisper's logits filter: called before every sampled token with the tokens decoded so far in this sequence.
+    /// May run on several decoder threads at once; `scriptFilter` is immutable.
+    func filterLogits(_ tokens: UnsafePointer<whisper_token_data>?, _ count: Int, _ logits: UnsafeMutablePointer<Float>) {
+        guard let scriptFilter else { return }
+        for id in scriptFilter.alwaysBanned { logits[Int(id)] = -.infinity }
+        guard let tokens, count > 0 else { return }
+        let history = (max(0, count - 3)..<count).map { tokens[$0].id }   // a split character spans at most 3 bytes before
+        for id in scriptFilter.banned(after: history) { logits[Int(id)] = -.infinity }
     }
 
     var abortRequested: Bool { flags.withLock { $0.abortRequested } }
@@ -181,8 +201,25 @@ private final class RunCallbacks: @unchecked Sendable {
 /// when the last one goes away.
 private final class SharedModel: @unchecked Sendable {
     let context: OpaquePointer
+    private let scriptFilters = Mutex<[ScriptRestriction: WhisperScriptFilter]>([:])
 
     private init(context: OpaquePointer) { self.context = context }
+
+    /// The filter for `restriction` on this model's vocabulary, built on first use (nil = no restriction).
+    func scriptFilter(_ restriction: ScriptRestriction) -> WhisperScriptFilter? {
+        guard restriction != .unrestricted else { return nil }
+        return scriptFilters.withLock { filters in
+            if let filter = filters[restriction] { return filter }
+            // Text tokens are the ids below EOT; EOT and everything after it (SOT, languages, timestamps) are special.
+            let vocabulary = (0..<whisper_token_eot(context)).map { id -> [UInt8] in
+                guard let text = whisper_token_to_str(context, id) else { return [] }
+                return Array(UnsafeRawBufferPointer(start: text, count: strlen(text)))
+            }
+            let filter = WhisperScriptFilter(restriction: restriction, vocabulary: vocabulary)
+            filters[restriction] = filter
+            return filter
+        }
+    }
 
     deinit { whisper_free(context) }
 

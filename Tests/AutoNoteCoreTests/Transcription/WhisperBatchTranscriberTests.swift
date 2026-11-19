@@ -334,4 +334,12 @@ extension WhisperBatchTranscriberTests {
         #expect(core.requests.map(\.samples.count) == [0])
         #expect(u.isEmpty)
     }
+
+    @Test(arguments: [(Language.ja, ScriptRestriction.japanese), (.en, .english), (.auto, .unrestricted)])
+    func requestCarriesTheScriptRestrictionOfTheLanguage(language: Language, expected: ScriptRestriction) async throws {
+        let core = FakeWhisperCore(segments: [.init(start: 0, end: 2, text: "こんにちは")])
+        _ = try await transcribe(core, language: language)
+        #expect(!core.requests.isEmpty)
+        #expect(core.requests.allSatisfy { $0.scripts == expected })
+    }
 }
