@@ -17,6 +17,7 @@ public final class HALMicrophoneEngine: MicrophoneEngine, @unchecked Sendable { 
     }
 
     private struct Listener {
+        var object: AudioObjectID
         var address: AudioObjectPropertyAddress
         var block: AudioObjectPropertyListenerBlock
     }
@@ -29,12 +30,28 @@ public final class HALMicrophoneEngine: MicrophoneEngine, @unchecked Sendable { 
     private var proc: AudioDeviceIOProcID?
     private var listeners: [Listener] = []
     private var running = false
+    /// Prepared with `deviceID == nil`: the graph reads whatever the default input was then, and must follow it.
+    private var followsDefault = false
 
     public init() {}
 
     public var isRunning: Bool {
         guard running, let device else { return false }
         return CoreAudioHardware.uint32Prop(device, kAudioDevicePropertyDeviceIsAlive).map { $0 != 0 } ?? false
+    }
+
+    /// The default input moved away from the device a default-following graph reads, or the device died.
+    public var needsRebuild: Bool {
+        guard let device else { return false }
+        let alive = CoreAudioHardware.uint32Prop(device, kAudioDevicePropertyDeviceIsAlive).map { $0 != 0 } ?? false
+        return Self.isStale(followsDefault: followsDefault, device: device,
+                            defaultInput: AudioRoute.defaultDevice(kAudioHardwarePropertyDefaultInputDevice), alive: alive)
+    }
+
+    static func isStale(followsDefault: Bool, device: AudioObjectID, defaultInput: AudioObjectID?, alive: Bool) -> Bool {
+        if !alive { return true }
+        guard followsDefault, let defaultInput else { return false }
+        return defaultInput != device
     }
 
     public func currentFormat() -> InputFormat? {
@@ -57,6 +74,7 @@ public final class HALMicrophoneEngine: MicrophoneEngine, @unchecked Sendable { 
         guard let fmt = Self.inputFormat(id) else { throw AudioSourceError.unsupportedFormat }
         device = id
         format = fmt
+        followsDefault = deviceID == nil
         addListeners(id)
         return fmt
     }
@@ -84,9 +102,10 @@ public final class HALMicrophoneEngine: MicrophoneEngine, @unchecked Sendable { 
         }
         proc = nil
         running = false
-        if let device { removeListeners(device) }
+        removeListeners()
         device = nil
         format = nil
+        followsDefault = false
     }
 
     /// The real-time body: copy into the ring and nothing else.
@@ -103,43 +122,60 @@ public final class HALMicrophoneEngine: MicrophoneEngine, @unchecked Sendable { 
 
     /// Nominal rate and channel count of the device's single input stream, when it is Float32.
     static func inputFormat(_ device: AudioObjectID) -> InputFormat? {
+        guard let (count, asbd) = streamDescription(device) else { return nil }
+        return inputFormat(streamCount: count, asbd: asbd)
+    }
+
+    /// One interleaved Float32 linear PCM stream: what `AudioRingBuffer` takes as one buffer.
+    static func inputFormat(streamCount: Int, asbd: AudioStreamBasicDescription) -> InputFormat? {
+        guard streamCount == 1, asbd.mFormatID == kAudioFormatLinearPCM, asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0,
+              asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved == 0 || asbd.mChannelsPerFrame == 1,
+              asbd.mBitsPerChannel == 32, asbd.mSampleRate > 0, asbd.mChannelsPerFrame > 0 else { return nil }
+        return InputFormat(sampleRate: asbd.mSampleRate, channels: Int(asbd.mChannelsPerFrame))
+    }
+
+    /// Input stream count and the first stream's virtual format.
+    private static func streamDescription(_ device: AudioObjectID) -> (Int, AudioStreamBasicDescription)? {
         var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams, mScope: kAudioObjectPropertyScopeInput,
                                                  mElement: kAudioObjectPropertyElementMain)
         var size: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr,
-              Int(size) / MemoryLayout<AudioStreamID>.size == 1 else { return nil }
-        var stream = AudioStreamID(0)
-        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &stream) == noErr else { return nil }
+        guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr else { return nil }
+        let count = Int(size) / MemoryLayout<AudioStreamID>.size
+        guard count >= 1 else { return nil }
+        var streams = [AudioStreamID](repeating: 0, count: count)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &streams) == noErr else { return nil }
+        let stream = streams[0]
         var asbd = AudioStreamBasicDescription()
         var asbdSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
         address = AudioObjectPropertyAddress(mSelector: kAudioStreamPropertyVirtualFormat, mScope: kAudioObjectPropertyScopeGlobal,
                                              mElement: kAudioObjectPropertyElementMain)
-        guard AudioObjectGetPropertyData(stream, &address, 0, nil, &asbdSize, &asbd) == noErr,
-              asbd.mFormatID == kAudioFormatLinearPCM, asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0,
-              asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved == 0, asbd.mBitsPerChannel == 32,
-              asbd.mSampleRate > 0, asbd.mChannelsPerFrame > 0 else { return nil }
-        return InputFormat(sampleRate: asbd.mSampleRate, channels: Int(asbd.mChannelsPerFrame))
+        guard AudioObjectGetPropertyData(stream, &address, 0, nil, &asbdSize, &asbd) == noErr else { return nil }
+        return (count, asbd)
     }
 
-    /// Rate, stream layout and liveness changes reach the source as configuration changes.
+    /// Rate, stream layout and liveness changes reach the source as configuration changes; so does a new default
+    /// input when the graph follows the default (then `needsRebuild` tells the source to move).
     private func addListeners(_ device: AudioObjectID) {
         let handler = self.handler
         let block: AudioObjectPropertyListenerBlock = { _, _ in handler.value.withLock { $0 }?() }
-        let selectors: [(AudioObjectPropertySelector, AudioObjectPropertyScope)] = [
-            (kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal),
-            (kAudioDevicePropertyStreamConfiguration, kAudioObjectPropertyScopeInput),
-            (kAudioDevicePropertyDeviceIsAlive, kAudioObjectPropertyScopeGlobal),
+        var targets: [(AudioObjectID, AudioObjectPropertySelector, AudioObjectPropertyScope)] = [
+            (device, kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal),
+            (device, kAudioDevicePropertyStreamConfiguration, kAudioObjectPropertyScopeInput),
+            (device, kAudioDevicePropertyDeviceIsAlive, kAudioObjectPropertyScopeGlobal),
         ]
-        for (selector, scope) in selectors {
+        if followsDefault {
+            targets.append((AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultInputDevice, kAudioObjectPropertyScopeGlobal))
+        }
+        for (object, selector, scope) in targets {
             var address = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
-            if AudioObjectAddPropertyListenerBlock(device, &address, listenerQueue, block) == noErr {
-                listeners.append(Listener(address: address, block: block))
+            if AudioObjectAddPropertyListenerBlock(object, &address, listenerQueue, block) == noErr {
+                listeners.append(Listener(object: object, address: address, block: block))
             }
         }
     }
 
-    private func removeListeners(_ device: AudioObjectID) {
-        for var l in listeners { AudioObjectRemovePropertyListenerBlock(device, &l.address, listenerQueue, l.block) }
+    private func removeListeners() {
+        for var l in listeners { AudioObjectRemovePropertyListenerBlock(l.object, &l.address, listenerQueue, l.block) }
         listeners = []
     }
 }
@@ -151,23 +187,42 @@ public final class RoutingMicrophoneEngine: MicrophoneEngine, @unchecked Sendabl
     private let hal: any MicrophoneEngine
     private let usesHAL: @Sendable (AudioDeviceID?, Bool) -> Bool
     private var active: (any MicrophoneEngine)?
+    private let defaultInput: @Sendable () -> AudioObjectID?
+    /// The default input at `prepare(deviceID: nil)`; nil when prepared for a fixed device.
+    private var preparedDefault: AudioObjectID?
     private static let logger = Logger(subsystem: "com.yutaokoshi.autonote", category: "MicrophoneSource")
 
     public init(av: any MicrophoneEngine = AVMicrophoneEngine(), hal: any MicrophoneEngine = HALMicrophoneEngine(),
-                usesHAL: @escaping @Sendable (AudioDeviceID?, Bool) -> Bool = RoutingMicrophoneEngine.bluetoothWithoutVoiceProcessing) {
+                usesHAL: @escaping @Sendable (AudioDeviceID?, Bool) -> Bool = RoutingMicrophoneEngine.bluetoothWithoutVoiceProcessing,
+                defaultInput: (@Sendable () -> AudioObjectID?)? = nil) {
         self.av = av; self.hal = hal; self.usesHAL = usesHAL
+        self.defaultInput = defaultInput ?? { AudioRoute.defaultDevice(kAudioHardwarePropertyDefaultInputDevice) }
     }
 
     public static let bluetoothWithoutVoiceProcessing: @Sendable (AudioDeviceID?, Bool) -> Bool = { deviceID, voiceProcessing in
-        guard !voiceProcessing,
-              let id = deviceID ?? AudioRoute.defaultDevice(kAudioHardwarePropertyDefaultInputDevice),
-              CoreAudioHardware.uint32Prop(id, kAudioDevicePropertyTransportType) == kAudioDeviceTransportTypeBluetooth else { return false }
-        return HALMicrophoneEngine.inputFormat(id) != nil
+        guard !voiceProcessing, let id = deviceID ?? AudioRoute.defaultDevice(kAudioHardwarePropertyDefaultInputDevice) else { return false }
+        return choosesHAL(transportType: CoreAudioHardware.uint32Prop(id, kAudioDevicePropertyTransportType), voiceProcessing: false,
+                          singleFloat32Stream: HALMicrophoneEngine.inputFormat(id) != nil)
     }
 
+    /// Bluetooth classic or LE (as `CoreAudioHardware.transport` counts them), no voice processing, a stream the HAL
+    /// engine can read.
+    static func choosesHAL(transportType: UInt32?, voiceProcessing: Bool, singleFloat32Stream: Bool) -> Bool {
+        !voiceProcessing && singleFloat32Stream && CoreAudioHardware.transport(coreAudio: transportType) == .bluetooth
+    }
+
+    // Read on the source's control queue only (like `prepare`, which replaces `active`).
     public var isRunning: Bool { active?.isRunning ?? false }
     public func currentFormat() -> InputFormat? { active?.currentFormat() }
-    public func routeDescription() -> String { (active ?? av).routeDescription() }
+    /// Prepared for the default input and the default moved (whichever engine runs: the new default may need the other
+    /// one), or the active engine says so.
+    public var needsRebuild: Bool {
+        if let preparedDefault, let now = defaultInput(), now != preparedDefault { return true }
+        return active?.needsRebuild ?? false
+    }
+    /// Called from the source's actor, off the control queue: must not read `active`. Both engines describe the
+    /// default route the same way.
+    public func routeDescription() -> String { AudioRoute.describeDefaults() }
 
     public func setConfigurationChangeHandler(_ handler: (@Sendable () -> Void)?) {
         av.setConfigurationChangeHandler(handler)
@@ -181,6 +236,7 @@ public final class RoutingMicrophoneEngine: MicrophoneEngine, @unchecked Sendabl
             Self.logger.notice("mic engine: \(engine === self.hal ? "HAL IOProc (bluetooth input)" : "AVAudioEngine", privacy: .public)")
         }
         active = engine
+        preparedDefault = deviceID == nil ? defaultInput() : nil
         return try engine.prepare(deviceID: deviceID, voiceProcessing: voiceProcessing)
     }
 

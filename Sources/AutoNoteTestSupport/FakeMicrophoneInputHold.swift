@@ -12,6 +12,7 @@ public final class FakeMicrophoneInputHold: MicrophoneInputHolding, Sendable {
         var steady = true
         var holdsBluetooth = true
         var steadyAt: ContinuousClock.Instant?
+        var current = true
     }
 
     private let state = Mutex(State())
@@ -32,11 +33,21 @@ public final class FakeMicrophoneInputHold: MicrophoneInputHolding, Sendable {
         set { state.withLock { $0.steady = newValue; if newValue { $0.steadyAt = .now } } }
     }
     public var steadyAt: ContinuousClock.Instant? { state.withLock { $0.steadyAt } }
+    /// Whether the held device is still the one to hold (`isHolding`). Set false to play a new default input or a
+    /// device that came back with a new ID; the next `hold` sets it true again.
+    public var current: Bool {
+        get { state.withLock { $0.current } }
+        set { state.withLock { $0.current = newValue } }
+    }
+
+    public func isHolding(deviceID: AudioDeviceID?) -> Bool { state.withLock { $0.held && $0.current } }
 
     public func hold(deviceID: AudioDeviceID?) -> Bool {
         state.withLock { s in
             s.holds += 1
+            if s.held { s.releases += 1 }   // `hold` releases what it held first
             s.held = s.holdsBluetooth
+            s.current = true
             return s.holdsBluetooth
         }
     }

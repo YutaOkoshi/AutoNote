@@ -21,14 +21,19 @@ public struct MicrophoneRecoveryPolicy: Sendable, Equatable {
     public var holdSettle: Duration
     /// …waiting at most this long; then the rebuild goes on anyway.
     public var holdSettleTimeout: Duration
+    /// After a rebuild, callbacks flowing this long without another rebuild give the `maxRebuilds` budget back, so a
+    /// long meeting with now-and-then interruptions never runs out of it.
+    public var rebuildBudgetReset: Duration
 
     public init(checkInterval: Duration = .milliseconds(250), settleDelay: Duration = .milliseconds(300),
                 stallTimeout: Duration = .seconds(2), retryDelay: Duration = .milliseconds(500),
                 maxConsecutiveFailures: Int = 5, maxRebuilds: Int = 30,
-                holdSettle: Duration = .milliseconds(300), holdSettleTimeout: Duration = .seconds(2)) {
+                holdSettle: Duration = .milliseconds(300), holdSettleTimeout: Duration = .seconds(2),
+                rebuildBudgetReset: Duration = .seconds(60)) {
         self.checkInterval = checkInterval; self.settleDelay = settleDelay; self.stallTimeout = stallTimeout
         self.retryDelay = retryDelay; self.maxConsecutiveFailures = maxConsecutiveFailures; self.maxRebuilds = maxRebuilds
         self.holdSettle = holdSettle; self.holdSettleTimeout = holdSettleTimeout
+        self.rebuildBudgetReset = rebuildBudgetReset
     }
 
     public static let standard = MicrophoneRecoveryPolicy()
@@ -94,6 +99,10 @@ public actor MicrophoneSource: AudioSource {
     private var lastRebuildStartedAt: ContinuousClock.Instant?
     private var consecutiveFailures = 0
     private var rebuilds = 0
+    /// Rebuilds counted against `maxRebuilds`; back to 0 after `rebuildBudgetReset` of flowing callbacks.
+    private var rebuildsInBudget = 0
+    /// Since when callbacks have flowed without a rebuild in between (nil right after a rebuild until the first one).
+    private var healthySince: ContinuousClock.Instant?
     private var nextRebuildAllowedAt = ContinuousClock.now
     private var gaveUp = false
     /// Whether `inputHold` holds a Bluetooth input for this recording.
@@ -215,6 +224,8 @@ public actor MicrophoneSource: AudioSource {
         lastRebuildStartedAt = nil
         consecutiveFailures = 0
         rebuilds = 0
+        rebuildsInBudget = 0
+        healthySince = nil
         nextRebuildAllowedAt = .now
         gaveUp = false
     }
@@ -253,26 +264,41 @@ public actor MicrophoneSource: AudioSource {
                 Self.logger.notice("mic callbacks are back after rebuild")
             }
             consecutiveFailures = 0
+            let since = healthySince ?? now
+            healthySince = since
+            if rebuildsInBudget > 0, now - since >= policy.rebuildBudgetReset {
+                Self.logger.notice("mic ran \(Self.seconds(now - since), privacy: .public) s without a rebuild: rebuild budget reset (\(self.rebuildsInBudget, privacy: .public) used)")
+                rebuildsInBudget = 0
+            }
         }
         let engine = self.engine
-        let running = await onControlQueueValue { engine.isRunning }
-        guard case .running = state, rebuildTask == nil else { return }
+        // Staleness first and alone: on a stale graph `AVAudioEngine.isRunning` can block for seconds while the engine
+        // follows a new Bluetooth default input by itself (seen on the real headset).
+        let stale = await onControlQueueValue { engine.needsRebuild }
+        let running = stale ? true : await onControlQueueValue { engine.isRunning }
+        // `stop()` (or a give-up) may have run while this check waited on the control queue.
+        guard case .running = state, rebuildTask == nil, !gaveUp else { return }
 
         var reason: String?
         if let changedAt = configurationChangedAt {
             // Kept pending through a back-off, so a format change is never dropped.
             guard now - changedAt >= policy.settleDelay, now >= nextRebuildAllowedAt else { return }
             configurationChangedAt = nil
-            let current = await onControlQueueValue { engine.currentFormat() }
+            let current = stale ? nil : await onControlQueueValue { engine.currentFormat() }
+            guard case .running = state, rebuildTask == nil, !gaveUp else { return }
             // Missing callbacks after the change are left to the stall check below (`stallTimeout`): right after an
             // A2DP → HFP switch the first callback can take longer than the settle delay.
-            if pipeline == nil || !running {
+            if stale {
+                reason = "input device changed"
+            } else if pipeline == nil || !running {
                 reason = "engine stopped after configuration change"
             } else if let current, current != pipeline?.format {
                 reason = "input format changed to \(Self.describe(current))"
             } else {
                 Self.logger.notice("mic engine kept running after configuration change (\(Self.describe(self.pipeline?.format), privacy: .public))")
             }
+        } else if stale {
+            reason = "input device changed"
         } else if pipeline == nil || !running {
             reason = "engine not running"
         } else if now - lastCallbackAt >= policy.stallTimeout {
@@ -280,7 +306,7 @@ public actor MicrophoneSource: AudioSource {
         }
         guard let reason else { return }
         guard now >= nextRebuildAllowedAt else { return }
-        if consecutiveFailures >= policy.maxConsecutiveFailures || rebuilds >= policy.maxRebuilds {
+        if consecutiveFailures >= policy.maxConsecutiveFailures || rebuildsInBudget >= policy.maxRebuilds {
             await giveUp(reason: reason)
             return
         }
@@ -291,6 +317,8 @@ public actor MicrophoneSource: AudioSource {
         defer { rebuildTask = nil }
         lastRebuildStartedAt = .now
         rebuilds += 1
+        rebuildsInBudget += 1
+        healthySince = nil
         consecutiveFailures += 1
         health?.noteRestart()
         let attempt = rebuilds
@@ -313,6 +341,19 @@ public actor MicrophoneSource: AudioSource {
         do { deviceID = try resolveDevice() } catch {
             fail(attempt, "device lookup", error, backoff: backoff)
             return
+        }
+        // The held input may no longer be the one to hold: a new default input, or a device back with a new ID.
+        let hold = inputHold
+        let stillHeld = await controlQueue.runAwaiting(timeout: timeout, { hold.isHolding(deviceID: deviceID) },
+                                                       abandoned: { _ in }) ?? false
+        if !stillHeld {
+            let wasHolding = holdingInput
+            holdingInput = await controlQueue.runAwaiting(timeout: timeout, { hold.hold(deviceID: deviceID) },
+                                                          abandoned: { held in if held { hold.release() } }) ?? false
+            if wasHolding || holdingInput {
+                Self.logger.notice("mic rebuild #\(attempt, privacy: .public): input hold \(self.holdingInput ? "moved to the current input" : "released (the input is not bluetooth)", privacy: .public)")
+            }
+            guard case .running = state else { return }
         }
         if holdingInput {
             await waitForSteadyInput(attempt)
@@ -364,6 +405,7 @@ public actor MicrophoneSource: AudioSource {
 
     /// Stops trying: the engine is stopped, the track stays silent (the timeline fills it) and the owner learns of it.
     private func giveUp(reason: String) async {
+        guard case .running = state, !gaveUp else { return }
         gaveUp = true
         watchdog?.cancel(); watchdog = nil
         let engine = self.engine

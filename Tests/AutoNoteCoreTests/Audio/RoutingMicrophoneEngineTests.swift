@@ -49,3 +49,35 @@ import AutoNoteTestSupport
         #expect(called.value.withLock { $0 })
     }
 }
+
+/// REVIEW.md M2 on the routing level: recording from the default input, a new default input means a rebuild whichever
+/// engine runs (AVAudioEngine would otherwise follow a new Bluetooth default itself and wait seconds in its own
+/// Bluetooth format setup, as seen on the real headset).
+@Suite struct RoutingMicrophoneEngineDefaultInputTests {
+    private final class DefaultInput: Sendable {
+        let id = Mutex<AudioObjectID?>(5)
+    }
+
+    @Test func aNewDefaultInputNeedsARebuildWhenThePreparedGraphFollowedTheDefault() throws {
+        let av = FakeMicrophoneEngine(), hal = FakeMicrophoneEngine()
+        let current = DefaultInput()
+        let engine = RoutingMicrophoneEngine(av: av, hal: hal, usesHAL: { _, _ in false }, defaultInput: { current.id.withLock { $0 } })
+        _ = try engine.prepare(deviceID: nil, voiceProcessing: false)
+        #expect(!engine.needsRebuild)
+        current.id.withLock { $0 = 9 }
+        #expect(engine.needsRebuild)
+        _ = try engine.prepare(deviceID: nil, voiceProcessing: false)
+        #expect(!engine.needsRebuild)
+    }
+
+    @Test func aFixedDeviceIgnoresTheDefaultInput() throws {
+        let av = FakeMicrophoneEngine(), hal = FakeMicrophoneEngine()
+        let current = DefaultInput()
+        let engine = RoutingMicrophoneEngine(av: av, hal: hal, usesHAL: { _, _ in false }, defaultInput: { current.id.withLock { $0 } })
+        _ = try engine.prepare(deviceID: 3, voiceProcessing: false)
+        current.id.withLock { $0 = 9 }
+        #expect(!engine.needsRebuild)
+        av.needsRebuild = true
+        #expect(engine.needsRebuild)   // the active engine's own staleness still counts
+    }
+}

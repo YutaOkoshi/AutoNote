@@ -49,10 +49,14 @@ public protocol MicrophoneEngine: AnyObject, Sendable {
     func setConfigurationChangeHandler(_ handler: (@Sendable () -> Void)?)
     /// Default input / output for diagnostics (transport, rate, channels, running). No names.
     func routeDescription() -> String
+    /// True when the prepared graph reads a device that is no longer the one to read (the default input changed under
+    /// a graph that followed it, or its device disappeared) though it may still run with the same format.
+    var needsRebuild: Bool { get }
 }
 
 extension MicrophoneEngine {
     public func routeDescription() -> String { "unavailable" }
+    public var needsRebuild: Bool { false }
 }
 
 /// `AVAudioEngine` input node with a tap that copies each buffer into the ring.

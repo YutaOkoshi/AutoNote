@@ -18,6 +18,8 @@ public final class FakeMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {
     private var _notificationDelay = 0.003
     private var _prepareError: (any Error)?
     private var _prepareErrorsLeft = 0
+    private var _needsRebuild = false
+    private var _currentFormatDelay = 0.0
     private var handler: (@Sendable () -> Void)?
     private var ring: AudioRingBuffer?
 
@@ -54,6 +56,17 @@ public final class FakeMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {
         set { lock.withLock { _notificationDelay = newValue } }
     }
 
+    /// What `needsRebuild` answers until the next `prepare` (which clears it): the device it reads went stale.
+    public var needsRebuild: Bool {
+        get { lock.withLock { _needsRebuild } }
+        set { lock.withLock { _needsRebuild = newValue } }
+    }
+    /// Seconds `currentFormat` blocks its caller (the source's control queue), to pause a check mid-way.
+    public var currentFormatDelay: Double {
+        get { lock.withLock { _currentFormatDelay } }
+        set { lock.withLock { _currentFormatDelay = newValue } }
+    }
+
     /// The next `count` `prepare` calls throw `error`.
     public func failPrepare(_ count: Int, with error: any Error) {
         lock.withLock { _prepareErrorsLeft = count; _prepareError = error }
@@ -68,6 +81,7 @@ public final class FakeMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {
                 throw error
             }
             _isStopped = false
+            _needsRebuild = false
             return _format
         }
     }
@@ -98,7 +112,11 @@ public final class FakeMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {
         lock.withLock { ring = nil; _isStopped = true; _isRunning = false }
     }
 
-    public func currentFormat() -> InputFormat? { lock.withLock { _format } }
+    public func currentFormat() -> InputFormat? {
+        let delay = lock.withLock { _currentFormatDelay }
+        if delay > 0 { Thread.sleep(forTimeInterval: delay) }
+        return lock.withLock { _format }
+    }
 
     public func setConfigurationChangeHandler(_ handler: (@Sendable () -> Void)?) {
         lock.withLock { self.handler = handler }

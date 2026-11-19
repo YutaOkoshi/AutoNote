@@ -16,7 +16,7 @@ private final class Chunks: Sendable {
     }
 }
 
-private final class FailureMessage: Sendable {
+final class FailureMessage: Sendable {
     private let value = Mutex<String?>(nil)
     var message: String? { value.withLock { $0 } }
     func set(_ m: String) { value.withLock { $0 = m } }
@@ -41,7 +41,7 @@ func makeRecoveringMicSource(_ engine: FakeMicrophoneEngine, _ clock: MeetingClo
 }
 
 /// Pushes 50 ms of input every 20 ms of wall time, advancing host time, until cancelled.
-private func feed(_ engine: FakeMicrophoneEngine, host: FakeHostClock, from: Double) -> Task<Void, Never> {
+func feed(_ engine: FakeMicrophoneEngine, host: FakeHostClock, from: Double) -> Task<Void, Never> {
     Task.detached {
         var t = from
         while !Task.isCancelled {
@@ -308,5 +308,152 @@ private func feed(_ engine: FakeMicrophoneEngine, host: FakeHostClock, from: Dou
         #expect(hold.releaseCount == 1)
         await src.stop()
         #expect(hold.releaseCount == 1)
+    }
+}
+
+/// REVIEW.md follow-ups on the recovery loop (L1, L6, L7, M2).
+@Suite struct MicrophoneRecoveryReviewTests {
+    private func source(_ engine: FakeMicrophoneEngine, _ clock: MeetingClock, hold: FakeMicrophoneInputHold? = nil,
+                        _ tweak: (inout MicrophoneRecoveryPolicy) -> Void = { _ in }) -> MicrophoneSource {
+        var policy = micRecoveryTestPolicy
+        policy.holdSettle = .milliseconds(20)
+        policy.holdSettleTimeout = .milliseconds(200)
+        tweak(&policy)
+        return MicrophoneSource(deviceUID: nil, clock: clock, permission: FakeMicrophonePermission(.authorized), engine: engine,
+                                lookup: FakeDeviceLookup(), policy: policy, inputHold: hold ?? FakeMicrophoneInputHold(steady: true))
+    }
+
+    /// L1: `stop()` while a check waits on the engine; the check must not give up (and report) afterwards.
+    @Test func stopDuringAPausedCheckNeitherGivesUpNorReports() async throws {
+        let engine = FakeMicrophoneEngine()   // never pushes: every start stalls
+        let src = source(engine, .fake()) { $0.maxConsecutiveFailures = 1; $0.stallTimeout = .seconds(5) }
+        let failure = FailureMessage()
+        try await src.start { _ in }
+        src.health?.setFailureObserver { failure.set($0) }
+        engine.simulateConfigurationChange(stopEngine: true)
+        #expect(await eventuallyTrue { engine.startCount == 2 })        // rebuild #1: consecutive failures = 1
+        engine.currentFormatDelay = 0.4                                // the next check pauses in currentFormat
+        engine.simulateConfigurationChange(stopEngine: true)           // …with a reason to give up when it resumes
+        try await Task.sleep(for: .milliseconds(150))
+        await src.stop()
+        try await Task.sleep(for: .milliseconds(600))
+        #expect(failure.message == nil)
+        #expect(engine.isStopped)
+    }
+
+    /// L6: callbacks flowing long enough after a rebuild give the rebuild budget back.
+    @Test func theRebuildBudgetComesBackAfterHealthyRunning() async throws {
+        let host = FakeHostClock(); let clock = MeetingClock.fake(host)
+        let engine = FakeMicrophoneEngine()
+        let src = source(engine, clock) { $0.maxRebuilds = 2; $0.rebuildBudgetReset = .milliseconds(250) }
+        let failure = FailureMessage()
+        try await src.start { _ in }
+        src.health?.setFailureObserver { failure.set($0) }
+        let feeder = feed(engine, host: host, from: 0)
+        defer { feeder.cancel() }
+        for round in 1...4 {
+            try await Task.sleep(for: .milliseconds(450))
+            engine.simulateConfigurationChange(stopEngine: true)
+            #expect(await eventuallyTrue { engine.startCount == round + 1 && engine.isRunning })
+        }
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(failure.message == nil)
+        #expect(await src.rebuildCount == 4)
+        await src.stop()
+    }
+
+    /// L6: without that healthy stretch the budget still ends the recovery (and reports once).
+    @Test func theRebuildBudgetRunsOutWithoutHealthyRunning() async throws {
+        let host = FakeHostClock(); let clock = MeetingClock.fake(host)
+        let engine = FakeMicrophoneEngine()
+        let src = source(engine, clock) { $0.maxRebuilds = 2; $0.rebuildBudgetReset = .seconds(30) }
+        let failure = FailureMessage()
+        try await src.start { _ in }
+        src.health?.setFailureObserver { failure.set($0) }
+        let feeder = feed(engine, host: host, from: 0)
+        defer { feeder.cancel() }
+        for _ in 1...3 {
+            try await Task.sleep(for: .milliseconds(150))
+            engine.simulateConfigurationChange(stopEngine: true)
+        }
+        #expect(await eventuallyTrue { failure.message != nil })
+        #expect(engine.startCount == 3)
+        await src.stop()
+    }
+
+    /// M2: the engine reads a device that is no longer the one to read; same format, still running.
+    @Test func aStaleDeviceIsRebuiltAfterAConfigurationChange() async throws {
+        let host = FakeHostClock(); let clock = MeetingClock.fake(host)
+        let engine = FakeMicrophoneEngine()
+        let src = source(engine, clock)
+        try await src.start { _ in }
+        let feeder = feed(engine, host: host, from: 0)
+        defer { feeder.cancel() }
+        try await Task.sleep(for: .milliseconds(150))
+        engine.needsRebuild = true
+        engine.simulateConfigurationChange(stopEngine: false)
+        #expect(await eventuallyTrue { engine.startCount == 2 })
+        await src.stop()
+    }
+
+    /// M2: also when the notification was missed.
+    @Test func aStaleDeviceIsRebuiltWithoutANotification() async throws {
+        let host = FakeHostClock(); let clock = MeetingClock.fake(host)
+        let engine = FakeMicrophoneEngine()
+        let src = source(engine, clock)
+        try await src.start { _ in }
+        let feeder = feed(engine, host: host, from: 0)
+        defer { feeder.cancel() }
+        try await Task.sleep(for: .milliseconds(150))
+        engine.needsRebuild = true
+        #expect(await eventuallyTrue { engine.startCount == 2 })
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(engine.startCount == 2)   // cleared by the rebuild's prepare: no loop
+        await src.stop()
+    }
+
+    /// M2 / L7: a rebuild holds the input again when the held device is no longer the one (new default, new ID).
+    @Test func aRebuildHoldsAgainWhenTheHeldDeviceWasReplaced() async throws {
+        let engine = FakeMicrophoneEngine()
+        let hold = FakeMicrophoneInputHold()
+        let src = source(engine, .fake(), hold: hold)
+        try await src.start { _ in }
+        #expect(hold.holdCount == 1)
+        hold.current = false   // the device went away and came back with a new ID
+        engine.simulateConfigurationChange(stopEngine: true)
+        #expect(await eventuallyTrue { engine.startCount == 2 && engine.isRunning })
+        #expect(hold.holdCount == 2)
+        #expect(hold.isHeld)
+        await src.stop()
+        #expect(!hold.isHeld)
+    }
+
+    /// M2: the new default input is not Bluetooth: the rebuild lets the headset go (no HFP for the rest of the meeting).
+    @Test func aRebuildReleasesTheHoldWhenTheNewInputIsNotBluetooth() async throws {
+        let engine = FakeMicrophoneEngine()
+        let hold = FakeMicrophoneInputHold()
+        let src = source(engine, .fake(), hold: hold)
+        try await src.start { _ in }
+        #expect(hold.isHeld)
+        hold.current = false        // default input switched to the built-in microphone
+        hold.holdsBluetooth = false
+        engine.needsRebuild = true
+        engine.simulateConfigurationChange(stopEngine: false)
+        #expect(await eventuallyTrue { engine.startCount == 2 && engine.isRunning })
+        #expect(!hold.isHeld)
+        #expect(hold.releaseCount == 1)
+        await src.stop()
+        #expect(hold.releaseCount == 1)
+    }
+
+    /// The held device stays the same: no second hold (HFP must not drop during a rebuild).
+    @Test func aRebuildKeepsTheHoldOfTheSameDevice() async throws {
+        let engine = FakeMicrophoneEngine(); engine.stopItselfOnStarts = 1
+        let hold = FakeMicrophoneInputHold()
+        let src = source(engine, .fake(), hold: hold)
+        try await src.start { _ in }
+        #expect(await eventuallyTrue { engine.startCount == 2 && engine.isRunning })
+        #expect(hold.holdCount == 1 && hold.releaseCount == 0)
+        await src.stop()
     }
 }
