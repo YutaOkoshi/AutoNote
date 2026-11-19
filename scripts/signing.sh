@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # リリース署名の鍵まわり。鍵（「AutoNote Dev」の p12）の正は 1Password、GitHub には Environment「release」の Secrets に写しを置く。
-# 値（p12・パスワード）は画面・ログ・ファイルに残さない（一時ファイルは 0700 のディレクトリに置き、終了時に消す）。
+# 値（p12・パスワード）は画面・ログに出さない。長く使うパスワード（p12 のもの）はコマンドラインにも出さない:
+#   - openssl には環境変数で渡す（-passin/-passout env:…）。復号した鍵はパイプの中だけを通り、ファイルにしない
+#   - security import は -P でしか受け取れないので、使い捨てのパスワードで包み直した p12 を渡す（引数に一瞬出るのは
+#     その使い捨ての値だけで、包み直した p12 は取り込んだらすぐ消す）。一時キーチェーンのパスワードも使い捨て
+#   - op には標準入力かテンプレートのファイル（0700 のディレクトリ）で渡す
+#   一時ファイルは 0700 のディレクトリに置き、終了時に消す（SIGKILL では残りうる。中身は暗号化した p12 だけ）。
 #
 # 使い方:
 #   scripts/signing.sh check <AutoNote.app> [<SHA-1>]
@@ -16,7 +21,8 @@
 #       さらに期待値違いの check が失敗することも確かめる。login キーチェーンと検索リストは変えない。
 #   scripts/signing.sh export-to-1password
 #       login キーチェーンの「AutoNote Dev」（証明書と秘密鍵）を p12 にして 1Password に保存し、GitHub の Environment
-#       「release」の Secrets に入れる。要: `op` にサインイン済み（1Password アプリの CLI 連携）、`gh` にログイン済み。
+#       「release」の Secrets に入れる。要: `op` にサインイン済み（1Password アプリの CLI 連携）、`gh` にログイン済み、swift。
+#       書き出すのはこの 1 件だけ（scripts/export-identity.swift。`security export` はすべての identity を書き出すため使わない）。
 #       鍵の書き出しで macOS がキーチェーンのパスワードを 1 回たずねる（秘密鍵の ACL は codesign だけを許すため）。
 #       OP_VAULT（既定 Personal。無ければ保管庫の一覧を出して止まる）、OP_ITEM_PREFIX（既定「AutoNote release signing」）、GH_REPO（既定 YutaOkoshi/AutoNote）。
 #   scripts/signing.sh import-login
@@ -40,6 +46,7 @@ OPENSSL="$(command -v /opt/homebrew/bin/openssl || command -v /usr/local/bin/ope
 
 die() { echo "エラー: $*" >&2; exit 1; }
 lower() { tr '[:upper:]' '[:lower:]'; }
+sha1_of_pem() { "${OPENSSL}" x509 -noout -fingerprint -sha1 | sed 's/.*=//; s/://g' | lower; }
 
 private_dir() { (umask 077; mktemp -d "${TMPDIR:-/tmp}/autonote-signing.XXXXXX"); }
 
@@ -47,6 +54,37 @@ private_dir() { (umask 077; mktemp -d "${TMPDIR:-/tmp}/autonote-signing.XXXXXX")
 pkcs12_compat() {
     if "${OPENSSL}" version | grep -q "^LibreSSL"; then return; fi
     printf '%s\n' -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1
+}
+
+# p12_pem <p12> <パスワードの環境変数名> [openssl の追加の引数…]: 中身を PEM で標準出力へ（パイプで次へ渡すだけにする）。
+# macOS の書き出し（RC2-40）は OpenSSL 3 以降では -legacy が要る
+p12_pem() {
+    local file="$1" var="$2"
+    shift 2
+    "${OPENSSL}" pkcs12 -in "${file}" -passin "env:${var}" -nodes "$@" 2>/dev/null \
+        || "${OPENSSL}" pkcs12 -legacy -in "${file}" -passin "env:${var}" -nodes "$@" 2>/dev/null
+}
+
+# repack_p12 <元の p12> <元のパスワードの環境変数名> <出力> <新しいパスワードの環境変数名> <名前>:
+# security import が読める形式（pkcs12_compat）で、新しいパスワードで包み直す。平文の鍵はプロセス置換のパイプの中
+# だけを通る（here-string や一時ファイルは使わない: bash は here-string を一時ファイルに書く）。鍵と証明書は別の
+# パイプで渡す（openssl は -in を 2 回読むので、1 本のパイプでは証明書を読めない）
+repack_p12() {
+    # shellcheck disable=SC2046
+    "${OPENSSL}" pkcs12 -export $(pkcs12_compat) -name "$5" -passout "env:$4" -out "$3" \
+        -inkey <(p12_pem "$1" "$2" -nocerts) -in <(p12_pem "$1" "$2" -nokeys -clcerts) \
+        || die "p12 を開けません（パスワードが違うか、形式が読めない）"
+}
+
+# import_p12 <p12> <パスワードの環境変数名> <キーチェーン>: 使い捨てのパスワードで包み直してから取り込む
+import_p12() {
+    local work="$(dirname "$1")"
+    AUTONOTE_ONCE="$("${OPENSSL}" rand -hex 24)"
+    export AUTONOTE_ONCE
+    repack_p12 "$1" "$2" "${work}/once.p12" AUTONOTE_ONCE "${AUTONOTE_CERT_NAME}"
+    security import "${work}/once.p12" -k "$3" -f pkcs12 -P "${AUTONOTE_ONCE}" -T /usr/bin/codesign >/dev/null
+    rm -f "${work}/once.p12"
+    unset AUTONOTE_ONCE
 }
 
 cmd_check() {
@@ -78,15 +116,16 @@ cmd_import_ci() {
     local expect work kc_pass sha1
     expect="$(lower <<<"${AUTONOTE_EXPECT_CERT_SHA1:-${AUTONOTE_CERT_SHA1}}")"
     work="$(private_dir)"
+    # EXIT: die（exit）では RETURN の trap は動かない。import-ci は単独のプロセスとして呼ぶ
     # shellcheck disable=SC2064
-    trap "rm -rf '${work}'" RETURN
+    trap "rm -rf '${work}'" EXIT
+    # 一時キーチェーンのパスワードは使い捨て（このジョブの中だけ。security に -P/-p 以外の渡し方は無い）
     kc_pass="$("${OPENSSL}" rand -hex 24)"
     security create-keychain -p "${kc_pass}" "${keychain}"
     security set-keychain-settings -lut 3600 "${keychain}"
     security unlock-keychain -p "${kc_pass}" "${keychain}"
     printf '%s' "${AUTONOTE_SIGNING_P12_BASE64}" | base64 --decode >"${work}/id.p12"
-    security import "${work}/id.p12" -k "${keychain}" -f pkcs12 -P "${AUTONOTE_SIGNING_P12_PASSWORD}" \
-        -T /usr/bin/codesign >/dev/null
+    import_p12 "${work}/id.p12" AUTONOTE_SIGNING_P12_PASSWORD "${keychain}"
     rm -f "${work}/id.p12"
     # codesign がダイアログなしで秘密鍵を使えるようにする
     security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${kc_pass}" "${keychain}" >/dev/null
@@ -108,7 +147,8 @@ cmd_selftest() {
     local work; work="$(private_dir)"
     local keychain="${work}/selftest.keychain-db"
     # shellcheck disable=SC2064
-    trap "security delete-keychain '${keychain}' 2>/dev/null; rm -rf '${work}'" EXIT
+    # 後始末は 1 つ失敗しても続ける（trap の中でも set -e が効くため、|| true を付ける）
+    trap "security delete-keychain '${keychain}' 2>/dev/null || true; security delete-keychain '${work}/export.keychain-db' 2>/dev/null || true; rm -rf '${work}'" EXIT
     cat >"${work}/cert.cnf" <<CNF
 [ req ]
 distinguished_name = dn
@@ -124,15 +164,16 @@ subjectKeyIdentifier = hash
 CNF
     "${OPENSSL}" req -x509 -newkey rsa:2048 -days 1 -nodes -config "${work}/cert.cnf" \
         -keyout "${work}/key.pem" -out "${work}/cert.pem" 2>/dev/null
-    local pass sha1 identity
-    pass="$("${OPENSSL}" rand -hex 16)"
+    local sha1 identity
+    AUTONOTE_SELFTEST_PASS="$("${OPENSSL}" rand -hex 16)"
+    export AUTONOTE_SELFTEST_PASS
     # shellcheck disable=SC2046
     "${OPENSSL}" pkcs12 -export $(pkcs12_compat) -inkey "${work}/key.pem" -in "${work}/cert.pem" \
-        -name "AutoNote Signing Selftest" -passout "pass:${pass}" -out "${work}/id.p12"
+        -name "AutoNote Signing Selftest" -passout env:AUTONOTE_SELFTEST_PASS -out "${work}/id.p12"
     rm -f "${work}/key.pem"
-    sha1="$("${OPENSSL}" x509 -in "${work}/cert.pem" -noout -fingerprint -sha1 | sed 's/.*=//; s/://g' | lower)"
+    sha1="$(sha1_of_pem <"${work}/cert.pem")"
     echo "使い捨ての証明書: SHA-1 ${sha1}"
-    identity="$(AUTONOTE_SIGNING_P12_BASE64="$(base64 -i "${work}/id.p12")" AUTONOTE_SIGNING_P12_PASSWORD="${pass}" \
+    identity="$(AUTONOTE_SIGNING_P12_BASE64="$(base64 -i "${work}/id.p12")" AUTONOTE_SIGNING_P12_PASSWORD="${AUTONOTE_SELFTEST_PASS}" \
         AUTONOTE_EXPECT_CERT_SHA1="${sha1}" "${BASH_SOURCE[0]}" import-ci "${keychain}")"
     rm -f "${work}/id.p12"
     echo "import-ci: 識別子 ${identity}"
@@ -149,7 +190,39 @@ CNF
         die "Secrets なしの import-ci が通ってしまった"
     fi
     echo "Secrets なしの import-ci は失敗する（fork などではリリースが止まる）"
+    selftest_export_one "${work}"
     echo "selftest: 合格"
+}
+
+# export-to-1password の書き出し部分: identity が 2 つある一時キーチェーンから、指定の 1 つだけが p12 に入ること
+selftest_export_one() {
+    local work="$1" n
+    local keychain="${work}/export.keychain-db"
+    command -v swift >/dev/null || { echo "（swift が無いので書き出しの確認は省略）"; return 0; }
+    for n in one two; do
+        "${OPENSSL}" req -x509 -newkey rsa:2048 -days 1 -nodes -config "${work}/cert.cnf" -subj "/CN=AutoNote Export Selftest ${n}" \
+            -keyout "${work}/${n}.key" -out "${work}/${n}.pem" 2>/dev/null
+        # shellcheck disable=SC2046
+        "${OPENSSL}" pkcs12 -export $(pkcs12_compat) -inkey "${work}/${n}.key" -in "${work}/${n}.pem" \
+            -passout env:AUTONOTE_SELFTEST_PASS -out "${work}/${n}.p12"
+        rm -f "${work}/${n}.key"
+    done
+    security create-keychain -p "${AUTONOTE_SELFTEST_PASS}" "${keychain}"
+    security unlock-keychain -p "${AUTONOTE_SELFTEST_PASS}" "${keychain}"
+    # -A: このテスト用の鍵だけは確認なしで書き出せるようにする（本物の鍵は codesign だけを許す）
+    for n in one two; do
+        security import "${work}/${n}.p12" -k "${keychain}" -f pkcs12 -P "${AUTONOTE_SELFTEST_PASS}" -A >/dev/null
+    done
+    local want got keys
+    want="$(sha1_of_pem <"${work}/two.pem")"
+    AUTONOTE_EXPORT_PASSWORD="${AUTONOTE_SELFTEST_PASS}" swift "${ROOT}/scripts/export-identity.swift" "${want}" \
+        "${work}/out.p12" "${keychain}" || { security delete-keychain "${keychain}"; die "export-identity.swift が書き出せない"; }
+    security delete-keychain "${keychain}"
+    got="$(p12_pem "${work}/out.p12" AUTONOTE_SELFTEST_PASS -nokeys -clcerts | sha1_of_pem)"
+    keys="$(p12_pem "${work}/out.p12" AUTONOTE_SELFTEST_PASS | grep -c 'BEGIN .*PRIVATE KEY')"
+    [[ "${got}" == "${want}" && "${keys}" == 1 ]] || die "書き出した p12 が指定の 1 件だけになっていない（証明書 ${got}、鍵 ${keys} 個）"
+    rm -f "${work}/out.p12"
+    echo "export-identity.swift: 2 つのうち指定の 1 件（証明書と鍵 1 つ）だけを書き出した"
 }
 
 # 1Password アプリの連携の承認は親プロセスごとに要る。`op whoami` は承認ダイアログを出さないので使わず、ダイアログを出す
@@ -191,35 +264,17 @@ cmd_export_to_1password() {
     local work; work="$(private_dir)"
     # shellcheck disable=SC2064
     trap "rm -rf '${work}'" EXIT
-    local export_pass p12_pass
-    export_pass="$("${OPENSSL}" rand -hex 24)"
-    p12_pass="$("${OPENSSL}" rand -base64 30 | tr -d '/+=' | head -c 32)"
-    echo "login キーチェーンから書き出します（macOS がキーチェーンのパスワードを 1 回たずねます）"
-    # security export は種類ごとにすべて書き出すので、あとで「AutoNote Dev」の証明書と対の鍵だけを取り出す
-    security export -k "${LOGIN_KEYCHAIN}" -t identities -f pkcs12 -P "${export_pass}" -o "${work}/all.p12" >/dev/null
-    "${OPENSSL}" pkcs12 -in "${work}/all.p12" -passin "pass:${export_pass}" -nokeys -clcerts 2>/dev/null >"${work}/certs.pem" \
-        || "${OPENSSL}" pkcs12 -legacy -in "${work}/all.p12" -passin "pass:${export_pass}" -nokeys -clcerts >"${work}/certs.pem"
-    "${OPENSSL}" pkcs12 -in "${work}/all.p12" -passin "pass:${export_pass}" -nocerts -nodes 2>/dev/null >"${work}/keys.pem" \
-        || "${OPENSSL}" pkcs12 -legacy -in "${work}/all.p12" -passin "pass:${export_pass}" -nocerts -nodes >"${work}/keys.pem"
-    rm -f "${work}/all.p12"
-    # 期待の SHA-1 の証明書を 1 枚、その公開鍵と一致する秘密鍵を 1 つ選ぶ
-    awk -v dir="${work}" '/BEGIN CERTIFICATE/{n++; f=dir "/c" n ".pem"} f{print > f} /END CERTIFICATE/{f=""}' "${work}/certs.pem"
-    awk -v dir="${work}" '/BEGIN .*PRIVATE KEY/{n++; f=dir "/k" n ".pem"} f{print > f} /END .*PRIVATE KEY/{f=""}' "${work}/keys.pem"
-    rm -f "${work}/certs.pem" "${work}/keys.pem"
-    local cert="" key="" c k pub
-    for c in "${work}"/c*.pem; do
-        [[ "$("${OPENSSL}" x509 -in "${c}" -noout -fingerprint -sha1 | sed 's/.*=//; s/://g' | lower)" == "${AUTONOTE_CERT_SHA1}" ]] && cert="${c}"
-    done
-    [[ -n "${cert}" ]] || die "書き出しの中に SHA-1 ${AUTONOTE_CERT_SHA1} の証明書がありません"
-    pub="$("${OPENSSL}" x509 -in "${cert}" -noout -pubkey)"
-    for k in "${work}"/k*.pem; do
-        [[ "$("${OPENSSL}" pkey -in "${k}" -pubout 2>/dev/null)" == "${pub}" ]] && key="${k}"
-    done
-    [[ -n "${key}" ]] || die "証明書と対になる秘密鍵が書き出しの中にありません"
-    # shellcheck disable=SC2046
-    "${OPENSSL}" pkcs12 -export $(pkcs12_compat) -inkey "${key}" -in "${cert}" -name "${AUTONOTE_CERT_NAME}" \
-        -passout "pass:${p12_pass}" -out "${work}/autonote-signing.p12"
-    rm -f "${work}"/k*.pem
+    AUTONOTE_EXPORT_PASSWORD="$("${OPENSSL}" rand -hex 24)"
+    AUTONOTE_P12_PASSWORD="$("${OPENSSL}" rand -base64 30 | tr -d '/+=' | head -c 32)"
+    export AUTONOTE_EXPORT_PASSWORD AUTONOTE_P12_PASSWORD
+    echo "login キーチェーンから「${AUTONOTE_CERT_NAME}」だけを書き出します（macOS がキーチェーンのパスワードを 1 回たずねます）"
+    swift "${ROOT}/scripts/export-identity.swift" "${AUTONOTE_CERT_SHA1}" "${work}/export.p12" "${LOGIN_KEYCHAIN}" \
+        || die "書き出せませんでした（swift が要ります。キーチェーンの確認を拒否した場合も失敗します）"
+    repack_p12 "${work}/export.p12" AUTONOTE_EXPORT_PASSWORD "${work}/autonote-signing.p12" AUTONOTE_P12_PASSWORD "${AUTONOTE_CERT_NAME}"
+    rm -f "${work}/export.p12"
+    [[ "$(p12_pem "${work}/autonote-signing.p12" AUTONOTE_P12_PASSWORD -nokeys -clcerts | sha1_of_pem)" == "${AUTONOTE_CERT_SHA1}" ]] \
+        || die "作った p12 の証明書が SHA-1 ${AUTONOTE_CERT_SHA1} ではありません"
+    local p12_pass="${AUTONOTE_P12_PASSWORD}"
     # 1Password（正）: p12 は Document、パスワードは Password。パスワードはファイル経由で渡し、コマンドラインに出さない
     "${OP}" document create "${work}/autonote-signing.p12" --vault "${OP_VAULT}" \
         --title "${OP_ITEM_PREFIX} (p12)" --file-name "autonote-signing.p12" >/dev/null
@@ -247,8 +302,9 @@ cmd_import_login() {
     # shellcheck disable=SC2064
     trap "rm -rf '${work}'" EXIT
     "${OP}" document get "${OP_ITEM_PREFIX} (p12)" --vault "${OP_VAULT}" --out-file "${work}/id.p12" >/dev/null
-    local pass; pass="$("${OP}" read "op://${OP_VAULT}/${OP_ITEM_PREFIX} (p12 password)/password")"
-    security import "${work}/id.p12" -k "${LOGIN_KEYCHAIN}" -f pkcs12 -P "${pass}" -T /usr/bin/codesign
+    AUTONOTE_P12_PASSWORD="$("${OP}" read "op://${OP_VAULT}/${OP_ITEM_PREFIX} (p12 password)/password")"
+    export AUTONOTE_P12_PASSWORD
+    import_p12 "${work}/id.p12" AUTONOTE_P12_PASSWORD "${LOGIN_KEYCHAIN}"
     rm -f "${work}/id.p12"
     security find-certificate -c "${AUTONOTE_CERT_NAME}" -p "${LOGIN_KEYCHAIN}" >"${work}/cert.pem"
     security add-trusted-cert -d -r trustRoot -p codeSign -k "${LOGIN_KEYCHAIN}" "${work}/cert.pem"
