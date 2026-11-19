@@ -15,7 +15,7 @@ AutoNote をソースからビルドし、テストし、変更を入れるた�
 - whisper.cpp と llama.cpp の XCFramework（`tools/whisper.xcframework`。フレームワーク名・モジュール名は `whisper` のまま、`llama.h` も入っている）はリポジトリに含めず、手元でソースからビルドする。初回は `scripts/build-whisper-xcframework.sh` を実行する（数分かかる。`tools/whisper.cpp`（v1.9.5）と `tools/llama.cpp`（b12359 = Homebrew の llama.cpp 1.0.0）が無ければ clone する。既存の checkout がスクリプトで固定したコミットでなければエラーで止まる）。ggml は llama.cpp 側の 1 つだけをビルドし、whisper.cpp もそれを使う（PLaMo 3 Translate には whisper.cpp v1.9.5 同梱の ggml より新しい ggml が要る）。公式の zip は x86_64 スライスが AVX2 なしで Intel では約 7 倍遅いため使わない。成果物の直下の `AutoNoteBuild.txt` に版を記録し、版が違えば作り直す。`scripts/build-app.sh` と `scripts/e2e-check.sh` は毎回このスクリプトを呼ぶ（今の版で作成済みならすぐ終わる）
 - XCFramework を作り直した後の `swift build` が `ggml.h has been modified since the module file ... was built` で失敗したら、古いモジュールのキャッシュを消す: `rm -rf .build/out/Intermediates.noindex/SwiftExplicitPrecompiledModules`（または `swift package clean`）
 - `tools/` は git の管理外。whisper.cpp のソース、XCFramework、ベンチ用のモデルや音声はここに置き、コミットしない
-- 初回の `scripts/build-app.sh` は自己署名のコード署名証明書 `AutoNote Dev` を作ってログインキーチェーンに入れるので（`scripts/make-dev-cert.sh`）、管理者認証のダイアログが出る。同じ証明書と同じ Bundle ID で署名し続けることで、再ビルドしてもマイクなどの許可（TCC）が外れない
+- 初回の `scripts/build-app.sh` は自己署名のコード署名証明書 `AutoNote Dev` を作ってログインキーチェーンに入れるので（`scripts/make-dev-cert.sh`）、管理者認証のダイアログが出る。同じ証明書と同じ Bundle ID で署名し続けることで、再ビルドしてもマイクなどの許可（TCC）が外れない。リリースと同じ証明書にそろえるなら、作る前に `scripts/signing.sh import-login` で 1Password から取り込む（「リリース署名の鍵」）
 - `xcodebuild -create-xcframework` がプラグインの読み込みで失敗する Xcode がある（Xcode 26.5 で確認。直すには `xcodebuild -runFirstLaunch`）。そのときスクリプトは同じ構造の XCFramework を手で組んで続ける
 
 ## ビルド・テスト・E2E
@@ -116,8 +116,57 @@ autonote dev translate <transcript.json> [--target auto|ja|en] [--model <gguf>] 
 ## CI / リリース（GitHub Actions）
 
 - `.github/workflows/ci.yml`: main への push・PR・手動実行（workflow_dispatch）で、macOS 26（`macos-26`、Xcode 26.6）上で `swift build` と `swift test`（時間依存のテストが負荷で落ちることがあるので、失敗したら `--no-parallel` で 1 回だけ再実行）を走らせる。開発ブランチへの push だけでは走らない（PR を開くと走る）。docs/ と `*.md` だけの変更でも走らない。同じブランチの古い実行は取り消す。whisper.xcframework と `.build` はキャッシュする
-- `.github/workflows/release.yml`: main への push か手動実行で `Resources/Info.plist` の `CFBundleShortVersionString` を読み、`v<version>` のタグが無ければ `macos-26` の 1 ジョブでビルド・テストし、arm64 + x86_64 のユニバーサルでアドホック署名した `AutoNote-<version>-macos-universal.zip` を添えた GitHub Release を作る。タグがあれば何もしない
-- 配布物は Developer ID 署名・公証をしていない。一度開こうとして拒否されたら、システム設定 › プライバシーとセキュリティ の下にある「このまま開く」を押す。または `xattr -d com.apple.quarantine /Applications/AutoNote.app`
+- `.github/workflows/release.yml`: main への push か手動実行で `Resources/Info.plist` の `CFBundleShortVersionString` を読み、`v<version>` のタグが無ければ次の順に進む。タグがあれば何もしない
+  1. `build`（`macos-26`、鍵なし）: ビルド・テストし、arm64 + x86_64 のユニバーサルの .app を組み立てる（ここではアドホック署名）
+  2. `sign`（`macos-26`、`environment: release`）: Environment「release」の Secrets（`AUTONOTE_SIGNING_P12_BASE64`・`AUTONOTE_SIGNING_P12_PASSWORD`）を一時キーチェーンに取り込み（`scripts/signing.sh import-ci`）、`scripts/sign-app.sh` で「AutoNote Dev」の証明書で署名し直し、designated requirement の証明書が `scripts/config.sh` の `AUTONOTE_CERT_SHA1` と一致するかを `scripts/signing.sh check` で確かめる。Secrets が無い（fork など）と失敗し、リリースは作られない
+  3. `publish`（`contents: write`）: `AutoNote-<version>-macos-universal.zip` を添えた GitHub Release を作る
+- ワークフローの `permissions` は既定を空にしてジョブごとに最小だけ与える。外部のアクションはコミットの SHA で固定する（コメントに版）。`pull_request_target` は使わない
+- 配布物は Developer ID 署名・公証をしていない。初回だけ、開こうとして拒否されたら、システム設定 › プライバシーとセキュリティ の下にある「このまま開く」を押す。または `xattr -d com.apple.quarantine /Applications/AutoNote.app`。以後はアプリ内の自動アップデートで入れ替わる（アプリが自分で取得したファイルには quarantine が付かない）
+
+## リリース署名の鍵
+
+手元のビルドとすべてのリリースを、同じ自己署名の証明書「AutoNote Dev」（SHA-1 は `scripts/config.sh` の `AUTONOTE_CERT_SHA1`）で署名する。macOS の許可（マイク・システム音声）と自動アップデートの署名検査は「bundle identifier と証明書」にひもづくので、版が変わっても保たれる。
+
+- 鍵（p12 とそのパスワード）の正は 1Password（「AutoNote release signing (p12)」「AutoNote release signing (p12 password)」）。GitHub には Environment「release」の Secrets にだけ写しを置く。リポジトリ全体の Secrets には置かない。「release」の deployment branch は `main` だけ（PR や他のブランチのワークフローからは読めない）
+- 1Password と Secrets に入れる: `scripts/signing.sh export-to-1password`（`op` のサインインと `swift` が要る。「AutoNote Dev」の 1 件だけを書き出し（`scripts/export-identity.swift`）、macOS がキーチェーンのパスワードを 1 回たずねる。同名の項目が 1Password にあれば止まる）
+- 別の Mac で手元のビルドを同じ証明書にそろえる: `scripts/signing.sh import-login`（1Password から login キーチェーンへ。管理者認証のダイアログが出る）。その Mac に別の「AutoNote Dev」があると止まる（削除するとその Mac の手元ビルドの許可は一度外れる）
+- release.yml と同じ手順を手元で確かめる: `scripts/signing.sh selftest`（使い捨ての証明書と一時キーチェーンで import-ci → sign-app.sh → check。login キーチェーンと検索リストは変えない）
+- 推奨（未設定）: main にブランチ保護（直接 push の禁止・レビュー必須）を掛けると、鍵で署名されるコードを変えられる経路がさらに狭まる。自動マージの流れを止めるので、今は掛けていない
+
+### 前提と、それが成り立たない場合（開発者の Mac）
+
+自動アップデートが守れるのは「署名の鍵を持たない者」まで。リポジトリにリリースを置ける者（push 権限やトークンを持つ者）でも、鍵が無ければ署名が合わず、利用者の Mac には入らない。
+
+しかし **リリースの鍵は開発者の Mac の login キーチェーンにもある**（手元のビルドとリリースを同じ証明書にして許可を保つための選択）。その秘密鍵は `/usr/bin/codesign` からなら確認なしで使え、同じ Mac には `gh` のログイン（`gh auth token` で取り出せる）もあり、main にブランチ保護も無い。だから **開発者の Mac で利用者として動くプロセスが 1 つ乗っ取られれば**、そのプロセスは次のことができる: 悪性の .app を `codesign` でこの鍵で署名する → `gh release create` で latest に置く → 全利用者の AutoNote が 24 時間以内に「署名が一致する新しい版」として入れ替え、マイク・システム音声の許可を保ったまま起動する。自己署名なので失効もできない。この場合は「鍵が漏れた」として下の手順に進むしかない。
+
+緩和策（どれも未実施。上ほど効く）:
+
+- リリースの鍵を手元の鍵と分け、鍵は Environment「release」の Secrets だけに置く。代わりに、手元のビルドとリリース版を行き来するたびに許可が外れる
+- 分けない場合でも、手元の鍵を専用のキーチェーンに移し、ふだんはロックしておく（使うときだけ解錠する）。ACL も codesign の「常に許可」にしない
+- main にブランチ保護（直接 push の禁止・レビュー必須）を掛け、GitHub の immutable releases（公開後の asset の差し替えを防ぐ）を有効にする
+- `gh` のトークンを必要最小の権限・短い期限のものにし、ふだんの Mac にリリースを作れるトークンを置かない
+- リリースの作成を GitHub の通知で見張り、身に覚えのないリリースはすぐ消して下の手順に進む
+
+### 鍵が漏れたときの手順
+
+自己署名の鍵は失効できない。漏れた鍵で署名されたものは、利用者の Mac で今のアプリと同じ署名と見なされる（自動アップデートは「このリポジトリの releases に置かれ、署名が一致する」ものだけを入れるので、鍵を持つ者がこのリポジトリにリリースを置ければ自動で入る。手で配られたものも区別できない）。
+
+1. すぐに Environment「release」の Secrets を消す（`gh secret delete AUTONOTE_SIGNING_P12_BASE64 --env release`、`AUTONOTE_SIGNING_P12_PASSWORD` も）。漏れた経路（Actions のログ、手元のファイル、1Password の共有）を調べて塞ぐ
+2. 新しい証明書を作る（`scripts/make-dev-cert.sh` を、別の名前か、古い「AutoNote Dev」を消した Mac で）。`scripts/config.sh` の `AUTONOTE_CERT_NAME` と `AUTONOTE_CERT_SHA1` を新しい値にし、`scripts/signing.sh export-to-1password` で 1Password と Secrets を差し替える。古い 1Password の項目は「失効」と分かる名前にして残す
+3. 新しい証明書で署名した版は、今のアプリの署名と一致しないので **全利用者の自動アップデートが止まる**（アプリは「署名がこのアプリと違う」として入れ替えない）。利用者は GitHub から手で入れ替える必要があり、そのとき **マイク・システム音声の許可も一度外れる**
+4. 利用者に告知する: リリースノートと README の冒頭に、鍵を替えたこと・手で入れ替える手順・許可をもう一度与えること・漏れた鍵で署名された配布物（いつ以降のもの）を開かないことを書く
+
+## 自動アップデート
+
+- アプリは起動時と 1 時間ごとに「最後の確認から 24 時間たったか」を見て、たっていれば `https://api.github.com/repos/YutaOkoshi/AutoNote/releases/latest` を認証なしで読む（User-Agent は `AutoNote` だけ）。新しい版の zip（GitHub の SHA-256 つき）を `<データ領域>/updates/<版>/` に落として照合・展開し、署名が「いま動いているアプリの designated requirement」を満たすこと、bundle identifier と版を確かめる。リダイレクト先は GitHub のホスト（`github.com`・`*.githubusercontent.com`）だけ、すべて HTTPS
+- zip は署名を確かめる前に 2 回見る: 展開の前に目次（絶対パス・`..`・`AutoNote.app` 以外の最上位の項目・シンボリックリンクの下の項目・デバイスを拒む。項目数 1 万・展開後 2 GB まで。512 MB を超えるリリースは取得しない）、展開の後に中身（`AutoNote.app` が本物のフォルダで、リンクがすべてその中を指す）。`ditto -x -k` 自体も `../` と絶対パスを展開先の中に書き、リンク越しの書き込みは拒む（2026-11-19 に実測）が、外を指すリンクはそのまま作るので、後の検査が要る
+- 入れ替えるのは、録音・カウントダウン・猶予中でなく、後処理キューと翻訳のジョブが無く、音声の取り込み・モデルのダウンロード・Automation の実行中でもなく、メインウィンドウが閉じているとき。待つ間はメニューに「アップデートして再起動（x.y.z）」が出る（選ぶと録音中でなければすぐ入れ替える）。入れ替える直前に、取得した版をもう一度検査し、録音の状態をコーディネーターから読み直す
+- 補助（`<データ領域>/updates/install.sh`）はアプリの終了が決まってから（`applicationWillTerminate`）起動するので、終了が取り消されたら何も起きない。補助は、アプリの終了を待つ → 取得した版が本物のフォルダかを見る → アプリの隣（`.AutoNote-update.app`）へ移す → `codesign --verify --deep --strict -R=<今の版の要件>` → アプリと 1 回で入れ替える（`renamex_np` の `RENAME_SWAP`、`autonote dev update --swap`。`/Applications/AutoNote.app` が無くなる瞬間が無い）→ 起動 → 新しい版が書く pid（`updates/launched.pid`）を待って生きているかを見る、の順に進む。起動を確かめられなければ新しい版のプロセスを止め、もう一度入れ替えて元の版を起動する。補助は 1 つだけ動く（`updates/install.lock`）。途中で止まって残った `.AutoNote-update.app` は次の起動で消す。結果は `updates/last-install.json`、記録は `updates/install.log`
+- 確認先に届かなかったときは、最後の確認時刻を進めず、1・2・4・8・16 時間あけて問い合わせ直す（その後は 1 日に 1 回。`updates/state.json` の `network_failures`・`retry_at`）。要求は `User-Agent: AutoNote` と `Accept-Language: en`（Mac の言語の設定は送らない）
+- 設定の「一般 › アップデート」で切れる（`settings.json` の `auto_update_enabled`、既定はオン）。「今すぐ確認」は切っていても動き、前に入れ替えに失敗した版も試し直す
+- アプリの場所に書き込めない、アドホック署名の版から動いている、.app として動いていない、のどれかなら自動では入れ替えず「手動での更新が必要」と出す
+- 開発用: `AUTONOTE_UPDATE_FEED_URL` で確認先を差し替えられる。効くのは debug 構成のビルドで `AUTONOTE_DATA_DIR` も設定したときだけ（リリースビルドでは無視する）。`autonote dev update --status | --now | --check [--feed <url>] [--app <path>]`（`--feed` も debug ビルドだけ）
+- E2E: `scripts/update-e2e.sh`（`scripts/e2e-check.sh` の項目 16）。一時ディレクトリに置いたアプリの写しと python3 の偽サーバーで、SHA-256 違い・署名違い・展開先の外へ書く zip・外を指すリンクを含む zip の拒否、起動できない版からの復旧、録音中の延期、入れ替えと再起動、入れ替え前後の designated requirement の一致を見る
 
 ## バージョンの上げ方
 

@@ -74,10 +74,5 @@ for exe in "${APP}/Contents/MacOS/AutoNoteApp" "${APP}/Contents/MacOS/autonote";
     fi
 done
 
-# 中身から外へ順に署名する（--deep は使わない）。フレームワークを先に同じ証明書で署名する
-codesign --force --sign "${CERT_NAME}" --timestamp=none "${APP}/Contents/Frameworks/whisper.framework"
-# 同梱 CLI はリンカのアドホック署名のままだとバンドル署名の対象外になるので、先に同じ証明書で署名する
-codesign --force --sign "${CERT_NAME}" --identifier "${BUNDLE_ID}.cli" --timestamp=none "${APP}/Contents/MacOS/autonote"
-codesign --force --sign "${CERT_NAME}" --identifier "${BUNDLE_ID}" --timestamp=none "${APP}"
-codesign -dv --verbose=2 "${APP}"
-codesign --verify --strict "${APP}"
+# 中身から外へ順に署名する（--deep は使わない）。手順は scripts/sign-app.sh（release.yml の署名ジョブと同じ）
+"${ROOT}/scripts/sign-app.sh" "${APP}" "${CERT_NAME}"

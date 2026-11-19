@@ -1,7 +1,11 @@
 name: Release
 
 # main に push されたとき、Resources/Info.plist の CFBundleShortVersionString に対応する
-# v<version> のタグが無ければ、ビルド・テストして GitHub Release を作る。タグがあれば何もしない。
+# v<version> のタグが無ければ、ビルド・テスト・署名して GitHub Release を作る。タグがあれば何もしない。
+#
+# 署名の鍵（「AutoNote Dev」の p12）は Environment「release」の Secrets にだけある。release の deployment branch は main だけ
+# に制限してあるので、PR や他のブランチのワークフローからは読めない。鍵に触れるのは sign ジョブだけで、ビルドとテストは
+# 鍵なしで行う（docs/development.md「リリース署名の鍵」）。外部のアクションはコミットの SHA で固定する。
 on:
   push:
     branches: [main]
@@ -11,8 +15,7 @@ concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   version:
@@ -21,12 +24,16 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.check.outputs.version }}
       tag: ${{ steps.check.outputs.tag }}
       release: ${{ steps.check.outputs.release }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - name: Read version and check tag
         id: check
@@ -35,13 +42,17 @@ jobs:
   build:
     needs: version
     if: needs.version.outputs.release == 'true'
-    # 1 ランナーで arm64 + x86_64 のユニバーサル .app を作る（Intel ランナーは使わない）
+    # 1 ランナーで arm64 + x86_64 のユニバーサル .app を作る（Intel ランナーは使わない）。鍵には触れない
     runs-on: macos-26
     timeout-minutes: 90
+    permissions:
+      contents: read
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
 
       - uses: ./.github/actions/prepare
 
@@ -51,7 +62,8 @@ jobs:
       - name: Test (retry once on failure)
         run: .github/scripts/swift-test-retry.sh
 
-      - name: Build universal AutoNote.app (ad-hoc signed)
+      # ここではアドホック署名で組み立てるだけ。リリースの署名は sign ジョブが掛け直す
+      - name: Build universal AutoNote.app (ad-hoc signed for now)
         env:
           AUTONOTE_BUILD_ARCHS: arm64 x86_64
           AUTONOTE_CODESIGN_IDENTITY: "-"
@@ -64,10 +76,76 @@ jobs:
             lipo "build/AutoNote.app/Contents/MacOS/${exe}" -verify_arch arm64 x86_64
           done
 
+      - name: Zip the unsigned app
+        run: ditto -c -k --keepParent build/AutoNote.app AutoNote-unsigned.zip
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: AutoNote-unsigned
+          path: AutoNote-unsigned.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  sign:
+    needs: [version, build]
+    # 鍵を読めるのはこのジョブだけ（Environment「release」、main だけ）。ビルドはしない: 組み立て済みの .app を
+    # 一時キーチェーンの証明書で署名し直し、designated requirement の証明書が scripts/config.sh の期待値かを確かめる
+    runs-on: macos-26
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: AutoNote-unsigned
+          path: unsigned
+
+      - name: Unzip
+        run: |
+          mkdir -p build
+          ditto -x -k unsigned/AutoNote-unsigned.zip build
+
+      # Secrets が無い（fork、Environment の外）と import-ci が失敗し、リリースは作られない
+      - name: Import the signing certificate into a temporary keychain
+        id: keychain
+        env:
+          AUTONOTE_SIGNING_P12_BASE64: ${{ secrets.AUTONOTE_SIGNING_P12_BASE64 }}
+          AUTONOTE_SIGNING_P12_PASSWORD: ${{ secrets.AUTONOTE_SIGNING_P12_PASSWORD }}
+        run: |
+          keychain="${RUNNER_TEMP}/autonote-signing.keychain-db"
+          echo "path=${keychain}" >> "${GITHUB_OUTPUT}"
+          identity="$(scripts/signing.sh import-ci "${keychain}")"
+          echo "identity=${identity}" >> "${GITHUB_OUTPUT}"
+
+      - name: Sign
+        env:
+          AUTONOTE_CODESIGN_KEYCHAIN: ${{ steps.keychain.outputs.path }}
+        run: scripts/sign-app.sh build/AutoNote.app "${{ steps.keychain.outputs.identity }}"
+
+      - name: Check the designated requirement
+        run: scripts/signing.sh check build/AutoNote.app
+
+      - name: Check architectures
+        run: |
+          for exe in AutoNoteApp autonote; do
+            lipo "build/AutoNote.app/Contents/MacOS/${exe}" -verify_arch arm64 x86_64
+          done
+
+      - name: Delete the temporary keychain
+        if: always()
+        run: scripts/signing.sh delete-keychain "${RUNNER_TEMP}/autonote-signing.keychain-db"
+
       - name: Zip
         run: ditto -c -k --keepParent build/AutoNote.app "AutoNote-${VERSION}-macos-universal.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: AutoNote-${{ env.VERSION }}-macos-universal
           path: AutoNote-${{ env.VERSION }}-macos-universal.zip
@@ -75,7 +153,7 @@ jobs:
           retention-days: 3
 
   publish:
-    needs: [version, build]
+    needs: [version, sign]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -84,12 +162,14 @@ jobs:
       TAG: ${{ needs.version.outputs.tag }}
       VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: AutoNote-${{ env.VERSION }}-macos-universal
           path: dist
-          merge-multiple: true
 
       - name: Create GitHub Release
         env:

@@ -84,6 +84,12 @@ struct MenuBarContent: View {
         case .readinessIssue(_, let title):
             // claude (and model, which the menu never lists): the window's readiness card or failure band has the fixes.
             Button(title) { shell.open(AppShell.mainWindowID) }
+        case .installUpdate(let version):
+            Divider()
+            Button("アップデートして再起動（\(version)）") { shell.env?.updater.installNow() }
+        case .updateNeedsManual:
+            Divider()
+            Button("⚠ 手動での更新が必要です — 設定を開く…") { shell.showSettings(.general, using: openSettings) }
         case .resume:
             Button("再開") { run(model, .resume) }
         case .bookmark:

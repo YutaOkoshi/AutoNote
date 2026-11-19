@@ -49,6 +49,9 @@ public actor ModelFileManager<Model: DownloadableModel> {
         catalog.filter { isInstalled($0) }
     }
 
+    /// True while any download runs (the updater waits for it before restarting the app).
+    public func isDownloading() -> Bool { !inFlight.isEmpty }
+
     public func fileURL(for name: String) -> URL? {
         guard let model = catalog.first(where: { $0.name == name }), isInstalled(model) else { return nil }
         return directory.appending(path: model.fileName)

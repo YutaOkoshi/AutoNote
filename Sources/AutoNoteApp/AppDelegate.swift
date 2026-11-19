@@ -102,6 +102,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tasks.append(Task { await env.relayQueueNotices() })
         tasks.append(Task { await env.relayOutputFolderNotices() })
         await env.retentionScheduler.start()
+        // The daily update check (at launch when a day has passed since the last one). It waits for the window to
+        // close before a swap, so it reads the shell's flag.
+        env.updater.isMainWindowOpen = { [shell] in shell.isMainWindowOpen }
+        let updater = env.updater
+        tasks.append(Task { await updater.start() })
         // Nothing on the launch path waits for the permission prompt.
         tasks.append(Task { await notifier.requestAuthorization() })
         // Off the launch path: fill `claudePath` from the login shell when unset (ruling X8), then re-read readiness.
@@ -249,6 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.addButton(withTitle: "キャンセル")
             guard alert.runModal() == .alertFirstButtonReturn else {
                 resetQuitReason()
+                env?.updater.terminationCancelled()
                 return .terminateCancel
             }
             replyAfter { [env] in await Self.stopAndAwaitJob(model: model, env: env) }
@@ -292,6 +298,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func resetQuitReason() { quitReason = .user }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // First: the quit is certain now, so an update's helper may start (it waits for this process to exit).
+        env?.updater.launchPendingHelper()
         liveSummaryTask?.cancel()
         translationTask?.cancel()
         // The translation model's Metal resources must be freed before exit (research note §2.2: an assert

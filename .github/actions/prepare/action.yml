@@ -35,7 +35,7 @@ runs:
 
     - name: Cache whisper.xcframework
       id: whisper-cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: tools/whisper.xcframework
         key: whisper-xcframework-${{ runner.os }}-${{ runner.arch }}-${{ steps.whisper.outputs.commit }}-${{ hashFiles('scripts/build-whisper-xcframework.sh') }}
@@ -46,7 +46,7 @@ runs:
       run: scripts/build-whisper-xcframework.sh
 
     - name: Cache SwiftPM .build
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: .build
         # The xcframework's version is part of the key: a .build made against other whisper/llama headers fails with

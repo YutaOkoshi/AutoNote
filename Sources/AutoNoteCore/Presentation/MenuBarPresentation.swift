@@ -5,6 +5,10 @@ public enum MenuItem: Equatable, Sendable {
     case openLatestMinutes(enabled: Bool), minutesMissing(MeetingID, label: String), automationFailed(name: String, meetingID: MeetingID)
     /// A readiness problem that blocks minutes; choosing it opens the place to fix it.
     case readinessIssue(ReadinessRow.Item, title: String)
+    /// 「アップデートして再起動（x.y.z）」: an update is downloaded and checked, waiting for a quiet moment.
+    case installUpdate(version: String)
+    /// 「⚠ 手動での更新が必要…」: opens the General settings, which say why.
+    case updateNeedsManual
     case settings, quit
 }
 
@@ -25,7 +29,8 @@ public struct MenuBarPresentation: Equatable, Sendable {
     ///   counting while paused (§5.4).
     public static func make(recorder: RecorderSnapshot, elapsedSeconds: Int?, queue: QueueStatus, readiness: Readiness,
                             latestMinutesAvailable: Bool, rows: [MeetingRow], automationFailures: [AutomationRunRecord],
-                            shortcuts: Shortcuts = Shortcuts(), now: Date, timeZone: TimeZone = .current) -> MenuBarPresentation {
+                            shortcuts: Shortcuts = Shortcuts(), update: MenuItem? = nil, now: Date,
+                            timeZone: TimeZone = .current) -> MenuBarPresentation {
         var items: [MenuItem] = []
         let starting = recorder.state == .recording && recorder.meetingID == nil
         if let line = statusLine(recorder, now: now) { items.append(.status(line)) }
@@ -47,6 +52,7 @@ public struct MenuBarPresentation: Equatable, Sendable {
         }
         items += automationFailures.map { .automationFailed(name: $0.name, meetingID: MeetingID(rawValue: $0.meetingID)) }
         items += readinessIssues(readiness)
+        if let update { items.append(update) }
         items += [.openWindow, .openLatestMinutes(enabled: latestMinutesAvailable), .settings, .quit]
 
         let title: String? = switch recorder.state {

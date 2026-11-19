@@ -8,6 +8,9 @@ public enum IPCCommand: String, Codable, Sendable, CaseIterable {
     case merge
     case automationsList = "automations.list"
     case automationsRun = "automations.run"
+    /// Development only (`autonote dev update`), not in the public usage: the updater's status, and 「今すぐ確認」.
+    case updateStatus = "update.status"
+    case updateCheck = "update.check"
 }
 
 public struct IPCArgs: Codable, Equatable, Sendable {
@@ -81,9 +84,11 @@ public struct IPCResult: Codable, Equatable, Sendable {
     public var bookmark: Bookmark?
     public var automations: [AutomationSummary]?
     public var run: AutomationRunRecord?
+    public var update: UpdateStatusDTO?
 
     public init(status: StatusResult? = nil, meetings: [MeetingRow]? = nil, path: String? = nil, meetingID: String? = nil,
-                bookmark: Bookmark? = nil, automations: [AutomationSummary]? = nil, run: AutomationRunRecord? = nil) {
+                bookmark: Bookmark? = nil, automations: [AutomationSummary]? = nil, run: AutomationRunRecord? = nil,
+                update: UpdateStatusDTO? = nil) {
         self.status = status
         self.meetings = meetings
         self.path = path
@@ -91,10 +96,11 @@ public struct IPCResult: Codable, Equatable, Sendable {
         self.bookmark = bookmark
         self.automations = automations
         self.run = run
+        self.update = update
     }
 
     private enum CodingKeys: String, CodingKey {
-        case status, meetings, path, bookmark, automations, run
+        case status, meetings, path, bookmark, automations, run, update
         case meetingID = "meetingId"
     }
 }
