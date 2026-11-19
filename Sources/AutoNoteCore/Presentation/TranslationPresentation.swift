@@ -53,6 +53,7 @@ public enum TranslationPresentation {
     public static func controls(job: TranslationJobState?, translation: MeetingTranslation, hasTranscript: Bool,
                                 available: Bool) -> Controls {
         let hasLines = !translation.byIndex.isEmpty || !translation.live.isEmpty
+            || hasSummaryTranslation(translation.liveSummary) || hasSummaryTranslation(translation.minutes)
         switch job {
         case .queued:
             return Controls(status: "翻訳の順番を待っています…", progress: nil, showsToggle: hasLines)
@@ -86,6 +87,17 @@ public enum TranslationPresentation {
 
     private static func fraction(_ p: TranslationProgress) -> Double? {
         p.total > 0 ? min(1, Double(p.done) / Double(p.total)) : nil
+    }
+
+    /// Whether a summary's translation has anything to show (the 「訳文」 switch shows next to it).
+    public static func hasSummaryTranslation(_ document: SummaryTranslationDocument?) -> Bool {
+        document?.entries.contains { !$0.text.isEmpty } ?? false
+    }
+
+    /// What a summary view gets: the document while the 「訳文」 switch is on, nothing while it is off.
+    public static func summaryTranslation(_ document: SummaryTranslationDocument?,
+                                          shown: Bool) -> SummaryTranslationDocument? {
+        shown ? document : nil
     }
 
     /// VoiceOver reads the original, then the translation announced as such.
@@ -145,5 +157,9 @@ public enum TranslationSettingsPresentation {
 
     /// 「Built with PLaMo」 and what the feature sends where.
     public static let privacyNote =
-        "翻訳は Mac の中だけで行います。文字起こしも訳文も外へ送りません（通信するのはモデルのダウンロードだけです）。議事録は今までどおり原文から作ります。"
+        "翻訳は Mac の中だけで行い、訳すために外へ送るものはありません（通信するのはモデルのダウンロードだけです）。ライブ要約と議事録は今までどおり原文から作り、できた要約をこの Mac で訳します。訳文を要約の材料にはしません。"
+
+    /// The line under 「訳す先」: the transcript's direction and the summaries' (spec 2026-11-19 翻訳先).
+    public static let targetNote =
+        "自動では、日本語の発話を英語に、英語の発話を日本語に訳します。訳文は文字起こしの各行に併記します。ライブ要約と議事録は会議の言語で作り、訳す先（自動では会議の言語の反対）へ訳して各項目の下に併記します（会議の画面の「訳文」で表示を切り替えられます）。"
 }

@@ -27,7 +27,7 @@ import Foundation
         let positions = try needles.map { try #require(position($0, in: prompt)) }
         #expect(positions == positions.sorted())
         #expect(Set(positions).count == positions.count)
-        #expect(prompt.contains("指示X\n\n" + DefaultPrompt.dataNotice + "\n\n## 用語一覧"))
+        #expect(prompt.contains("指示X\n\n" + DefaultPrompt.languageLine(.ja) + "\n\n" + DefaultPrompt.dataNotice + "\n\n## 用語一覧"))
     }
 
     @Test func dataNoticeIsPresentEvenWhenPromptOmitsIt() {
@@ -93,7 +93,7 @@ import Foundation
     }
 
     @Test func defaultInstructionsCoverSpecRules() {
-        for phrase in ["日本語で書く", "根拠となる発言がある場合のみ", "推測で埋めず", "架空の ToDo を作らない", "t には根拠となる発言の時刻",
+        for phrase in ["根拠となる発言がある場合のみ", "推測で埋めず", "架空の ToDo を作らない", "t には根拠となる発言の時刻",
                        "3〜5 段落", "schema_version は 2", "priority は high / medium / low",
                        "Next Action に紐づかない期日", "next_actions の due に書く",
                        "ラベルのまま", "Mermaid の graph TD または graph LR", "ノード名は英語"] {

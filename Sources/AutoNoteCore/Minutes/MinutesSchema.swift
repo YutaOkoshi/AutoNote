@@ -3,6 +3,24 @@ import Foundation
 /// `scripts/minutes-schema.json` (schema v2), kept as a raw string so the package needs no resources.
 /// `ClaudeCodeSummarizerTests.schemaMatchesScriptsFile` keeps the two identical.
 public enum MinutesSchema {
+    /// The `title` property's `maxLength` for minutes written in `language`: Japanese 20 (the spec's schema, as in
+    /// `json`), English 60, as an English meeting name needs more letters (a real run's English title went past 20
+    /// and the structured output was refused). Both fit a file name untruncated (`MeetingFileName.maxTitleLength`).
+    public static func titleMaxLength(_ language: TranslationLanguage) -> Int {
+        language == .en ? 60 : 20
+    }
+
+    /// The schema passed with `--json-schema` for minutes written in `language`: `json` (= scripts/minutes-schema.json)
+    /// for Japanese; for English the same with the title's `maxLength` (and its description) from `titleMaxLength`.
+    public static func json(for language: TranslationLanguage) -> String {
+        guard language == .en else { return json }
+        let ja = titleMaxLength(.ja), en = titleMaxLength(.en)
+        // `maxLength` appears once in the schema (the title); `SummaryLanguageTests` checks nothing else changes.
+        return json
+            .replacingOccurrences(of: "\"maxLength\": \(ja),", with: "\"maxLength\": \(en),")
+            .replacingOccurrences(of: "会議名（\(ja) 文字以内", with: "会議名（\(en) 文字以内")
+    }
+
     public static let json: String = #"""
     {
       "type": "object",

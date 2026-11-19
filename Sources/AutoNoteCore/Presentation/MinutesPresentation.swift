@@ -36,6 +36,9 @@ public struct MinutesRow: Equatable, Identifiable, Sendable {
     public var timeText: String?
     /// Actions only: what the priority filter looks at.
     public var priority: MinutesLevel?
+    /// The translations shown under `text` and `detail` (spec 2026-11-19 表示); nil where there is none.
+    public var textTranslation: String?
+    public var detailTranslation: String?
 
     public init(id: String, text: String, secondary: String? = nil, secondaryTone: MinutesTone? = nil, detail: String? = nil,
                 badges: [MinutesBadge] = [], symbol: String? = nil, symbolTone: MinutesTone? = nil,
@@ -174,8 +177,42 @@ public enum MinutesPresentation {
         return text.isEmpty ? nil : text
     }
 
+    /// The minutes title's translation, nil when there is none.
+    public static func titleTranslation(_ m: MinutesOutput, translation: SummaryTranslationDocument?) -> String? {
+        translation?.translation(of: m.title)
+    }
+
     /// The sections in display order, each without blank items; a section with nothing left is not shown.
-    public static func sections(_ m: MinutesOutput) -> [MinutesSection] {
+    /// `translation` (the minutes', nil when hidden or none) puts each text's translation on its row.
+    public static func sections(_ m: MinutesOutput, translation: SummaryTranslationDocument? = nil) -> [MinutesSection] {
+        let plain = plainSections(m)
+        guard let translation else { return plain }
+        func tr(_ s: String?) -> String? { s.flatMap { translation.translation(of: $0) } }
+        return plain.map { section in
+            var section = section
+            for i in section.rows.indices {
+                guard let index = Int(section.rows[i].id.split(separator: "-").last ?? "") else { continue }
+                let (text, detail): (String?, String?) = switch section.kind {
+                case .agenda: (tr(m.agenda[index].title), tr(m.agenda[index].body))
+                case .summary: (tr(m.summary[index]), nil)
+                case .keyPoints: (tr(m.keyPoints[index].text), nil)
+                case .decisions: (tr(m.decisions[index].text), nil)
+                case .insights: (tr(m.insights[index].text), nil)
+                case .questions: (tr(m.questions[index].question), tr(m.questions[index].answer).map { "→ \($0)" })
+                case .deadlines: (tr(m.deadlines[index].description), nil)
+                case .followUps: (tr(m.followUps[index].text), nil)
+                case .risks: (tr(m.risks[index].description), tr(m.risks[index].mitigation).map { "対策: \($0)" })
+                case .actions: (tr(m.nextActions[index].text), nil)
+                case .attendees, .diagram: (nil, nil)
+                }
+                section.rows[i].textTranslation = text
+                section.rows[i].detailTranslation = detail
+            }
+            return section
+        }
+    }
+
+    private static func plainSections(_ m: MinutesOutput) -> [MinutesSection] {
         func clean(_ s: String?) -> String? {
             guard let s else { return nil }
             let t = s.trimmingCharacters(in: .whitespacesAndNewlines)

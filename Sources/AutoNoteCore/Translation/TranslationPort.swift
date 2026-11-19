@@ -20,6 +20,8 @@ public enum TranslationUpdate: Equatable, Sendable {
     case job(MeetingID, TranslationJobState?, revision: Int)
     /// One more translated line of the recording meeting's live transcript.
     case live(MeetingID, LiveTranslatedLine)
+    /// The recording meeting's live summary translation after one more text (`live-summary-translation.json`).
+    case liveSummary(MeetingID, SummaryTranslationDocument)
 }
 
 /// What the meeting screen needs to offer 「翻訳する」 at all (spec 9: also when the mode is off).
@@ -42,20 +44,27 @@ public struct MeetingTranslation: Equatable, Sendable {
     public var live: [String: LiveTranslatedLine]
     /// Whether the meeting has a final transcript (what 「翻訳する」 translates).
     public var hasTranscript: Bool
+    /// The live summary's and the minutes' translations (`live-summary-translation.json`, `minutes-translation.json`).
+    public var liveSummary: SummaryTranslationDocument?
+    public var minutes: SummaryTranslationDocument?
 
     public init(status: TranslationStatus = .none, byIndex: [Int: TranslatedUtterance] = [:],
-                live: [String: LiveTranslatedLine] = [:], hasTranscript: Bool = false) {
+                live: [String: LiveTranslatedLine] = [:], hasTranscript: Bool = false,
+                liveSummary: SummaryTranslationDocument? = nil, minutes: SummaryTranslationDocument? = nil) {
         self.status = status
         self.byIndex = byIndex
         self.live = live
         self.hasTranscript = hasTranscript
+        self.liveSummary = liveSummary
+        self.minutes = minutes
     }
 
     public static let empty = MeetingTranslation()
 
     /// The usable entries of `document` for `transcript` (nothing when stale).
     public static func make(document: TranslationDocument?, transcript: Transcript?,
-                            live: LiveTranslationDocument?) -> MeetingTranslation {
+                            live: LiveTranslationDocument?, liveSummary: SummaryTranslationDocument? = nil,
+                            minutes: SummaryTranslationDocument? = nil) -> MeetingTranslation {
         let status = TranslationStatus.of(document, transcript: transcript)
         var byIndex: [Int: TranslatedUtterance] = [:]
         if let document, let transcript, status != .stale {
@@ -65,7 +74,8 @@ public struct MeetingTranslation: Equatable, Sendable {
             }
         }
         let lines = Dictionary((live?.lines ?? []).map { ($0.key, $0) }, uniquingKeysWith: { _, new in new })
-        return MeetingTranslation(status: status, byIndex: byIndex, live: lines, hasTranscript: transcript != nil)
+        return MeetingTranslation(status: status, byIndex: byIndex, live: lines, hasTranscript: transcript != nil,
+                                  liveSummary: liveSummary, minutes: minutes)
     }
 }
 

@@ -80,8 +80,9 @@ autonote dev models list|download <name>|delete <name> [--data <dir>]
 autonote dev summarize --fake <transcript.json> --out <dir> [--minutes <minutes.json>] [--fail-summary] [--claude]
   (--minutes is required unless --fail-summary or --claude is given)
 autonote dev live-summary <live.json> [--state <state.json>] [--questions <questions.json>] [--claude]
-autonote dev translate <transcript.json> [--target auto|ja|en] [--model <gguf>]
-  (without --model: the deterministic fake, "EN: <text>" / "JA: <text>"; --model needs the on-device llama.cpp runtime)
+autonote dev translate <transcript.json> [--target auto|ja|en] [--model <gguf>] [--minutes <minutes.json>] [--live-summary <live-summary.json>]
+  (without --model: the deterministic fake, "EN: <text>" / "JA: <text>"; --model needs the on-device llama.cpp runtime;
+   --minutes / --live-summary also translate the summary's texts into the opposite of its language, or the fixed target)
 ```
 
 `scripts/` の一覧:

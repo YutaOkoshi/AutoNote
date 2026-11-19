@@ -78,6 +78,8 @@ public enum UserAction: Equatable, Sendable {
     public private(set) var translationRevisions: [MeetingID: Int] = [:]
     /// The recording meeting's live translations by `TranslationKey.live`; cleared when a recording starts.
     public private(set) var liveTranslations: [String: LiveTranslatedLine] = [:]
+    /// The recording meeting's live summary translation (newest); cleared when a recording starts.
+    public private(set) var liveSummaryTranslation: SummaryTranslationDocument?
     /// Whether the meeting screens may offer 「翻訳する」 (re-read with `refresh()`).
     public private(set) var translationAvailability: TranslationAvailability = .runtimeUnavailable
     /// The 「訳文」 switch. The app sets it at launch and after a settings save; `.setTranslationShown` changes it.
@@ -427,6 +429,7 @@ public enum UserAction: Equatable, Sendable {
         case .started(let id):
             live.reset()
             liveTranslations = [:]
+            liveSummaryTranslation = nil
             diskWarning = nil
             levelTracker = InputLevelTracker()
             recordedThisSession.insert(id)
@@ -486,6 +489,9 @@ public enum UserAction: Equatable, Sendable {
             // Only the recording meeting's lines are kept (a late line of an earlier meeting is dropped).
             guard recorder.meetingID == id else { return }
             liveTranslations[line.key] = line
+        case .liveSummary(let id, let document):
+            guard recorder.meetingID == id else { return }
+            liveSummaryTranslation = document
         }
     }
 

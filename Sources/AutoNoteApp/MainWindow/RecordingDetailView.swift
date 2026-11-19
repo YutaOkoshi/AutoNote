@@ -48,8 +48,11 @@ struct RecordingDetailView: View {
         switch LiveSummaryPresentation.recordingMode(liveSummaryEnabled: model.liveSummaryEnabled,
                                                      hasResult: update?.state != nil) {
         case .sidePane:
-            let content = LiveSummaryPresentation.pane(state: update?.state, status: update?.status ?? .active,
-                                                       updated: model.liveSummaryUpdatedText, questions: questions)
+            let content = LiveSummaryPresentation.pane(
+                state: update?.state, status: update?.status ?? .active, updated: model.liveSummaryUpdatedText,
+                questions: questions,
+                translation: TranslationPresentation.summaryTranslation(model.liveSummaryTranslation,
+                                                                        shown: model.translationShown))
             switch LiveSummaryLayout.arrangement(width: width) {
             case .sideBySide(let paneWidth):
                 HStack(spacing: 0) {
@@ -87,7 +90,10 @@ struct RecordingDetailView: View {
     private var transcriptPane: some View {
         VStack(spacing: 0) {
             PaneHeader(symbol: "bubble.left.and.text.bubble.right", title: LiveSummaryPresentation.transcriptTitle) {
-                if !model.liveTranslations.isEmpty { TranslationToggle(model: model) }
+                if !model.liveTranslations.isEmpty
+                    || TranslationPresentation.hasSummaryTranslation(model.liveSummaryTranslation) {
+                    TranslationToggle(model: model)
+                }
                 if let status = LiveSummaryPresentation.transcriptStatus(model.recorder.state) {
                     HStack(spacing: 4) {
                         Circle()

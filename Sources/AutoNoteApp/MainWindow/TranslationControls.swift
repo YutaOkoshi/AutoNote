@@ -50,7 +50,32 @@ struct TranslationToggle: View {
             .toggleStyle(.switch)
             .controlSize(.mini)
             .font(.caption)
-            .help("文字起こしの各行に訳文を併記します（原文は小さく表示）")
+            .help("文字起こしの各行と要約の各項目に訳文を併記します（原文は小さく表示）")
+    }
+}
+
+/// A summary text (a live summary item, a minutes row) with its translation underneath, the transcript line's look:
+/// the original shrinks to caption size in the secondary colour and the translation takes the given style; without
+/// one, the text exactly as before. Fonts set outside apply to the translation (or to the text alone).
+struct TranslatedText: View {
+    let original: String
+    let translation: String?
+
+    var body: some View {
+        if let translation {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(original)
+                    .font(.caption)
+                    .fontWeight(.regular)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(translation).fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(TranslationPresentation.accessibilityLabel(original: original, translation: translation))
+        } else {
+            Text(original).fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

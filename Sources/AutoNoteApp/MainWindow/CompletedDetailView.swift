@@ -93,7 +93,15 @@ struct CompletedDetailView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     Color.clear.frame(height: 0).id(Self.topID)
                     if let draft {
-                        MinutesSummaryView(minutes: draft.minutes) { time in
+                        if TranslationPresentation.hasSummaryTranslation(translation.minutes) {
+                            HStack {
+                                Spacer(minLength: 0)
+                                TranslationToggle(model: model)
+                            }
+                        }
+                        MinutesSummaryView(minutes: draft.minutes,
+                                           translation: TranslationPresentation.summaryTranslation(
+                                               translation.minutes, shown: model.translationShown)) { time in
                             guard let index = MinutesPresentation.utteranceIndex(for: time, in: utterances) else { return }
                             jump = TranscriptJump(index: index)
                             tab = .transcript
@@ -298,7 +306,8 @@ struct MinutesMissingView: View {
         let id = MeetingID(rawValue: row.id)
         VStack(spacing: 0) {
             FailureBand(env: env, model: model, shell: shell, row: row, item: queueItem)
-            StoredLiveSummary(model: model, id: MeetingID(rawValue: row.id), stored: stored)
+            StoredLiveSummary(model: model, id: MeetingID(rawValue: row.id), stored: stored,
+                              translation: translation.liveSummary)
             if transcript.isEmpty {
                 ContentUnavailableView("確定版の文字起こしはありません", systemImage: "text.alignleft")
                     .frame(maxHeight: .infinity)
