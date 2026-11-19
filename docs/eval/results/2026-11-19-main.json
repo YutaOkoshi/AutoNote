@@ -19,40 +19,6 @@
       "audio_seconds": 1043.36,
       "ref_window": "full",
       "runs": {
-        "full-whisper/en": {
-          "finals": 193,
-          "foreign": {
-            "utterances": 193,
-            "with_unexpected": 0,
-            "rate": 0.0,
-            "by_script": {}
-          },
-          "repetition": 0,
-          "rtf": 0.013,
-          "elapsed": 13.863,
-          "audio_seconds": null,
-          "er_raw": {
-            "errors": 988,
-            "ref_len": 2960,
-            "hyp_len": 2448,
-            "rate": 0.33378378378378376
-          },
-          "er": {
-            "errors": 525,
-            "ref_len": 2410,
-            "hyp_len": 2126,
-            "sub": 163,
-            "del": 323,
-            "ins": 39,
-            "max_del_run": 24,
-            "rate": 0.21784232365145229
-          },
-          "en_retention": {
-            "kept": 2014,
-            "ref": 2410,
-            "rate": 0.8356846473029046
-          }
-        },
         "whisper/auto": {
           "finals": 193,
           "foreign": {

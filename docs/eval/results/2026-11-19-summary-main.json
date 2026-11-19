@@ -7,7 +7,7 @@
   "build": {
     "autonote": "eval-harness/.build/release/autonote",
     "sha256": "88fbb7abd9318454462d1df8025d75aa69c3026346ce5f3e5357cb43253961aa",
-    "commit": "18b81e8c9632b7bbb02706b35b1e047092010a27",
+    "commit": "a96dfb99dd1525cab7197db03a68843ebe622d00",
     "branch": "feature/eval-harness"
   },
   "datasets": {

@@ -86,7 +86,7 @@ def transcript_from_final(decl, ds, autonote, label, model):
     if not os.path.exists(full):
         src = fetch.ensure_source(ds["audio"], decl["sources"][ds["audio"]])
         fetch.to_wav(src, full)
-    out = os.path.join(common.run_dir(label, ds["id"]), "full-whisper-en.jsonl")
+    out = os.path.join(common.run_dir(label, ds["id"]), "summary-input", "full-whisper-en.jsonl")
     if not runner.is_done(out):
         os.makedirs(os.path.dirname(out), exist_ok=True)
         print("文字起こし（全長）: %s" % ds["id"], flush=True)
