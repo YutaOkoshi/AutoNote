@@ -56,6 +56,21 @@ import Testing
         #expect(DefaultPrompt.languageLine(.en).contains("英語（English）で書く"))
     }
 
+    /// A real English run (2026-11-19) ended in `error_max_turns`: an English title easily passes the schema's
+    /// `maxLength`, the structured output is rejected and `--max-turns 1` leaves no turn to redo it. The English line
+    /// names the schema's own limit (read from the schema, so the two cannot drift) and says spaces count.
+    @Test func theEnglishLineNamesTheTitleLimitOfTheSchema() throws {
+        let schema = try #require(try JSONSerialization.jsonObject(with: Data(MinutesSchema.json.utf8)) as? [String: Any])
+        let title = try #require((schema["properties"] as? [String: Any])?["title"] as? [String: Any])
+        let limit = try #require(title["maxLength"] as? Int)
+        let en = DefaultPrompt.languageLine(.en)
+        #expect(limit == MinutesSchema.titleMaxLength)
+        #expect(en.contains("title は空白も含めて \(limit) 文字以内"))
+        #expect(en.contains("超えると出力全体が受け付けられない"))
+        // The Japanese line is as before (Japanese titles already fit).
+        #expect(!DefaultPrompt.languageLine(.ja).contains("空白も含めて"))
+    }
+
     @Test func anEditedPromptStillGetsTheLanguage() {
         let prompt = PromptBuilder().build(input(Self.english.enumerated().map { utt(Double($0.offset), $0.element) },
                                                  instructions: "日本語で、短く書いてください。"))

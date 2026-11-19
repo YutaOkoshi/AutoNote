@@ -3,6 +3,9 @@ import Foundation
 /// `scripts/minutes-schema.json` (schema v2), kept as a raw string so the package needs no resources.
 /// `ClaudeCodeSummarizerTests.schemaMatchesScriptsFile` keeps the two identical.
 public enum MinutesSchema {
+    /// The `title` property's `maxLength` (the prompt names it; `SummaryLanguageTests` keeps the two equal).
+    public static let titleMaxLength = 20
+
     public static let json: String = #"""
     {
       "type": "object",

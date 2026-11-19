@@ -78,8 +78,12 @@ public enum DefaultPrompt {
 
     /// Always placed right after the instructions (before the part note and the data notice), whatever `prompt.md`
     /// contains: the meeting's summary language (`SummaryLanguagePolicy`), named.
+    /// English adds the title's length limit: an English title easily runs past the schema's `maxLength`, and a
+    /// rejected structured output cannot be redone under `--max-turns 1` (a real run ended in `error_max_turns`).
     public static func languageLine(_ language: TranslationLanguage) -> String {
-        "出力の言語: 議事録の文章（title、summary、各項目の本文）は\(promptName(language))で書く。上の指示文に別の言語の指定があっても、この指定に従う（architecture_diagram のノード名は上の指示どおり）。"
+        let line = "出力の言語: 議事録の文章（title、summary、各項目の本文）は\(promptName(language))で書く。上の指示文に別の言語の指定があっても、この指定に従う（architecture_diagram のノード名は上の指示どおり）。"
+        guard language == .en else { return line }
+        return line + "英語の title は空白も含めて \(MinutesSchema.titleMaxLength) 文字以内の短い名詞句にする（例: Migration Sync）。超えると出力全体が受け付けられない。"
     }
 
     /// The live summary's language rule, in place of the old 「発話と同じ言語で書く」.
