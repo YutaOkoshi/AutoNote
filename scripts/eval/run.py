@@ -8,6 +8,8 @@
 - 言語は datasets.json の langs（--langs で絞れる）。確定版 = whisper、ライブ = whisper-live。
 - RTF を比べられるよう 1 本ずつ順に回す。--realtime は付けない（処理時間だけを測る）。
 - --data には評価専用の一時ディレクトリを渡し、利用者の設定・録音には触れない。
+- 1 つの label は 1 つのビルド（実行ファイルの SHA-256）だけ。違うビルドで続けようとすると止まる。
+  meta.json の commit は「実行したときのその worktree の HEAD」で、ビルドした時点のものとは限らない。
 """
 
 import argparse
@@ -31,11 +33,17 @@ def model_path(decl, override):
 
 
 def build_info(autonote):
-    info = {"autonote": os.path.abspath(autonote), "sha256": common.sha256_file(autonote)}
-    repo = os.path.dirname(os.path.abspath(autonote))
+    """ビルドの識別。場所は「worktree の名前/その中の相対パス」だけにする（結果はコミットするので、
+    ホームの絶対パス＝利用者名を入れない）。"""
+    path = os.path.abspath(autonote)
+    info = {"autonote": os.path.basename(path), "sha256": common.sha256_file(autonote)}
+    repo = os.path.dirname(path)
     try:
+        top = subprocess.run(["git", "-C", repo, "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                             check=True).stdout.strip()
         head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
         branch = subprocess.run(["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True)
+        info["autonote"] = os.path.join(os.path.basename(top), os.path.relpath(path, os.path.realpath(top)))
         info["commit"] = head.stdout.strip()
         info["branch"] = branch.stdout.strip()
     except (subprocess.CalledProcessError, OSError):
@@ -81,6 +89,7 @@ def main(argv):
     ap.add_argument("--model-path", default="")
     ap.add_argument("--timeout", type=int, default=3600)
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--allow-build-change", action="store_true")
     args = ap.parse_args(argv)
     decl = common.load_datasets()
     model = model_path(decl, args.model_path)
@@ -89,9 +98,22 @@ def main(argv):
     engines = [e for e in args.engines.split(",") if e]
     only_langs = set(l for l in args.langs.split(",") if l)
     label_dir = os.path.join(common.DATA, "runs", args.label)
-    meta = {"label": args.label, "build": build_info(args.autonote), "model": os.path.basename(model),
-            "started": datetime.datetime.now().isoformat(timespec="seconds")}
-    common.write_json(os.path.join(label_dir, "meta.json"), meta)
+    meta_path = os.path.join(label_dir, "meta.json")
+    build = build_info(args.autonote)
+    if os.path.exists(meta_path):
+        meta = common.load_json(meta_path)
+        if meta.get("build", {}).get("sha256") != build["sha256"] and not args.allow_build_change:
+            sys.exit("label %s は別のビルド（sha256 %s…）の結果を持っている。別の label にするか、"
+                     "文字起こしに関係しない作り直しなら --allow-build-change" % (args.label, meta["build"]["sha256"][:12]))
+        if meta.get("build", {}).get("sha256") != build["sha256"]:
+            meta.setdefault("previous_builds", []).append(meta["build"])
+            meta["build"] = build
+    else:
+        meta = {"label": args.label, "build": build, "model": os.path.basename(model),
+                "started": datetime.datetime.now().isoformat(timespec="seconds")}
+    if meta.get("model") != os.path.basename(model):
+        sys.exit("label %s はモデル %s の結果を持っている" % (args.label, meta.get("model")))
+    common.write_json(meta_path, meta)
     for ds in common.select(decl, args.datasets):
         audio = os.path.join(common.prepared_dir(ds["id"]), "audio.wav")
         if not os.path.exists(audio):

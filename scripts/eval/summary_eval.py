@@ -111,6 +111,7 @@ def summarize(autonote, transcript, allow, calls):
         return common.load_json(path), True
     if not allow:
         raise NeedsClaude("要約（autonote dev summarize --claude）")
+    os.makedirs(os.path.join(common.DATA, "cache"), exist_ok=True)
     work = tempfile.mkdtemp(prefix="summary-", dir=os.path.join(common.DATA, "cache"))
     try:
         tpath = os.path.join(work, "transcript.json")
