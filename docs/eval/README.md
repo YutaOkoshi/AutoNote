@@ -14,7 +14,7 @@ AutoNote の文字起こし（ライブ・確定版）と議事録要約の品�
 - `ffmpeg`（`brew install ffmpeg`）
 - 比べるビルドの `autonote`（例: `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk swift build -c release --product autonote`。Xcode なしの回避策は `docs/development.md`）
 - モデル: `~/Library/Application Support/AutoNote/models/ggml-large-v3-turbo-q5_0.bin`（`datasets.json` の `model`。`run.py --model-path` で変えられる）
-- ディスク: 公開データ一式で約 3 GB（会見の動画 3 本で約 0.9 GB、IngCrowd 3 対話で約 200 MB を含む）
+- ディスク: 公開データ一式で約 3 GB（会見の動画 4 本で約 1.2 GB、IngCrowd 3 対話で約 200 MB を含む）
 
 ## 使い方
 
@@ -51,6 +51,7 @@ autonote が 0 以外で終わった実行は、結果を使い、表に `⚠exi
 | `kantei-toron` | 党首討論 2010-04-21（国家基本政策委員会合同審査会） | 国会会議録（整文済み・時刻なし）。`calibration.json` の範囲で採点 | 動画: 首相官邸、Wikimedia Commons、CC BY 3.0（Commons ではライセンス審査が未了）。会議録: 国立国会図書館 国会会議録検索システム（発言者に著作権が残る。評価の解析にだけ使い、本文を再配布しない） |
 | `kantei-us` | 日米共同記者会見 2017-02-10。日本語と英語が交互に出る | 冒頭のトランプ大統領の発言（0〜240 秒）の英語（米国政府の記録）と、安倍総理の冒頭発言の日本語（官邸の会見録。時刻の範囲は `calibration.json`） | 動画: 首相官邸、Wikimedia Commons、CC BY 3.0。記録: govinfo.gov DCPD-201700110（public domain）。冒頭発言: 首相官邸ホームページ（WARP の保存版）、PDL1.0 |
 | `kaiken-kishida` / `kaiken-suga` / `kaiken-ishiba` | 総理の記者会見 3 本（岸田 2022-03-03・菅 2021-09-09・石破 2025-10-10）。総理・内閣広報官・記者 十数人。質疑応答の始まる 5 分前から 20 分を切り出す（`calibration.json` の `clip_start`） | 官邸の会見録（整文済み・時刻なし・話者ラベルつき）。`calibration.json` の範囲で採点し、冒頭発言と質疑に分けた誤り率も出す | 動画: 首相官邸、Wikimedia Commons、CC BY 3.0（岸田・菅）/ CC BY 4.0（石破）。会見録: 首相官邸ホームページ（国立国会図書館 WARP の保存版）、PDL1.0。出典の表示は `datasets.json` の attribution |
+| `kantei-us2025` | 日米共同記者会見 2025-02-07 の質疑（トランプ大統領・石破総理、ホワイトハウス、21.6 分）。英語で、日本語の発言は同時通訳の英語 | 大統領文書の本文のうち動画に当たる範囲（通訳の英語を含む。`calibration.json` の `en_start_char` / `en_end_char`） | 動画: The White House、Wikimedia Commons、public domain。記録: govinfo.gov DCPD-202500237（public domain） |
 | `ingcrowd-01` / `ingcrowd-05` / `ingcrowd-09` | IngCrowd の日本語テーマ雑談（2 人、Zoom、各 11〜12 分）。混合音声と**話者別の音声**がある | 人手の逐語の書き起こし（ELAN、話者・時刻つき。フィラー・言い直しを残す）。話者別の音声をアプリの「自分」「相手」のトラックとして回し、トラックごとの誤り率と相手の声の混入も出す | **CC BY-NC 4.0（非営利の利用に限る。音声・書き起こしを再配布しない）**。IngCrowd「Japanese Themed Casual Conversation Corpus」（Hugging Face IngCrowd/japanese-themed-dialogue、revision e2eed87） |
 | `mixed-synth` | 合成の日英混在: AMI TS3003c の後半と党首討論の後半から、正解がよく合う区間（英 12〜30 秒・日 15〜35 秒）を 8 組、0.6 秒の無音を挟んで交互につないだもの（区間ごとに音量を揃える） | 区間の正解をつないだもの | 上の 2 つに同じ |
 | `rwcp-sp01` | RWCP-SP01 会議音声データベース（無効。利用者が申請中） | — | 研究用・再配布不可。届いたら宣言を足す |
@@ -60,7 +61,7 @@ autonote が 0 以外で終わった実行は、結果を使い、表に `⚠exi
 - 合成の混在セットの日本語区間の切れ目は、確定版の発話の時刻から決めた（境界の数語がずれることがある。区間内の CER が 15% 以下のものだけ使う）。語の途中の切り替えは再現できない。
 - 会見の正解（官邸の会見録）も**整文済み**で、フィラーや言い直しは消してある。誤り率は党首討論と同じく「整文の差 + 認識の誤り」。記者の質問は第三者の発言なので、会見録は評価の解析にだけ使い、本文は再配布しない。WARP の保存版の著作権は元の著作権者（内閣官房）に残り、その条件（PDL1.0）に従う（WARP のサイトポリシー）。
 - IngCrowd の正解は逐語で、`<la>`（笑い）と `<?>`（聞き取り不能）の記号は除く。非営利限定なので、AutoNote が非商用である間の手元での評価に限る。結果（集計値）は他のデータと同じくコミットする。
-- 日米共同記者会見 2025-02-07（Commons の public domain の動画）は入れていない。動画は会見の後半（質疑）だけで、石破総理の日本語は同時通訳の英語の下にかすかに残るだけなので、日英の切り替えの評価にならず、冒頭発言（官邸の会見録）も動画に入っていない（2026-11-19 に確認）。大統領文書の全段落を正解にする変換（`refs.govinfo_paragraphs`、`en_paragraphs`）は残してある。
+- `kantei-us2025` の動画は会見の後半（質疑）だけで、石破総理と日本の記者の日本語は同時通訳の英語の下にかすかに残るだけ（ほぼ聞こえない）。**日英の切り替えの評価にはならない**。英語（トランプ大統領・米国の記者・通訳）の WER、想定外の文字種、`--lang ja` と `auto` の差を見るデータとして使う。日本語の CER は採点しない。
 - 日米会見の英語の冒頭は原稿の読み上げで、公開動画なのでモデルが学習で見ている可能性がある。英語の一般的な精度ではなく、`--lang ja` で英語が残るかを見るのに使う。
 - `datasets.json` の sha256 が空のものは、取得時の値を表示する（確かめて書き込む）。API の応答（会議録・govinfo）は `sha256_may_change` で、違っても警告だけ。
 
@@ -92,7 +93,7 @@ autonote が 0 以外で終わった実行は、結果を使い、表に `⚠exi
 python3 -I scripts/eval/summary_eval.py --autonote .build/release/autonote --label main --datasets ami-ES2008a --allow-claude
 ```
 
-- 入力は 2 通り: `reference`（AMI の正解の書き起こし。要約だけの力）と `final`（AutoNote の確定版、whisper・`--lang en`・会議の全長。通しの力）。
+- 入力は 2 通り: `reference`（AMI の正解の書き起こし。要約だけの力）と `final`（AutoNote の確定版、whisper・`--lang en`・会議の全長。通しの力）。`--inputs reference-me-other` は正解の書き起こしの話者 A を「自分」、ほかを「相手」にしたもの（話者ありの要約）。`dev summarize --fake` は transcript の `other` をシステム音声のトラックに置くので、話者が要約に届く（それより前の版では全部「自分」になっていた）。
 - 要約は `autonote dev summarize --fake <transcript.json> --claude --minutes-out <path>`（アプリと同じ Claude 呼び出しと議事録スキーマ）。
 - 採点は `claude -p --output-format json --json-schema …`（アプリと同じ固定の引数。道具なし・MCP なし・1 ターン）。採点モデルの既定は `claude-sonnet-5-5`（`--judge-model`）。
   - 突き合わせ: AMI の decisions / actions の各項目に、`MinutesOutput` の decisions / next_actions のどれが対応するかを判定させ、再現率と適合率を出す。
@@ -139,7 +140,7 @@ scripts/eval/eval.sh --autonote .build/release/autonote --label main --datasets 
 
 ```
 .eval-data/
-  ami/ kantei/ kantei-us/ kaiken/ ingcrowd/   取得したそのままのファイル
+  ami/ kantei/ kantei-us/ kantei-us2025/ kaiken/ ingcrowd/   取得したそのままのファイル
   prepared/<id>/audio.wav     16 kHz モノラル・先頭 20 分（会見は clip_start から 20 分）
   prepared/<id>/track-<me|other>.wav       話者別の音声（雑談）
   prepared/<id>/ref.json      正解（本文）

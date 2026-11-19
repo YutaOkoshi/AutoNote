@@ -87,5 +87,21 @@
       "model": "ggml-large-v3-turbo-q5_0.bin",
       "norm_version": "norm-1"
     }
+  },
+  "kantei-us2025": {
+    "en_start_char": 13383,
+    "en_end_char": 32208,
+    "en_tokens": [
+      2302,
+      5795,
+      5817
+    ],
+    "en_located_wer": 0.1291,
+    "made_with": {
+      "commit": "b323a880a3d9cedd8710069a043695be3d6035d4",
+      "branch": "feature/eval-open-data",
+      "model": "ggml-large-v3-turbo-q5_0.bin",
+      "norm_version": "norm-1"
+    }
   }
 }

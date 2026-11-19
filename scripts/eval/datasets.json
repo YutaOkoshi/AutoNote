@@ -118,6 +118,21 @@
       "license": "公共データ利用規約（第1.0版）（PDL1.0、CC BY 4.0 互換）。WARP の保存版は著作権が元の著作権者（内閣官房）に残り、その条件（PDL1.0）に従う。評価の解析にだけ使い本文を再配布しない",
       "attribution": "出典：首相官邸ホームページ「平成29年2月10日 日米共同記者会見」安倍総理冒頭発言（https://www.kantei.go.jp/jp/97_abe/statement/2017/0210usa.html、国立国会図書館 WARP の保存版）。評価のため注記を除いて加工、PDL1.0"
     },
+    "kantei-us2025-video": {
+      "url": "https://upload.wikimedia.org/wikipedia/commons/c/c3/President_Trump_Holds_a_Press_Conference_with_Prime_Minister_Shigeru_Ishiba_of_Japan_2025-02-07_19-37.webm",
+      "sha256": "34407b2ec19217b2c078e30adb1c4c68a7c07f2b6da0975c798e6d0f1967a99a",
+      "path": "kantei-us2025/us.webm",
+      "license": "Public domain（Wikimedia Commons の表示。米国政府の著作物。出典は The White House の YouTube）",
+      "attribution": "The White House「President Trump Holds a Press Conference with Prime Minister Shigeru Ishiba of Japan」2025-02-07, Wikimedia Commons, public domain"
+    },
+    "kantei-us2025-record": {
+      "url": "https://www.govinfo.gov/content/pkg/DCPD-202500237/html/DCPD-202500237.htm",
+      "sha256": "86436fa7597ede7ff7da365f0154d749e8afd335d3cf054065851f57bb6c7fb3",
+      "sha256_may_change": true,
+      "path": "kantei-us2025/gov.html",
+      "license": "米国政府の著作物（public domain）",
+      "attribution": "Daily Compilation of Presidential Documents DCPD-202500237「The President's News Conference With Prime Minister Shigeru Ishiba of Japan」(govinfo.gov)"
+    },
     "ingcrowd-01-mix": {
       "url": "https://huggingface.co/datasets/IngCrowd/japanese-themed-dialogue/resolve/e2eed8769400269f20821deb0e47e68b40012e8b/japanese-themed-dialogue01/japanese-themed-dialogue01_audio.wav",
       "sha256": "ea1138f2b05e6b3cc9580ed1196748ed67c5847f222c1cf4a54de6bf4d9d3282",
@@ -310,6 +325,18 @@
       "unit": "char",
       "langs": ["ja", "auto"],
       "ref_window": "calibrated"
+    },
+    {
+      "id": "kantei-us2025",
+      "kind": "govinfo",
+      "title": "日米共同記者会見 2025-02-07 の質疑（トランプ大統領・石破総理。英語、日本語の発言は同時通訳の英語。正解は大統領文書の該当範囲）",
+      "audio": "kantei-us2025-video",
+      "record": "kantei-us2025-record",
+      "unit": "word",
+      "langs": ["ja", "auto"],
+      "en_paragraphs": true,
+      "ref_window": "calibrated",
+      "notes": "Commons の動画（21.6 分）は会見の後半（質疑）だけ。石破総理と日本の記者の日本語は同時通訳の英語の下にかすかに残るだけで、ほぼ聞こえない（ライブ・auto の 191 発話のうち日本語は 2 つ）。日英の切り替えの評価にはならない。測るのは英語の WER（大統領文書の、動画に当たる範囲。通訳の英語を含む）、想定外の文字種、--lang ja と auto の差。日本語の CER は採点しない。官邸の冒頭発言は動画に入っていないので使わない"
     },
     {
       "id": "ingcrowd-01",

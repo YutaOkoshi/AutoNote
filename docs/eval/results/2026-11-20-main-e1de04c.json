@@ -1750,6 +1750,169 @@
         }
       }
     },
+    "kantei-us2025": {
+      "title": "日米共同記者会見 2025-02-07 の質疑（トランプ大統領・石破総理。英語、日本語の発言は同時通訳の英語。正解は大統領文書の該当範囲）",
+      "kind": "govinfo",
+      "unit": "word",
+      "audio_seconds": 1294.954,
+      "ref_window": "calibrated",
+      "runs": {
+        "whisper/auto": {
+          "finals": 267,
+          "foreign": {
+            "utterances": 267,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 1,
+          "rtf": 0.016,
+          "elapsed": 20.138,
+          "audio_seconds": null,
+          "er": {
+            "errors": 264,
+            "ref_len": 3493,
+            "hyp_len": 3285,
+            "sub": 32,
+            "del": 220,
+            "ins": 12,
+            "max_del_run": 25,
+            "rate": 0.07557973089035214
+          },
+          "en_wer": {
+            "errors": 264,
+            "ref_len": 3493,
+            "hyp_len": 3285,
+            "sub": 32,
+            "del": 220,
+            "ins": 12,
+            "max_del_run": 25,
+            "rate": 0.07557973089035214
+          },
+          "en_retention": {
+            "kept": 3265,
+            "ref": 3480,
+            "rate": 0.9382183908045977
+          }
+        },
+        "whisper/ja": {
+          "finals": 266,
+          "foreign": {
+            "utterances": 266,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 2,
+          "rtf": 0.021,
+          "elapsed": 27,
+          "audio_seconds": null,
+          "er": {
+            "errors": 497,
+            "ref_len": 3493,
+            "hyp_len": 3058,
+            "sub": 34,
+            "del": 449,
+            "ins": 14,
+            "max_del_run": 269,
+            "rate": 0.14228456913827656
+          },
+          "en_wer": {
+            "errors": 497,
+            "ref_len": 3493,
+            "hyp_len": 3058,
+            "sub": 34,
+            "del": 449,
+            "ins": 14,
+            "max_del_run": 269,
+            "rate": 0.14228456913827656
+          },
+          "en_retention": {
+            "kept": 3039,
+            "ref": 3480,
+            "rate": 0.8732758620689656
+          }
+        },
+        "whisper-live/auto": {
+          "finals": 191,
+          "foreign": {
+            "utterances": 191,
+            "with_unexpected": 1,
+            "rate": 0.005235602094240838,
+            "by_script": {
+              "CYRILLIC": 1
+            }
+          },
+          "repetition": 2,
+          "rtf": 0.059,
+          "elapsed": 76.415,
+          "audio_seconds": null,
+          "er": {
+            "errors": 451,
+            "ref_len": 3493,
+            "hyp_len": 3261,
+            "sub": 93,
+            "del": 295,
+            "ins": 63,
+            "max_del_run": 29,
+            "rate": 0.12911537360435155
+          },
+          "en_wer": {
+            "errors": 451,
+            "ref_len": 3493,
+            "hyp_len": 3261,
+            "sub": 93,
+            "del": 295,
+            "ins": 63,
+            "max_del_run": 29,
+            "rate": 0.12911537360435155
+          },
+          "en_retention": {
+            "kept": 3193,
+            "ref": 3480,
+            "rate": 0.917528735632184
+          }
+        },
+        "whisper-live/ja": {
+          "finals": 191,
+          "foreign": {
+            "utterances": 191,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 8,
+          "rtf": 0.105,
+          "elapsed": 136.49,
+          "audio_seconds": null,
+          "er": {
+            "errors": 3169,
+            "ref_len": 3493,
+            "hyp_len": 453,
+            "sub": 125,
+            "del": 3042,
+            "ins": 2,
+            "max_del_run": 454,
+            "rate": 0.9072430575436587
+          },
+          "en_wer": {
+            "errors": 3169,
+            "ref_len": 3493,
+            "hyp_len": 453,
+            "sub": 125,
+            "del": 3042,
+            "ins": 2,
+            "max_del_run": 454,
+            "rate": 0.9072430575436587
+          },
+          "en_retention": {
+            "kept": 358,
+            "ref": 3480,
+            "rate": 0.1028735632183908
+          }
+        }
+      }
+    },
     "ingcrowd-01": {
       "title": "IngCrowd 雑談 01（趣味・娯楽。40 代女性と 20 代男性、Zoom。逐語・時刻つき。非営利限定）",
       "kind": "eaf",
