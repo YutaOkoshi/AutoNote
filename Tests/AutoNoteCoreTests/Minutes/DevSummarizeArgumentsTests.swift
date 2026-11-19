@@ -76,4 +76,39 @@ import Testing
         let failing = try DevSummarizeArguments.parse(["--fake", "t.json", "--out", "d", "--fail-summary"])
         #expect(failing.failSummary && failing.minutes == nil)
     }
+
+    // MARK: fake tracks (`--fake` keeps "me" and "other" apart)
+
+    private func utterance(_ start: Double, _ speaker: Speaker, _ text: String) -> Utterance {
+        Utterance(start: TimelineTime(seconds: start), end: TimelineTime(seconds: start + 1), speaker: speaker, text: text,
+                  isFinal: true)
+    }
+
+    @Test func otherSpeakerGoesToTheSystemTrack() {
+        let input = [utterance(0, .me, "a"), utterance(1, .other, "b"), utterance(2, .unknown, "c"), utterance(3, .other, "d")]
+        let plan = DevSummarizeArguments.fakeTracks(input)
+        #expect(plan.map(\.track) == [.mic, .system])
+        #expect(plan[0].utterances.map(\.text) == ["a", "c"])
+        #expect(plan[1].utterances.map(\.text) == ["b", "d"])
+        #expect(plan.map(\.relativePath) == ["tracks/mic-000.wav", "tracks/system-000.wav"])
+        #expect(plan.map(\.mergedFileName) == ["mic-0.wav", "system-0.wav"])
+    }
+
+    @Test func withoutOtherSpeakerThereIsOnlyTheMicTrack() {
+        let plan = DevSummarizeArguments.fakeTracks([utterance(0, .unknown, "a"), utterance(1, .me, "b")])
+        #expect(plan.map(\.track) == [.mic])
+        #expect(plan[0].utterances.count == 2)
+    }
+
+    @Test func mergingThePlannedTracksRestoresTheSpeakers() {
+        let input = [utterance(0, .me, "a"), utterance(1, .other, "b"), utterance(2, .me, "c")]
+        let parts = DevSummarizeArguments.fakeTracks(input).map { t in
+            TrackTranscription(file: TrackFile(track: t.track, relativePath: t.relativePath,
+                                               startOffset: TimelineTime(seconds: 0), durationSeconds: 1),
+                               utterances: t.utterances)
+        }
+        let merged = TranscriptMerger.merge(parts, source: .live)
+        #expect(merged.map(\.speaker) == [.me, .other, .me])
+        #expect(merged.map(\.text) == ["a", "b", "c"])
+    }
 }

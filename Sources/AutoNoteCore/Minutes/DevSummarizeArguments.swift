@@ -62,6 +62,25 @@ public struct DevSummarizeArguments: Equatable, Sendable {
                                      failSummary: failSummary, useClaude: useClaude, minutesOut: minutesOut)
     }
 
+    /// One track of the fictional meeting that `dev summarize --fake` builds.
+    public struct FakeTrack: Equatable, Sendable {
+        public var track: Track
+        public var utterances: [Utterance]
+        /// Where the (silent) segment is written, relative to the meeting directory.
+        public var relativePath: String { "tracks/\(track.rawValue)-000.wav" }
+        /// The file name the final transcription pass hands the transcriber (SegmentMerger's `merged/<track>-0.wav`).
+        public var mergedFileName: String { "\(track.rawValue)-0.wav" }
+    }
+
+    /// Lays the `--fake` transcript out as tracks so the speakers survive TranscriptMerger, which names speakers by
+    /// track (mic = me, system = other): utterances of `other` go to a system track, the rest (`me`, `unknown`) to the
+    /// mic track. Without any `other` there is only the mic track, as before. Only the dev command uses this.
+    public static func fakeTracks(_ utterances: [Utterance]) -> [FakeTrack] {
+        let other = utterances.filter { $0.speaker == .other }
+        let mic = FakeTrack(track: .mic, utterances: utterances.filter { $0.speaker != .other })
+        return other.isEmpty ? [mic] : [mic, FakeTrack(track: .system, utterances: other)]
+    }
+
     /// `--minutes-out`: copies the generated `minutes.json` to `destination` (creating its folder) after checking that
     /// it decodes as `MinutesOutput`, so an evaluation script gets the structured minutes, not the Markdown note.
     public static func exportMinutes(from source: URL, to destination: URL) throws {

@@ -44,17 +44,23 @@ enum DevSummarize {
         let id = MeetingID(rawValue: "20261024-0500-dev0")
         let tracksDir = paths.tracksDirectory(id)
         try fm.createDirectory(at: tracksDir, withIntermediateDirectories: true)
-        try PCMAudio.writeWAV(Array(repeating: 0, count: 16_000), to: tracksDir.appending(path: "mic-000.wav"))
+        // "me" and "other" go to the mic and system tracks so TranscriptMerger gives them back their speakers.
+        let fakeTracks = DevSummarizeArguments.fakeTracks(transcript.utterances)
+        for track in fakeTracks {
+            try PCMAudio.writeWAV(Array(repeating: 0, count: 16_000),
+                                  to: paths.meetingDirectory(id).appending(path: track.relativePath))
+        }
         let manifest = Manifest(
             id: id, title: nil, startedAt: started, endedAt: started.addingTimeInterval(1), source: .live, device: nil,
-            language: transcript.language, tracks: [TrackFile(track: .mic, relativePath: "tracks/mic-000.wav",
-                                                              startOffset: TimelineTime(seconds: 0), durationSeconds: 1)],
+            language: transcript.language,
+            tracks: fakeTracks.map { TrackFile(track: $0.track, relativePath: $0.relativePath,
+                                               startOffset: TimelineTime(seconds: 0), durationSeconds: 1) },
             pauses: [], bookmarks: [], status: .recorded, silenceWarning: false, autonoteVersion: AutoNoteVersion.current)
         try await ManifestStore(paths: paths).save(manifest)
 
         let gate = BatchGate()
         let runner = FinalTranscriptionRunner(
-            transcriber: FakeBatchTranscriber(results: ["mic-0.wav": transcript.utterances]),
+            transcriber: FakeBatchTranscriber(results: Dictionary(uniqueKeysWithValues: fakeTracks.map { ($0.mergedFileName, $0.utterances) })),
             engineName: transcript.engine, paths: paths, gate: gate)
         let summarizer: @Sendable (Settings, AppPaths) async throws -> any Summarizer
         if o.useClaude {
