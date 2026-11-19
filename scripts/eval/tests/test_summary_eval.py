@@ -29,10 +29,11 @@ class FaithfulnessTests(unittest.TestCase):
     def test_items_and_score(self):
         minutes = {"summary": ["s"], "decisions": [{"text": "d", "t": "00:00:01"}],
                    "next_actions": [{"text": "a", "owner": "PM", "due": None, "t": "00:00:02", "priority": "high"}],
-                   "key_points": [{"title": "k", "body": "b", "t": "00:00:03"}]}
+                   "key_points": [{"text": "k", "t": "00:00:03"}]}
         items = summary_eval.faith_items(minutes)
         self.assertEqual([i for i, _ in items], ["summary.0", "decision.0", "action.0", "key_point.0"])
         self.assertEqual(items[2][1], "a (owner: PM)")
+        self.assertEqual(items[3][1], "k")   # MinutesPoint has text, not title/body
         r = summary_eval.faith_scores(items, [{"id": "summary.0", "verdict": "supported"},
                                               {"id": "decision.0", "verdict": "partial"},
                                               {"id": "action.0", "verdict": "unsupported"}])

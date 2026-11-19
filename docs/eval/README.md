@@ -91,9 +91,9 @@ python3 -I scripts/eval/summary_eval.py --autonote .build/release/autonote --lab
   - 突き合わせ: AMI の decisions / actions の各項目に、`MinutesOutput` の decisions / next_actions のどれが対応するかを判定させ、再現率と適合率を出す。
   - 忠実性: 要約・決定事項・次のアクション・要点の各項目が、**正解の書き起こし**に照らして supported / partial / unsupported のどれかを判定させる。スコア = (supported + 0.5 × partial) ÷ 項目数。
 - 要約のキャッシュの鍵は「書き起こし + autonote の SHA-256」なので、ビルドを変えると要約は作り直す（採点は要約の中身が同じなら再利用）。
-- **Claude を呼ぶのは `--allow-claude` を付けたときだけ**。要約と採点は入力のハッシュで `.eval-data/cache/` にキャッシュし、同じ入力では呼び直さない（`--allow-claude` なしでキャッシュが無ければ止まる）。プロンプトを変えたら `PROMPT_VERSION` を上げる。
+- **Claude を呼ぶのは `--allow-claude` を付けたときだけ**。要約と採点は入力のハッシュで `.eval-data/cache/` にキャッシュし、同じ入力では呼び直さない（`--allow-claude` なしでキャッシュが無ければ止まる）。プロンプトを変えたら `MATCH_PROMPT_VERSION`（突き合わせ）か `FAITH_PROMPT_VERSION`（忠実性）を上げる（上げた側だけ呼び直す）。
 - 結果: `docs/eval/results/<日付>-summary-<label>.json` と `.md`。採点モデル（実際に使われた ID）、プロンプトの版、議事録スキーマの版、トークン量を記録する。
-- 1 会議で、要約 1 回 + 採点 2 回（入力 2 通りで計 6 回）。採点の入力は正解の書き起こし全文なので、20 分の会議で 1 回あたり約 1 万トークン。
+- 1 会議で、要約 1 回 + 採点 2 回（入力 2 通りで計 6 回）。採点の入力は正解の書き起こし全文なので、忠実性の採点は 20〜40 分の会議で 1 回あたり約 1〜1.6 万トークン。AMI 3 会議 × 2 通りで約 23 万トークン（2026-11-19 の実測。EVAL-REPORT の記録）。
 
 ## 手元の録音（共有できない会議）
 

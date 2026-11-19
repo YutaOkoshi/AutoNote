@@ -29,7 +29,9 @@ import fetch  # noqa: E402
 import refs  # noqa: E402
 import run as runner  # noqa: E402
 
-PROMPT_VERSION = "judge-1"
+MATCH_PROMPT_VERSION = "judge-1"
+FAITH_PROMPT_VERSION = "judge-2"   # judge-2: 要点（key_points）の本文を正しく渡す（judge-1 は空文字を渡していた）
+PROMPT_VERSION = "match=%s,faith=%s" % (MATCH_PROMPT_VERSION, FAITH_PROMPT_VERSION)
 SUMMARY_CACHE_VERSION = "summary-1"
 DEFAULT_JUDGE_MODEL = "claude-sonnet-5-5"
 CLAUDE_FIXED_ARGS = ["--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
@@ -130,9 +132,9 @@ def summarize(autonote, transcript, allow, calls):
         shutil.rmtree(work, ignore_errors=True)
 
 
-def claude_json(prompt, schema, model, allow, calls, what):
+def claude_json(prompt, schema, model, allow, calls, what, version):
     schema_text = json.dumps(schema, sort_keys=True)
-    key = common.sha256_text("\n".join([PROMPT_VERSION, model, schema_text, prompt]))
+    key = common.sha256_text("\n".join([version, model, schema_text, prompt]))
     path = os.path.join(common.DATA, "cache", "judge", key + ".json")
     if os.path.exists(path):
         return common.load_json(path), True
@@ -197,7 +199,7 @@ def faith_items(minutes):
     for i, a in enumerate(generated_actions(minutes)):
         items.append(("action.%d" % i, a))
     for i, k in enumerate(minutes.get("key_points", [])):
-        items.append(("key_point.%d" % i, (k.get("title", "") + ": " + k.get("body", "")).strip(": ")))
+        items.append(("key_point.%d" % i, k.get("text", "")))   # MinutesPoint = {text, t}
     return items
 
 
@@ -236,7 +238,8 @@ def evaluate(decl, ds, variant, args, calls):
         "<generated_decisions>\n%s\n</generated_decisions>" % numbered(pred_dec),
         "<generated_next_actions>\n%s\n</generated_next_actions>" % numbered(pred_act),
         MATCH_INSTRUCTIONS])
-    match, cached_match = claude_json(match_prompt, MATCH_SCHEMA, args.judge_model, args.allow_claude, calls, "judge-match")
+    match, cached_match = claude_json(match_prompt, MATCH_SCHEMA, args.judge_model, args.allow_claude, calls, "judge-match",
+                                MATCH_PROMPT_VERSION)
     m = match["structured_output"]
     # 忠実性は、入力によらず正解の書き起こしを根拠にする（確定版の誤りから来た誤りも拾うため）。
     ref_transcript = transcript_text(transcript_from_reference(decl, ds))
@@ -246,7 +249,7 @@ def evaluate(decl, ds, variant, args, calls):
         "<minutes_items>\n%s\n</minutes_items>" % "\n".join("%s: %s" % (i, t) for i, t in items),
         FAITH_INSTRUCTIONS])
     faith, cached_faith = claude_json(faith_prompt, FAITH_SCHEMA, args.judge_model, args.allow_claude, calls,
-                                      "judge-faithfulness")
+                                      "judge-faithfulness", FAITH_PROMPT_VERSION)
     return {
         "transcript_utterances": len(transcript["utterances"]),
         "minutes_schema_version": minutes.get("schema_version"),
