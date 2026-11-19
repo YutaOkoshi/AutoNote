@@ -317,13 +317,16 @@ final class AppEnvironment {
         await liveSummary.run(feeds: await live.confirmedFeeds())
     }
 
-    /// Launch item 2: the live translation of each recording, the post-recording translation following the queue,
-    /// and the pause while recording. Never on the recording's or the queue's path (they are only observed).
+    /// Launch item 2: the live translation of each recording (its live summary too), the post-recording translation
+    /// following the queue, and the pause while recording. Never on the recording's or the queue's path (they are only observed).
     func runTranslation() async {
         let translation = translation, liveTranslation = liveTranslation, live = live, ports = ports
+        let liveSummary = liveSummary
         let activity = RecordingSessionActivity(session: session)
         await withDiscardingTaskGroup { group in
             group.addTask { await liveTranslation.run(feeds: await live.confirmedFeeds()) }
+            // The live summary's texts are translated inside the live translation's session (one model).
+            group.addTask { await liveTranslation.follow(summaries: await liveSummary.updates()) }
             group.addTask { await translation.follow(queue: await ports.queue.updates()) }
             group.addTask { await translation.follow(recording: await activity.isRecordingUpdates()) }
         }

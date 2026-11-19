@@ -20,6 +20,8 @@ public enum TranslationUpdate: Equatable, Sendable {
     case job(MeetingID, TranslationJobState?, revision: Int)
     /// One more translated line of the recording meeting's live transcript.
     case live(MeetingID, LiveTranslatedLine)
+    /// The recording meeting's live summary translation after one more text (`live-summary-translation.json`).
+    case liveSummary(MeetingID, SummaryTranslationDocument)
 }
 
 /// What the meeting screen needs to offer 「翻訳する」 at all (spec 9: also when the mode is off).
