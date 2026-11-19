@@ -26,7 +26,9 @@ scripts/eval/eval.sh --autonote ../other-worktree/.build/release/autonote --labe
 ```
 
 `eval.sh` は fetch（取得・検証・音声と正解の用意）→ run（文字起こし）→ score（採点）→ report（表）を順に回す。
-取得済み・用意済み・実行済みのものは飛ばすので、途中で止まっても同じコマンドで続きから回る。個別にも回せる:
+取得済み・用意済み・実行済みのものは飛ばすので、途中で止まっても同じコマンドで続きから回る。1 つの label には
+1 つのビルド（実行ファイルの SHA-256）の結果だけを入れる（別のビルドで続けようとすると止まる）。出力を書き終えた後に
+autonote が 0 以外で終わった実行は、結果を使い、表に `⚠exit` を付ける。個別にも回せる:
 
 | スクリプト | 役割 |
 |---|---|
@@ -34,6 +36,7 @@ scripts/eval/eval.sh --autonote ../other-worktree/.build/release/autonote --labe
 | `run.py --autonote <bin> --label <名前> [--engines …] [--langs …]` | `autonote dev transcribe` を確定版（whisper）とライブ（whisper-live）× 言語で 1 本ずつ順に回す（RTF を比べるため並列にしない。`--realtime` なし） |
 | `score.py --label <名前> [--set-baseline]` | 採点して `docs/eval/results/` に書く |
 | `report.py <result.json> [--base <json>|none]` | Markdown の表。既定の基準は `docs/eval/baseline.json` |
+| `rtf.py --a <label>=<bin> --b <label>=<bin> [--rounds 3]` | 処理時間の比較。2 ビルドを交互に複数回回した中央値の比（1 回ずつの RTF は他の負荷で 2 倍近く揺れるので、速度の判断はこちらで） |
 | `calibrate.py --autonote <bin>` | 一度だけ: 党首討論の正解の範囲（`calibration.json`）と合成の混在セットの区間（`mixed-spans.json`）を決める |
 | `summary_eval.py --autonote <bin> --label <名前> [--allow-claude]` | 要約の評価（後述） |
 | `local.py add/draft/import` | 手元の録音を加える（後述） |
@@ -87,6 +90,7 @@ python3 -I scripts/eval/summary_eval.py --autonote .build/release/autonote --lab
 - 採点は `claude -p --output-format json --json-schema …`（アプリと同じ固定の引数。道具なし・MCP なし・1 ターン）。採点モデルの既定は `claude-sonnet-5-5`（`--judge-model`）。
   - 突き合わせ: AMI の decisions / actions の各項目に、`MinutesOutput` の decisions / next_actions のどれが対応するかを判定させ、再現率と適合率を出す。
   - 忠実性: 要約・決定事項・次のアクション・要点の各項目が、**正解の書き起こし**に照らして supported / partial / unsupported のどれかを判定させる。スコア = (supported + 0.5 × partial) ÷ 項目数。
+- 要約のキャッシュの鍵は「書き起こし + autonote の SHA-256」なので、ビルドを変えると要約は作り直す（採点は要約の中身が同じなら再利用）。
 - **Claude を呼ぶのは `--allow-claude` を付けたときだけ**。要約と採点は入力のハッシュで `.eval-data/cache/` にキャッシュし、同じ入力では呼び直さない（`--allow-claude` なしでキャッシュが無ければ止まる）。プロンプトを変えたら `PROMPT_VERSION` を上げる。
 - 結果: `docs/eval/results/<日付>-summary-<label>.json` と `.md`。採点モデル（実際に使われた ID）、プロンプトの版、議事録スキーマの版、トークン量を記録する。
 - 1 会議で、要約 1 回 + 採点 2 回（入力 2 通りで計 6 回）。採点の入力は正解の書き起こし全文なので、20 分の会議で 1 回あたり約 1 万トークン。
