@@ -45,7 +45,8 @@ struct ProcessingDetailView: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
-            StoredLiveSummary(model: model, id: MeetingID(rawValue: row.id), stored: stored)
+            StoredLiveSummary(model: model, id: MeetingID(rawValue: row.id), stored: stored,
+                              translation: translation.liveSummary)
             TranslationControls(model: model, id: MeetingID(rawValue: row.id), translation: translation)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)

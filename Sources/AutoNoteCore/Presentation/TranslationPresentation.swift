@@ -53,6 +53,7 @@ public enum TranslationPresentation {
     public static func controls(job: TranslationJobState?, translation: MeetingTranslation, hasTranscript: Bool,
                                 available: Bool) -> Controls {
         let hasLines = !translation.byIndex.isEmpty || !translation.live.isEmpty
+            || hasSummaryTranslation(translation.liveSummary) || hasSummaryTranslation(translation.minutes)
         switch job {
         case .queued:
             return Controls(status: "翻訳の順番を待っています…", progress: nil, showsToggle: hasLines)
@@ -86,6 +87,17 @@ public enum TranslationPresentation {
 
     private static func fraction(_ p: TranslationProgress) -> Double? {
         p.total > 0 ? min(1, Double(p.done) / Double(p.total)) : nil
+    }
+
+    /// Whether a summary's translation has anything to show (the 「訳文」 switch shows next to it).
+    public static func hasSummaryTranslation(_ document: SummaryTranslationDocument?) -> Bool {
+        document?.entries.contains { !$0.text.isEmpty } ?? false
+    }
+
+    /// What a summary view gets: the document while the 「訳文」 switch is on, nothing while it is off.
+    public static func summaryTranslation(_ document: SummaryTranslationDocument?,
+                                          shown: Bool) -> SummaryTranslationDocument? {
+        shown ? document : nil
     }
 
     /// VoiceOver reads the original, then the translation announced as such.
