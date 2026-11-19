@@ -116,7 +116,7 @@ public enum TranslationKey {
     }
 }
 
-/// Reads and writes the two translation files of a meeting. Writes are atomic; the transcript files are never
+/// Reads and writes the translation files of a meeting (the transcript's two and the summaries' two). Writes are atomic; the transcript files are never
 /// opened for writing.
 public struct TranslationStore: Sendable {
     public let paths: AppPaths
@@ -150,6 +150,30 @@ public struct TranslationStore: Sendable {
 
     public func deleteLive(_ id: MeetingID) {
         try? FileManager.default.removeItem(at: liveTranslationFile(id))
+    }
+
+    /// `live-summary-translation.json` or `minutes-translation.json`.
+    public func summaryTranslationFile(_ id: MeetingID, _ kind: SummaryKind) -> URL {
+        paths.transcriptsDirectory(id).appending(path: kind.fileName)
+    }
+
+    /// nil when there is none; a file that cannot be decoded is treated as none (it is rewritten on the next run).
+    public func loadSummary(_ id: MeetingID, _ kind: SummaryKind) -> SummaryTranslationDocument? {
+        read(SummaryTranslationDocument.self, from: summaryTranslationFile(id, kind))
+    }
+
+    public func saveSummary(_ document: SummaryTranslationDocument, _ kind: SummaryKind, for id: MeetingID) throws {
+        try write(document, to: summaryTranslationFile(id, kind))
+    }
+
+    /// `minutes.json`, read only; nil when missing or unreadable.
+    public func minutes(_ id: MeetingID) -> MinutesOutput? {
+        read(MinutesOutput.self, from: paths.minutesFile(id))
+    }
+
+    /// `live-summary.json`, read only; nil when missing or unreadable.
+    public func liveSummary(_ id: MeetingID) -> LiveSummaryState? {
+        read(LiveSummaryState.self, from: paths.liveSummaryFile(id))
     }
 
     /// The final transcript (`final.json`), read only.

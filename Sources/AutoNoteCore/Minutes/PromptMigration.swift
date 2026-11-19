@@ -1,15 +1,17 @@
 import CryptoKit
 import Foundation
 
-/// Moves `prompt.md` to the current default instructions when schema v2 changed them.
+/// Moves `prompt.md` to the current default instructions when schema v2 (or the summary language, 0.7) changed them.
 /// - A file that is exactly an old default (SHA-256 match, surrounding whitespace ignored) is replaced by
 ///   `DefaultPrompt.instructions`: the user never edited it.
 /// - An edited file is left alone; the 議事録 settings tab offers 「差分を見る / 既定に戻す」 instead (`needsReview`).
 public enum PromptMigration {
-    /// SHA-256 of every default `instructions` shipped before the current one (0.2.1 and earlier: one text).
-    /// `PromptMigrationTests.legacyHashMatchesLegacyText` pins it to `DefaultPrompt.legacyInstructionsV1`.
+    /// SHA-256 of every default `instructions` shipped before the current one: 0.2.1 and earlier
+    /// (`DefaultPrompt.legacyInstructionsV1`) and schema v2 up to 0.6.0, which fixed the language to Japanese
+    /// (`DefaultPrompt.legacyInstructionsV2`). `PromptMigrationTests` and `SummaryLanguageTests` pin them.
     public static let legacyDefaultSHA256s: Set<String> = [
         "4d4869084adf262a8299e1dc3097d16fe6e3a9ce66012ae64e80034254c2039c",
+        "1be8fb6a67c8edbd9ed853407f27b33e9ba3dfec7839a792baeb1865fa27ba01",
     ]
 
     public enum State: Equatable, Sendable {

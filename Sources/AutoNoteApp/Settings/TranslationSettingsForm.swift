@@ -34,7 +34,7 @@ struct TranslationSettingsForm: View {
                 Picker("訳す先", selection: $target) {
                     ForEach(TranslationTarget.allCases, id: \.self) { Text($0.displayName).tag($0) }
                 }
-                Text("自動では、日本語の発話を英語に、英語の発話を日本語に訳します。訳文は文字起こしの各行に併記します（会議の画面の「訳文」で表示を切り替えられます）。")
+                Text(TranslationSettingsPresentation.targetNote)
                     .font(.caption).foregroundStyle(.secondary)
                 if !runtimeAvailable {
                     Label(TranslationSettingsPresentation.runtimeUnavailableNote, systemImage: "info.circle")

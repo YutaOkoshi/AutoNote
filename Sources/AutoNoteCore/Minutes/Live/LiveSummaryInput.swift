@@ -9,10 +9,14 @@ public struct LiveSummaryRequest: Equatable, Sendable {
     public var consumedThrough: Double
     /// The person's questions not decided yet (`LiveQuestionList.pendingForModel`); only their ids come back.
     public var questions: [LiveQuestionPrompt]
+    /// The language the summary is written in: every confirmed utterance so far decides it
+    /// (`SummaryLanguagePolicy`), so it switches from the next call when the meeting's language changes.
+    public var language: TranslationLanguage
 
-    public init(previous: LiveSummaryState, utterances: [Utterance], consumedThrough: Double, questions: [LiveQuestionPrompt] = []) {
+    public init(previous: LiveSummaryState, utterances: [Utterance], consumedThrough: Double,
+                questions: [LiveQuestionPrompt] = [], language: TranslationLanguage = .ja) {
         self.previous = previous; self.utterances = utterances; self.consumedThrough = consumedThrough
-        self.questions = questions
+        self.questions = questions; self.language = language
     }
 }
 
@@ -50,7 +54,8 @@ public enum LiveSummaryInputBuilder {
             .filter { endSeconds($0.element) > from }
             .sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }
             .map(\.element)
-        return LiveSummaryRequest(previous: previous, utterances: window, consumedThrough: last)
+        return LiveSummaryRequest(previous: previous, utterances: window, consumedThrough: last,
+                                  language: SummaryLanguagePolicy.decide(usable.map(\.text)))
     }
 
     /// One `PromptBuilder.line` per utterance; over `characterLimit`, the oldest lines (or the head of a lone
@@ -75,7 +80,7 @@ public enum LiveSummaryInputBuilder {
     /// instructions → data notice → previous state (compact JSON) → questions (compact JSON, `[]` when none) → utterances.
     public static func prompt(_ r: LiveSummaryRequest) -> String {
         let previous = LiveSummaryPrevious(now: r.previous.now, decisions: r.previous.decisions, todos: r.previous.todos)
-        return [DefaultPrompt.liveInstructions, DefaultPrompt.liveDataNotice,
+        return [DefaultPrompt.liveInstructions(language: r.language), DefaultPrompt.liveDataNotice,
                 "## 前回の状態\n" + compact(previous, fallback: "{}"),
                 "## 聞きたいこと\n" + compact(r.questions, fallback: "[]"),
                 "## 発話\n" + transcriptBlock(r.utterances)].joined(separator: "\n\n")

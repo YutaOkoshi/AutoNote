@@ -1088,6 +1088,44 @@ check_dev_translate_fixed_target() {
     pass "訳 2 件（英語の行だけ）、--target fr は usage"
 }
 
+check_dev_translate_summaries() {
+    CURRENT="10.5 dev translate --minutes --live-summary が要約を要約の言語の反対へ訳す（原文のファイルは書き換えない）"
+    command -v jq >/dev/null 2>&1 || { skip "jq が無い"; return; }
+    cli_or_skip || return
+    [[ -s "${WORK}/translate-in.json" ]] || write_dev_translate_input
+    cat >"${WORK}/translate-minutes.json" <<'JSON'
+{"schema_version":2,"title":"移行の定例","summary":["週末に六割を移した。"],"decisions":[{"text":"月末までに終える","t":"00:01:00"}],
+"agenda":[],"next_actions":[{"text":"手順書を送る","owner":"佐藤","due":"2026-11-30","t":"00:02:00","priority":"high"}],
+"suggested_terms":[],"attendees":[{"name":"佐藤","role":"PM"}],"key_points":[],"insights":[],"questions":[],"deadlines":[],
+"follow_ups":[],"risks":[],"architecture_diagram":null}
+JSON
+    cat >"${WORK}/translate-live.json" <<'JSON'
+{"now":"Migration status","decisions":["Finish by month end"],"todos":[{"text":"Send the runbook","owner":null,"side":"self"}],
+"consumed_through":30}
+JSON
+    local before; before="$(shasum -a 256 "${WORK}/translate-minutes.json" "${WORK}/translate-live.json")"
+    local out="${WORK}/translate-5.json" same="${WORK}/translate-5b.json"
+    run_timeout 30 sh -c '"$1" dev translate "$2" --minutes "$3" --live-summary "$4" >"$5"' _ "${AUTONOTE_CLI}" \
+        "${WORK}/translate-in.json" "${WORK}/translate-minutes.json" "${WORK}/translate-live.json" "${out}"; local code=$?
+    [[ ${code} -eq 0 ]] || { fail "exit ${code}（期待 0）"; return; }
+    jq -e '.minutes.summary_lang == "ja" and .minutes.target_lang == "en"
+           and ([.minutes.entries[].source] == ["週末に六割を移した。", "移行の定例", "月末までに終える", "手順書を送る"])
+           and .minutes.entries[2].text == "EN: 月末までに終える"
+           and ([.minutes.entries[].source] | index("佐藤") == null)
+           and .live_summary.summary_lang == "en" and .live_summary.target_lang == "ja"
+           and ([.live_summary.entries[].text] == ["JA: Migration status", "JA: Finish by month end", "JA: Send the runbook"])
+           and ([.entries[].index] == [0, 1, 4])' "${out}" >/dev/null \
+        || { LAST_LOG="${out}"; fail "要約の訳の形か向きが違う: $(cat "${out}")"; return; }
+    [[ "$(shasum -a 256 "${WORK}/translate-minutes.json" "${WORK}/translate-live.json")" == "${before}" ]] \
+        || { fail "原文の要約ファイルが書き換わった"; return; }
+    run_timeout 30 sh -c '"$1" dev translate "$2" --target ja --minutes "$3" >"$4"' _ "${AUTONOTE_CLI}" \
+        "${WORK}/translate-in.json" "${WORK}/translate-minutes.json" "${same}"; code=$?
+    [[ ${code} -eq 0 ]] || { fail "--target ja が exit ${code}（期待 0）"; return; }
+    jq -e '.minutes.entries == [] and .minutes.summary_lang == "ja" and (.minutes | has("target_lang") | not)' "${same}" >/dev/null \
+        || { LAST_LOG="${same}"; fail "訳す先が要約の言語と同じなのに訳した: $(cat "${same}")"; return; }
+    pass "議事録 ja→en 4 件（担当者名は訳さない）、ライブ要約 en→ja 3 件、--target ja の日本語の議事録は訳さない"
+}
+
 check_dev_translate_real_model() {
     CURRENT="10.3 dev translate --model で本物の PLaMo 3 Translate が訳す（モデルと翻訳エンジンがあるときだけ）"
     command -v jq >/dev/null 2>&1 || { skip "jq が無い"; return; }
@@ -1163,6 +1201,7 @@ CHECKS=(
     check_dev_live_summary_questions
     check_dev_translate_shape
     check_dev_translate_fixed_target
+    check_dev_translate_summaries
     check_dev_translate_real_model
 )
 

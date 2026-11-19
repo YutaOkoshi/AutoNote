@@ -5,13 +5,18 @@ public struct MeetingDocument: Sendable {
     public let transcript: Transcript
     public let minutes: MinutesOutput?
     public let timeZone: TimeZone
+    /// `minutes-translation.json`: with a translation of the current minutes, the note ends with the translated
+    /// minutes (spec 2026-11-19 表示).
+    public let minutesTranslation: SummaryTranslationDocument?
     private let frontmatter: FrontmatterTemplate
     private let appVersion: String
 
     public init(manifest: Manifest, transcript: Transcript, minutes: MinutesOutput?,
-                frontmatter: FrontmatterTemplate, appVersion: String, timeZone: TimeZone) {
+                frontmatter: FrontmatterTemplate, appVersion: String, timeZone: TimeZone,
+                minutesTranslation: SummaryTranslationDocument? = nil) {
         self.manifest = manifest; self.transcript = transcript; self.minutes = minutes
         self.frontmatter = frontmatter; self.appVersion = appVersion; self.timeZone = timeZone
+        self.minutesTranslation = minutesTranslation
     }
 
     private var givenTitle: String? {
@@ -79,8 +84,62 @@ public struct MeetingDocument: Sendable {
         sections.append("## ブックマーク\n" + list(bookmarks))
 
         let body = TranscriptMarkdown.render(utterances, pauses: manifest.pauses)
-        if body.isEmpty { return sections.joined(separator: "\n\n") + "\n\n## 文字起こし\n" }
-        return sections.joined(separator: "\n\n") + "\n\n## 文字起こし\n\n" + body
+        let note = body.isEmpty ? sections.joined(separator: "\n\n") + "\n\n## 文字起こし\n"
+            : sections.joined(separator: "\n\n") + "\n\n## 文字起こし\n\n" + body
+        guard let translated = translationSection(flat: flat, link: link, withLink: withLink, cell: cell, list: list) else {
+            return note
+        }
+        // Lead's call, open to change: the translated minutes go at the very end (after the transcript).
+        return note.trimmingCharacters(in: .newlines) + "\n\n" + translated + "\n"
+    }
+
+    /// 「議事録の訳文（英語）」.
+    public static func translationHeading(_ language: TranslationLanguage) -> String {
+        "議事録の訳文（\(language.displayName)）"
+    }
+
+    /// The translated minutes: the heading, a note, the translated title, then the minutes sections one level down
+    /// with each text replaced by its translation (a text without one stays as it is; the diagram is left out).
+    /// nil when no text of the current minutes has a translation.
+    private func translationSection(flat: (String) -> String, link: (String) -> String?,
+                                    withLink: (String, String) -> String, cell: (String?) -> String,
+                                    list: ([String]) -> String) -> String? {
+        guard let m = minutes, let t = minutesTranslation else { return nil }
+        let hashes = Set(SummaryTranslation.minutesTexts(m).map(TranslationKey.textHash))
+        guard let language = t.entries.first(where: { hashes.contains($0.sourceHash) && !$0.text.isEmpty })?
+            .targetLanguage else { return nil }
+        func tr(_ s: String) -> String { t.translation(of: s) ?? s }
+        func trOptional(_ s: String?) -> String? { s.map(tr) }
+        var x = m
+        x.title = tr(m.title)
+        x.summary = m.summary.map(tr)
+        x.decisions = m.decisions.map { Decision(text: tr($0.text), t: $0.t) }
+        x.agenda = m.agenda.map { AgendaItem(title: tr($0.title), body: tr($0.body), t: $0.t) }
+        x.nextActions = m.nextActions.map {
+            NextAction(text: tr($0.text), owner: $0.owner, due: $0.due, t: $0.t, priority: $0.priority)
+        }
+        x.keyPoints = m.keyPoints.map { MinutesPoint(text: tr($0.text), t: $0.t) }
+        x.insights = m.insights.map { MinutesPoint(text: tr($0.text), t: $0.t) }
+        x.followUps = m.followUps.map { MinutesPoint(text: tr($0.text), t: $0.t) }
+        x.questions = m.questions.map {
+            MinutesQuestion(question: tr($0.question), askedBy: $0.askedBy, isResolved: $0.isResolved,
+                            answer: trOptional($0.answer), t: $0.t)
+        }
+        x.deadlines = m.deadlines.map { Deadline(description: tr($0.description), date: $0.date, owner: $0.owner, t: $0.t) }
+        x.risks = m.risks.map {
+            Risk(description: tr($0.description), severity: $0.severity, mitigation: trOptional($0.mitigation), t: $0.t)
+        }
+        x.architectureDiagram = nil
+        let body = Self.minutesSections(x, flat: flat, link: link, withLink: withLink, cell: cell, list: list)
+            .map { section in
+                section.split(separator: "\n", omittingEmptySubsequences: false)
+                    .map { $0.hasPrefix("#") ? "#" + $0 : String($0) }
+                    .joined(separator: "\n")
+            }
+        let header = ["## " + Self.translationHeading(language),
+                      "> 端末内の翻訳モデルで上の議事録を訳したものです。原文が正です。",
+                      "**\(flat(x.title))**"]
+        return (header + body).joined(separator: "\n\n")
     }
 
     /// The minutes sections in the schema v2 order (spec F2 §3.3). 議題・要約・決定事項・アクション are always written

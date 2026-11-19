@@ -28,8 +28,8 @@ public struct ClaudeCodeSummarizer: Summarizer {
     }
 
     /// The spec command line verbatim; only `--model <name>` may be appended.
-    public static func arguments(model: String?) -> [String] {
-        arguments(schema: MinutesSchema.json, model: model)
+    public static func arguments(model: String?, language: TranslationLanguage = .ja) -> [String] {
+        arguments(schema: MinutesSchema.json(for: language), model: model)
     }
 
     /// The spec command line with `schema` as `--json-schema`; shared by the minutes and live summarizers.
@@ -48,19 +48,20 @@ public struct ClaudeCodeSummarizer: Summarizer {
                                               environmentOverrides: environmentOverrides)
         try emptyWorkingDirectory()
 
+        let language = PromptBuilder.language(input)
         switch builder.plan(input) {
         case .single(let prompt):
             do {
-                return try await run(prompt)
+                return try await run(prompt, language: language)
             } catch SummarizerError.contextExceeded(let message) {
                 guard case .split(let parts) = builder.plan(input, minimumParts: 2) else {
                     throw SummarizerError.contextExceeded(message: message)
                 }
                 Self.logger.info("context exceeded; retrying split into \(parts.count, privacy: .public) parts")
-                return try await runSplit(parts, instructions: input.instructions)
+                return try await runSplit(parts, instructions: input.instructions, language: language)
             }
         case .split(let parts):
-            return try await runSplit(parts, instructions: input.instructions)
+            return try await runSplit(parts, instructions: input.instructions, language: language)
         }
     }
 
@@ -72,15 +73,18 @@ public struct ClaudeCodeSummarizer: Summarizer {
         }
     }
 
-    private func runSplit(_ parts: [String], instructions: String) async throws -> MinutesOutput {
+    private func runSplit(_ parts: [String], instructions: String, language: TranslationLanguage) async throws -> MinutesOutput {
         var partials: [MinutesOutput] = []
-        for part in parts { partials.append(try await run(part)) }
-        return try await run(builder.mergePrompt(instructions: instructions, partials: partials))
+        for part in parts { partials.append(try await run(part, language: language)) }
+        return try await run(builder.mergePrompt(instructions: instructions, partials: partials, language: language),
+                             language: language)
     }
 
-    private func run(_ prompt: String) async throws -> MinutesOutput {
+    /// `language` picks the schema (the title's length, `MinutesSchema.json(for:)`).
+    private func run(_ prompt: String, language: TranslationLanguage) async throws -> MinutesOutput {
         let result = try await runner.run(executable: URL(fileURLWithPath: claudePath),
-                                          arguments: ClaudeLaunch.arguments(base: Self.arguments(model: model), extra: extraArguments),
+                                          arguments: ClaudeLaunch.arguments(base: Self.arguments(model: model, language: language),
+                                                                            extra: extraArguments),
                                           stdin: Data(prompt.utf8), workingDirectory: workingDirectory,
                                           environment: ClaudeProcess.environment(claudePath: claudePath, overrides: environmentOverrides),
                                           timeout: timeout)
