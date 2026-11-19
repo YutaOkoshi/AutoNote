@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import AudioToolbox
 import CoreAudio
+import Synchronization
 
 public protocol MicrophonePermissionChecking: Sendable {
     func status() -> MicrophonePermissionStatus
@@ -37,7 +38,25 @@ public protocol MicrophoneEngine: AnyObject, Sendable {
     func prepare(deviceID: AudioDeviceID?, voiceProcessing: Bool) throws -> InputFormat
     /// Starts delivering Float32 input into `ring`.
     func start(writingTo ring: AudioRingBuffer) throws
+    /// Tears the graph down; `prepare` builds a new one. Safe to call when nothing is prepared.
     func stop()
+    /// Whether the engine is running now. False after it stopped itself (e.g. on a configuration change mid-start).
+    var isRunning: Bool { get }
+    /// The input format the hardware reports now (it may differ from the one `prepare` returned after a change).
+    func currentFormat() -> InputFormat?
+    /// Called from any thread when the hardware configuration changes under the prepared graph
+    /// (`AVAudioEngineConfigurationChange`). Set before `prepare`; kept across `stop` and `prepare`.
+    func setConfigurationChangeHandler(_ handler: (@Sendable () -> Void)?)
+    /// Default input / output for diagnostics (transport, rate, channels, running). No names.
+    func routeDescription() -> String
+    /// True when the prepared graph reads a device that is no longer the one to read (the default input changed under
+    /// a graph that followed it, or its device disappeared) though it may still run with the same format.
+    var needsRebuild: Bool { get }
+}
+
+extension MicrophoneEngine {
+    public func routeDescription() -> String { "unavailable" }
+    public var needsRebuild: Bool { false }
 }
 
 /// `AVAudioEngine` input node with a tap that copies each buffer into the ring.
@@ -45,11 +64,33 @@ public protocol MicrophoneEngine: AnyObject, Sendable {
 public final class AVMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {   // mutated only on the source's control queue
     private var engine: AVAudioEngine?
     private var format: AVAudioFormat?
+    private var observer: (any NSObjectProtocol)?
+    /// Read from the notification's thread, so behind a lock (in a class so the observer block can hold it).
+    private final class HandlerBox: Sendable {
+        let value = Mutex<(@Sendable () -> Void)?>(nil)
+    }
+    private let handler = HandlerBox()
 
     public init() {}
 
+    public var isRunning: Bool { engine?.isRunning ?? false }
+
+    public func currentFormat() -> InputFormat? {
+        guard let engine else { return nil }
+        let fmt = engine.inputNode.outputFormat(forBus: 0)   // what `prepare` read and the tap was installed with
+        guard fmt.sampleRate > 0, fmt.channelCount > 0 else { return nil }
+        return InputFormat(sampleRate: fmt.sampleRate, channels: Int(fmt.channelCount))
+    }
+
+    public func setConfigurationChangeHandler(_ handler: (@Sendable () -> Void)?) {
+        self.handler.value.withLock { $0 = handler }
+    }
+
+    public func routeDescription() -> String { AudioRoute.describeDefaults() }
+
     /// AVAudioEngine → voice processing (before the device) → current device → input format.
     public func prepare(deviceID: AudioDeviceID?, voiceProcessing: Bool) throws -> InputFormat {
+        if let observer { NotificationCenter.default.removeObserver(observer); self.observer = nil }
         let engine = AVAudioEngine()
         let input = engine.inputNode
         if voiceProcessing {
@@ -71,6 +112,10 @@ public final class AVMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {  
         }
         self.engine = engine
         self.format = fmt
+        let handler = self.handler
+        observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { _ in
+            handler.value.withLock { $0 }?()
+        }
         return InputFormat(sampleRate: fmt.sampleRate, channels: Int(fmt.channelCount))
     }
 
@@ -88,6 +133,8 @@ public final class AVMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {  
     }
 
     public func stop() {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        observer = nil
         guard let engine else { return }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()

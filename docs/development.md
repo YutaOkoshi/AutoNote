@@ -23,6 +23,7 @@ AutoNote をソースからビルドし、テストし、変更を入れるた�
 - テスト: `swift test`
 - アプリ（.app）のビルド: `scripts/build-app.sh [debug|release]`（既定は debug）。成果物は `build/AutoNote.app`、同梱の CLI は `build/AutoNote.app/Contents/MacOS/autonote`
 - 動作確認（E2E）: `scripts/e2e-check.sh`。CLI・ソケット・ファイルで確かめられる範囲を人の手なしで見る。`--quick` は時間のかかる項目（`swift test`・`build-app`・whisper を使う項目）を飛ばし、前回ビルドした `build/AutoNote.app` をそのまま確かめる。`--verbose` で各コマンドの出力をそのまま見せる
+- Bluetooth ヘッドセットの実機確認: `scripts/bt-verify.sh --bt-name <名前の一部>`。ヘッドセットの切断・接続（blueutil）、一時プロファイルの Chrome で鳴らすトーンや WebRTC のループバック、独立したタップでの計測を、人の手なしで回す。修正前と修正後のビルドを比べられる。入力・出力が動作中なら始めない。結果は `summary.md`・`results.json`。`scripts/e2e-check.sh` の項目 17 は、構文・計測プログラムのコンパイル・`--dry-run` だけを見る
 - CI と同じ .app を手元で作るなら `AUTONOTE_BUILD_ARCHS="arm64 x86_64" AUTONOTE_CODESIGN_IDENTITY=- scripts/build-app.sh release`（`AUTONOTE_BUILD_ARCHS` を付けなければホストのアーキテクチャだけ、`AUTONOTE_CODESIGN_IDENTITY` を付けなければ `AutoNote Dev` で署名）
 
 ### `AUTONOTE_DATA_DIR`

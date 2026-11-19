@@ -6,6 +6,12 @@ public protocol AudioSourceFactory: Sendable {
     func makeMicrophoneSource(deviceUID: String?, clock: MeetingClock) -> any AudioSource
     /// For `manifest.device`. nil uid = the default input.
     func inputDevice(uid: String?) -> DeviceRef?
+    /// Logs the audio route while a meeting records (diagnostics only). nil = no route logging.
+    func makeRouteMonitor() -> (any AudioRouteMonitoring)?
+}
+
+extension AudioSourceFactory {
+    public func makeRouteMonitor() -> (any AudioRouteMonitoring)? { nil }
 }
 
 /// Real hardware: a Core Audio process tap for system audio and `AVAudioEngine` for the microphone.
@@ -23,10 +29,13 @@ public struct LiveAudioSourceFactory: AudioSourceFactory {
     }
 
     public func makeMicrophoneSource(deviceUID: String?, clock: MeetingClock) -> any AudioSource {
-        MicrophoneSource(deviceUID: deviceUID, clock: clock, voiceProcessing: voiceProcessing)
+        MicrophoneSource(deviceUID: deviceUID, clock: clock, voiceProcessing: voiceProcessing,
+                         engine: RoutingMicrophoneEngine(), inputHold: CoreAudioBluetoothInputHold())
     }
 
     public func inputDevice(uid: String?) -> DeviceRef? {
         CoreAudioDeviceLookup().deviceRef(forUID: uid)
     }
+
+    public func makeRouteMonitor() -> (any AudioRouteMonitoring)? { CoreAudioRouteMonitor() }
 }

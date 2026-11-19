@@ -631,6 +631,18 @@ check_claude_probe_files() {
     LAST_LOG=""; pass "（claude の実呼び出しは費用がかかるので E2E では行わない）"
 }
 
+check_bt_verify_script() {
+    CURRENT="17. scripts/bt-verify.sh の静的確認（構文・計測プログラムのコンパイル・--dry-run）"
+    if ! run bash -n scripts/bt-verify.sh; then fail "bt-verify.sh に構文エラー"; return; fi
+    if ! run python3 -I -m py_compile scripts/bt-verify.py; then fail "bt-verify.py に構文エラー"; return; fi
+    # --dry-run は何も鳴らさず・つながず・起動しない（既定の入出力を読むだけ）。--bt-name なしでも exit 0
+    local code
+    run_timeout 180 scripts/bt-verify.sh --dry-run --out "${WORK}/bt-verify-dry" </dev/null; code=$?
+    [[ ${code} -eq 0 ]] || { fail "--dry-run が exit ${code}"; return; }
+    grep -q '\[dry-run\] nothing was played' "${LAST_LOG}" || { fail "--dry-run の終わりの行が無い"; return; }
+    LAST_LOG=""; pass "（実機の Bluetooth での実行は scripts/bt-verify.sh --bt-name <名前の一部>）"
+}
+
 check_render_fixture() {
     CURRENT="01.1 render-fixture が golden と一致"
     cli_or_skip || return
@@ -1228,6 +1240,7 @@ CHECKS=(
     check_results_doc
     check_fake_transcript
     check_claude_probe_files
+    check_bt_verify_script
     check_render_fixture
     check_render_fixture_detects_diff
     check_dev_record

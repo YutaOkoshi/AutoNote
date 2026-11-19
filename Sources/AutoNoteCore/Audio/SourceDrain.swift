@@ -1,5 +1,6 @@
 import Foundation
 import Synchronization
+import os
 
 /// Resumes a checked continuation at most once, whichever of work completion and timeout comes first.
 /// The winner is recorded under the same lock as the resume, so `timedOut` is final once the continuation resumes.
@@ -70,17 +71,33 @@ extension DispatchQueue {
 }
 
 enum SourceDrain {
+    static let healthLogger = Logger(subsystem: "com.yutaokoshi.autonote", category: "AudioHealth")
+    /// Seconds of meeting time per debug line with the callback count of the track.
+    static let healthWindowSeconds = 10.0
+
     /// Every 20 ms: read all records, convert each to a chunk stamped with its own host time.
     /// When a record does not start where the previous one ended (within `TimelineAligner.tolerance`), emits the
     /// converter's tail at the end of the previous record and resets the converter.
     /// On cancellation, drains what is left and emits the converter's tail, placed at the end of the last record.
     static func makeTask(track: Track, ring: AudioRingBuffer, converter: sending SampleConverter, inputRate: Double,
-                         clock: MeetingClock, onBuffer: @Sendable @escaping (AudioChunk) -> Void) -> Task<Void, Never> {
+                         clock: MeetingClock, health: SourceHealth? = nil,
+                         onBuffer: @Sendable @escaping (AudioChunk) -> Void) -> Task<Void, Never> {
         Task.detached(priority: .userInitiated) {
             var converter = converter
             var buffer: [Float] = []
             var expectedNext: Double?           // timeline seconds where the next record should start
             var lastHostTime: UInt64 = 0
+            var window = (clock.now().seconds / healthWindowSeconds).rounded(.down)
+
+            /// Diagnostics only: one debug line per 10 s of meeting time, even when no callback came at all.
+            func logWindow() {
+                guard let health else { return }
+                let current = (clock.now().seconds / healthWindowSeconds).rounded(.down)
+                guard current > window else { return }
+                window = current
+                let (callbacks, nonZero) = health.takeWindow()
+                healthLogger.debug("\(track.rawValue, privacy: .public): last \(Int(healthWindowSeconds), privacy: .public) s callbacks=\(callbacks, privacy: .public) all_zero=\(callbacks > 0 && !nonZero, privacy: .public)")
+            }
 
             func drainAvailable() {
                 while let record = ring.read(into: &buffer) {
@@ -95,6 +112,10 @@ enum SourceDrain {
                     }
                     expectedNext = start.seconds + Double(record.frameCount) / inputRate
                     lastHostTime = record.hostTime
+                    if let health {
+                        health.recordCallback(start: start.seconds, duration: Double(record.frameCount) / inputRate,
+                                              nonZero: buffer.contains { $0 != 0 })
+                    }
                     let samples = converter.convert(buffer)
                     if !samples.isEmpty {
                         onBuffer(AudioChunk(track: track, samples: samples, start: start, hostTime: record.hostTime))
@@ -104,6 +125,7 @@ enum SourceDrain {
 
             while !Task.isCancelled {
                 drainAvailable()
+                logWindow()
                 try? await Task.sleep(for: .milliseconds(20))
             }
             drainAvailable()

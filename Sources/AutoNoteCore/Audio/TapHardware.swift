@@ -28,6 +28,12 @@ public protocol TapHardware: Sendable {
     func destroyIOProc(_ device: AudioObjectID, _ proc: AudioDeviceIOProcID) throws
     func destroyAggregate(_ device: AudioObjectID) throws
     func destroyTap(_ tap: AudioObjectID) throws
+    /// Default input / output for diagnostics (transport, rate, channels, running). No names.
+    func routeDescription() -> String
+}
+
+extension TapHardware {
+    public func routeDescription() -> String { "unavailable" }
 }
 
 /// Production glue: each method maps 1:1 to a Core Audio call. Not unit-tested (needs a device).
@@ -110,4 +116,6 @@ public struct CoreAudioTapHardware: TapHardware {
     public func destroyTap(_ tap: AudioObjectID) throws {
         try Self.check(AudioHardwareDestroyProcessTap(tap), "AudioHardwareDestroyProcessTap")
     }
+
+    public func routeDescription() -> String { AudioRoute.describeDefaults() }
 }

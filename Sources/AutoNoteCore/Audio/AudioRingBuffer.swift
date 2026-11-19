@@ -55,6 +55,8 @@ public final class AudioRingBuffer: @unchecked Sendable {
     }
 
     public var droppedFrames: Int { dropped.load(ordering: .relaxed) }
+    /// Records written so far (one per successful `write`): tells a watchdog whether callbacks still arrive.
+    public var recordsWritten: Int { writeRecordIndex.load(ordering: .relaxed) }
 
     /// Producer side. Returns false (and counts `frameCount` as dropped) when the callback cannot be stored whole.
     @discardableResult

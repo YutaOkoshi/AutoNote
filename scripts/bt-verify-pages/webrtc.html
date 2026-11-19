@@ -1,0 +1,55 @@
+<!doctype html><meta charset="utf-8"><title>bt-verify webrtc</title>
+<body style="font:16px sans-serif;margin:2em">
+<h2>bt-verify: WebRTC loopback（会議アプリの代役。ローカルのみ）</h2>
+<audio id="remote" autoplay></audio>
+<pre id="st">starting</pre>
+<script>
+// 会議アプリの代役: getUserMedia でマイクを開き（エコーキャンセルあり）、同じページ内の 2 つの RTCPeerConnection をつなぐ。
+// 「相手の声」= WebAudio の 660 Hz を MediaStreamDestination で pc1 から送り、pc2 で受けて <audio> で再生する。
+// 自分のマイクは pc2 から pc1 へ送る（Meet と同じく、マイクと受信音声が同時に流れる）。
+const q = new URLSearchParams(location.search);
+const freq = Number(q.get('freq') || 660), level = Number(q.get('level') || 0.05);
+const st = document.getElementById('st'), remote = document.getElementById('remote');
+const state = { page: 'webrtc', freq, level, mic: 'pending', pc1: '', pc2: '', remote_level_db: null, mic_level_db: null, audio_paused: null, audio_time: 0, error: null };
+const ctx = new AudioContext();
+let micAnalyser = null, remoteAnalyser = null;
+function levelDb(an) {
+  if (!an) return null;
+  const buf = new Float32Array(an.fftSize); an.getFloatTimeDomainData(buf);
+  let s = 0; for (const v of buf) s += v * v; const rms = Math.sqrt(s / buf.length);
+  return rms > 0 ? Math.round(200 * Math.log10(rms)) / 10 : -200;
+}
+async function main() {
+  const osc = ctx.createOscillator(); osc.frequency.value = freq;
+  const gain = ctx.createGain(); gain.gain.value = level;
+  const dest = ctx.createMediaStreamDestination();
+  osc.connect(gain).connect(dest); osc.start();
+  let mic = null;
+  try {
+    mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    state.mic = 'open';
+    const src = ctx.createMediaStreamSource(mic); micAnalyser = ctx.createAnalyser(); src.connect(micAnalyser);
+  } catch (e) { state.mic = 'error: ' + e; }
+  const pc1 = new RTCPeerConnection(), pc2 = new RTCPeerConnection();
+  pc1.onicecandidate = e => e.candidate && pc2.addIceCandidate(e.candidate);
+  pc2.onicecandidate = e => e.candidate && pc1.addIceCandidate(e.candidate);
+  pc1.onconnectionstatechange = () => state.pc1 = pc1.connectionState;
+  pc2.onconnectionstatechange = () => state.pc2 = pc2.connectionState;
+  pc2.ontrack = e => {
+    remote.srcObject = e.streams[0]; remote.play().catch(err => state.error = 'play: ' + err);
+    const src = ctx.createMediaStreamSource(e.streams[0]); remoteAnalyser = ctx.createAnalyser(); src.connect(remoteAnalyser);
+  };
+  dest.stream.getTracks().forEach(t => pc1.addTrack(t, dest.stream));
+  if (mic) mic.getTracks().forEach(t => pc2.addTrack(t, mic));
+  const offer = await pc1.createOffer(); await pc1.setLocalDescription(offer); await pc2.setRemoteDescription(offer);
+  const answer = await pc2.createAnswer(); await pc2.setLocalDescription(answer); await pc1.setRemoteDescription(answer);
+}
+async function report() {
+  state.ctx = ctx.state; state.remote_level_db = levelDb(remoteAnalyser); state.mic_level_db = levelDb(micAnalyser);
+  state.audio_paused = remote.paused; state.audio_time = remote.currentTime;
+  st.textContent = JSON.stringify(state, null, 1);
+  try { await fetch('/status', { method: 'POST', body: JSON.stringify(state) }); } catch (e) {}
+}
+main().catch(e => state.error = String(e));
+setInterval(() => { if (ctx.state !== 'running') ctx.resume(); report(); }, 1000);
+</script>
