@@ -69,6 +69,23 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: f.paths.liveSummaryFile(f.id).path))
     }
 
+    /// Lead 差し戻し 2-6: the first topic has no summary text to lean on yet, so the latest confirmed utterances (already
+    /// translated in the session) are its context; still only history, never output.
+    @Test func theFirstTopicLeansOnTheLatestUtterances() async throws {
+        let f = try TranslationFixture(mode: .duringRecording)
+        let fake = FakeTextCompleter()
+        let r = await start(f, fake)
+        r.lists.yield([utterance(0, "テナントの移行から始めます。", .me), utterance(4, "週末に六割を移しました。", .other)])
+        #expect(await pollTranslation { fake.snapshot.prompts.count == 2 })
+        r.summaries.yield(LiveSummaryUpdate(meetingID: f.id, state: summary("移行の状況", []), status: .active))
+        #expect(await pollTranslation { f.store.loadSummary(f.id, .live)?.entries.count == 1 })
+        await r.finish()
+        let prompt = try #require(fake.snapshot.prompts.last)
+        #expect(FakeTextCompleter.lastInput(prompt)?.text == "移行の状況")
+        #expect(prompt.contains("テナントの移行から始めます。") && prompt.contains("EN: 週末に六割を移しました。"))
+        #expect(f.store.loadSummary(f.id, .live)?.translation(of: "移行の状況") == "EN: 移行の状況")
+    }
+
     @Test func utterancesComeFirstAndOnlyTheNewestSummaryIsTranslated() async throws {
         let f = try TranslationFixture(mode: .duringRecording)
         let box = LockedBox<Running?>(nil)

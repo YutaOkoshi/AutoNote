@@ -222,11 +222,11 @@ public actor LiveTranslator {
                             finished = false
                             break
                         }
-                        let history = SummaryTranslation.history(for: item.text,
+                        let context = SummaryTranslation.history(for: item.text,
                                                                  context: SummaryTranslation.liveContext(current),
-                                                                 document: summaryDocument)
+                                                                 document: summaryDocument, recent: history)
                         let text = try await translator.translateSummary(item.text, from: item.source, to: item.target,
-                                                                         history: history)
+                                                                         history: context)
                         guard !text.isEmpty else {
                             emptyThisSession.insert(item.text)
                             continue

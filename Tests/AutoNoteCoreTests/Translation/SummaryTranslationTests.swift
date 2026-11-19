@@ -149,6 +149,18 @@ import Testing
         #expect(document.translation(of: "移行は今月末までに終える") == "EN: 移行は今月末までに終える")
     }
 
+    /// The recent utterances fill what the summary's own context leaves (oldest first, the summary's nearest last).
+    @Test func recentUtterancesFillTheContextTheSummaryLacks() {
+        let recent = (1...3).map { TranslationPair(source: "発話\($0)", sourceLanguage: .ja, translation: "U\($0)", targetLanguage: .en) }
+        var document = SummaryTranslationDocument(model: "2b", modelRevision: "r", target: .auto, updatedAt: Date())
+        #expect(SummaryTranslation.history(for: "話題", context: ["話題"], document: document, recent: recent).map(\.source)
+                == ["発話1", "発話2", "発話3"])
+        document.entries = [SummaryTranslatedText(sourceHash: TranslationKey.textHash("決定"), sourceLanguage: .ja,
+                                                  targetLanguage: .en, text: "Decision")]
+        #expect(SummaryTranslation.history(for: "話題", context: ["決定", "話題"], document: document, recent: recent)
+                .map(\.source) == ["発話2", "発話3", "決定"])
+    }
+
     @Test func aChangedContextAloneTranslatesNothingAgain() async throws {
         let fake = FakeTextCompleter()
         var document = SummaryTranslationDocument(model: "2b", modelRevision: "r", target: .auto, updatedAt: Date())

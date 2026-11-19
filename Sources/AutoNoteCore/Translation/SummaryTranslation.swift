@@ -129,15 +129,17 @@ public enum SummaryTranslation {
     /// The history pairs `text` is translated with: the last `PlamoPrompt.historyLimit` texts of `context` other than
     /// `text` that `document` holds a non-empty translation of. Only a prompt's history, never part of the output;
     /// the stored entry stays keyed by `text` alone, so a changed context translates nothing again.
-    public static func history(for text: String, context: [String],
-                               document: SummaryTranslationDocument) -> [TranslationPair] {
+    /// `recent` (the latest confirmed utterances with their translations, oldest first; the live session's own
+    /// history) fills what the summary's context leaves: the first topic has no translated summary text yet.
+    public static func history(for text: String, context: [String], document: SummaryTranslationDocument,
+                               recent: [TranslationPair] = []) -> [TranslationPair] {
         let pairs: [TranslationPair] = context.compactMap { c in
             guard c != text, let entry = document.entries.first(where: { $0.sourceHash == TranslationKey.textHash(c) }),
                   !entry.text.isEmpty else { return nil }
             return TranslationPair(source: c, sourceLanguage: entry.sourceLanguage, translation: entry.text,
                                    targetLanguage: entry.targetLanguage)
         }
-        return Array(pairs.suffix(PlamoPrompt.historyLimit))
+        return Array((recent + pairs).suffix(PlamoPrompt.historyLimit))
     }
 
     private static func unique(_ texts: [String]) -> [String] {
