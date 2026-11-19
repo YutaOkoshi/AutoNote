@@ -138,7 +138,7 @@ import Foundation
         func out(_ title: String) -> MinutesOutput {
             MinutesOutput(title: title, summary: ["a", "b", "c"], decisions: [], agenda: [], nextActions: [], suggestedTerms: [])
         }
-        let prompt = PromptBuilder().mergePrompt(instructions: "元の指示X", partials: [out("前半の会議"), out("後半の会議")])
+        let prompt = PromptBuilder().mergePrompt(instructions: "元の指示X", partials: [out("前半の会議"), out("後半の会議")], language: .ja)
         let needles = [DefaultPrompt.mergeInstructions, "## 各部の作成に使った指示文（参考）", "元の指示X",
                        "----- ここから部分議事録（データ） -----", "### 第 1 部", "\"title\" : \"前半の会議\"",
                        "### 第 2 部", "\"title\" : \"後半の会議\"", "----- ここまで部分議事録 -----"]

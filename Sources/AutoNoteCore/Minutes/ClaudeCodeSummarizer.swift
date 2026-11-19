@@ -57,10 +57,10 @@ public struct ClaudeCodeSummarizer: Summarizer {
                     throw SummarizerError.contextExceeded(message: message)
                 }
                 Self.logger.info("context exceeded; retrying split into \(parts.count, privacy: .public) parts")
-                return try await runSplit(parts, instructions: input.instructions)
+                return try await runSplit(parts, instructions: input.instructions, language: PromptBuilder.language(input))
             }
         case .split(let parts):
-            return try await runSplit(parts, instructions: input.instructions)
+            return try await runSplit(parts, instructions: input.instructions, language: PromptBuilder.language(input))
         }
     }
 
@@ -72,10 +72,10 @@ public struct ClaudeCodeSummarizer: Summarizer {
         }
     }
 
-    private func runSplit(_ parts: [String], instructions: String) async throws -> MinutesOutput {
+    private func runSplit(_ parts: [String], instructions: String, language: TranslationLanguage) async throws -> MinutesOutput {
         var partials: [MinutesOutput] = []
         for part in parts { partials.append(try await run(part)) }
-        return try await run(builder.mergePrompt(instructions: instructions, partials: partials))
+        return try await run(builder.mergePrompt(instructions: instructions, partials: partials, language: language))
     }
 
     private func run(_ prompt: String) async throws -> MinutesOutput {
