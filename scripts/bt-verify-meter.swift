@@ -123,8 +123,20 @@ if args.count >= 2, args[1] == "devices" {
     exit(0)
 }
 
+// set-default-input UID: makes that device the system default input (bt-verify restores the previous one).
+if args.count >= 3, args[1] == "set-default-input" {
+    guard let id = allDevices().first(where: { str($0, kAudioDevicePropertyDeviceUID) == args[2] }) else {
+        FileHandle.standardError.write("no device with that UID\n".data(using: .utf8)!); exit(1)
+    }
+    var dev = id
+    var a = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice, mScope: kAudioObjectPropertyScopeGlobal,
+                                       mElement: kAudioObjectPropertyElementMain)
+    let status = AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &a, 0, nil, UInt32(MemoryLayout<AudioObjectID>.size), &dev)
+    exit(status == noErr ? 0 : 1)
+}
+
 guard args.count >= 2, args[1] == "meter", let secsS = opt("--seconds"), let secs = Double(secsS), let outPath = opt("--out") else {
-    FileHandle.standardError.write("usage: bt-verify-meter devices [--names] | meter --seconds N --out FILE [--freqs 440,660] [--mic-uid UID] [--mic-after S] [--mic-if-hfp]\n".data(using: .utf8)!)
+    FileHandle.standardError.write("usage: bt-verify-meter devices [--names] | set-default-input UID | meter --seconds N --out FILE [--freqs 440,660] [--mic-uid UID] [--mic-after S] [--mic-if-hfp]\n".data(using: .utf8)!)
     exit(64)
 }
 let freqs = (opt("--freqs") ?? "440,660").split(separator: ",").compactMap { Double($0) }

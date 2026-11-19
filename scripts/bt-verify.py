@@ -47,6 +47,8 @@ class Env:
         self.meter = a.meter
         self.bt_addr = None
         self.bt_input_uid = None
+        self.builtin_input_uid = None
+        self.original_input_uid = None   # restored at cleanup when a trial switched the default input
         self.bt_was_connected = False
         self.installed_was_running = False
         self.procs = []           # (name, Popen) to kill on cleanup
@@ -83,10 +85,19 @@ class Env:
         self.bt_was_connected = bool(hits[0].get("connected"))
 
     def resolve_bt_input_uid(self):
-        for d in self.devices(names=True).get("devices", []):
+        info = self.devices(names=True)
+        self.original_input_uid = (info.get("default_input") or {}).get("uid")
+        for d in info.get("devices", []):
             if d.get("transport") == "bluetooth" and d.get("in_channels", 0) > 0 and self.a.bt_name.lower() in d.get("name", "").lower():
                 self.bt_input_uid = d.get("uid")
-                return
+            if d.get("transport") == "builtin" and d.get("in_channels", 0) > 0 and not self.builtin_input_uid:
+                self.builtin_input_uid = d.get("uid")
+
+    def default_input_uid(self):
+        return (self.devices(names=True).get("default_input") or {}).get("uid")
+
+    def set_default_input(self, uid):
+        return run([self.meter, "set-default-input", uid], timeout=10).returncode == 0
 
     def bt_disconnect(self):
         run(["blueutil", "--disconnect", self.bt_addr], timeout=20)
@@ -246,6 +257,9 @@ class Env:
         for n, _ in list(self.procs):
             self.kill(n)
         self.quit_app()
+        if self.original_input_uid and self.default_input_uid() != self.original_input_uid:
+            log("restoring the default input")
+            self.set_default_input(self.original_input_uid)
         if self.bt_addr and self.bt_was_connected and not self.bt_connected():
             log("reconnecting the headset")
             if not self.bt_connect():
@@ -380,7 +394,18 @@ def trial_body(env, spec, res, tdir):
             if not rec:
                 res["error"] = "recording did not start"
         listen = a.seconds if rec or not app else 8
-        time.sleep(listen)
+        t0 = time.time()
+        if rec and spec.get("switch_input"):
+            # Default input → built-in microphone, later back to the headset, while recording from the default input.
+            plan = [(spec.get("switch_at", 6), env.builtin_input_uid, "switched_to_builtin"),
+                    (spec.get("switch_back_at", 14), env.bt_input_uid, "switched_back")]
+            for at, uid, name in plan:
+                time.sleep(max(0, t0 + at - time.time()))
+                if not uid or not env.set_default_input(uid):
+                    res["error"] = f"could not set the default input ({name})"
+                    break
+                ev[name] = time.time()
+        time.sleep(max(0, t0 + listen - time.time()))
         if rec:
             env.cli(data, "stop")
             ev["stopped"] = time.time()
@@ -480,6 +505,12 @@ def analyze_trial(env, res, tdir):
         v["system_zero"] = sysm["zero_seconds"] >= 0.8 * sysm["seconds"]
     if res.get("page") != "none" and m["tap_tone_after_connect"] is not None:
         v["heard"] = bool(m["tap_tone_after_connect"] >= 0.8 and (m["bt_out_running"] or 0) >= 0.8)
+    if ev.get("switched_to_builtin") and ev.get("switched_back"):
+        # While the built-in mic is the default: does the headset leave HFP (nobody holds its input any more)?
+        win = [l for l in lines if ev["switched_to_builtin"] + 3 <= l["t"] < ev["switched_back"]]
+        m["hfp_while_builtin"] = frac(win, lambda x: x.get("out_transport") == "bluetooth" and x.get("out_rate", 0) <= 24000)
+        m["default_in_builtin"] = frac(win, lambda x: x.get("in_transport") == "builtin")
+        v["stuck_on_hfp"] = (m["hfp_while_builtin"] or 0) >= 0.5
     res["verdict"] = v
 
 
@@ -568,6 +599,9 @@ def plans(a):
                      dict(id="B1-noapp-tone", app="none", page="tone", order="page_then_connect", start="none", countdown=0, mic_probe=False)],
         "repro": [dict(B, id=f"R{i}-before-auto5") for i in range(1, a.repeat_before + 1)],
         "verify": [dict(A, id=f"V{i}-after-auto5") for i in range(1, a.repeat_after + 1)],
+        # Manual start records from the default input (deviceUID nil); the default input moves mid-recording.
+        "switch": [dict(A, id=f"S{i}-after-manual-switch-input", order="connect_then_page", start="manual", countdown=30,
+                        manual_delay=4, page_delay=1, mic_probe=False, switch_input=True) for i in range(1, a.repeat_after + 1)],
         "explore": [],
     }
     for build in ("before", "after"):
@@ -580,6 +614,7 @@ def plans(a):
             dict(W, id=f"E5-{build}-webrtc-first-manual", order="page_then_connect", start="manual", countdown=30, manual_delay=8),
         ]
     p["explore"].insert(0, dict(id="E0-noapp-webrtc", app="none", page="webrtc", order="page_then_connect", start="none", countdown=0, mic_probe=True))
+    p["switch_before"] = [dict(x, app="before", id=x["id"].replace("after", "before")) for x in p["switch"][:2]]
     p["all"] = p["baseline"] + p["repro"] + p["verify"]
     return p
 
@@ -589,7 +624,7 @@ def main():
     ap.add_argument("--root", required=True)
     ap.add_argument("--meter", required=True)
     ap.add_argument("--bt-name", default=os.environ.get("BT_VERIFY_NAME", ""))
-    ap.add_argument("--plan", default="all", help="baseline | repro | verify | explore | all (= baseline+repro+verify) | comma list")
+    ap.add_argument("--plan", default="all", help="baseline | repro | verify | switch | switch_before | explore | all (= baseline+repro+verify) | comma list")
     ap.add_argument("--only", default="", help="comma list of trial id prefixes")
     ap.add_argument("--before-app", default="")
     ap.add_argument("--after-app", default="")
