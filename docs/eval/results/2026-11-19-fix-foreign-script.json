@@ -1,0 +1,1172 @@
+{
+  "label": "fix-foreign-script",
+  "date": "2026-11-19",
+  "build": {
+    "autonote": "fix-live-whisper-foreign-script/.build/release/autonote",
+    "sha256": "b1fa94224bedefa2ab669b14fd2034df8ac336b01a2a3851b1ee8fb99469eeff",
+    "commit": "58f7d162a6b8970c958c47b021236fe23020b619",
+    "branch": "fix/live-whisper-foreign-script"
+  },
+  "model": "ggml-large-v3-turbo-q5_0.bin",
+  "norm_version": "norm-1",
+  "scorer_version": "score-1",
+  "datasets": {
+    "ami-ES2008a": {
+      "title": "AMI ES2008a（英語の会議・設計の初回）",
+      "kind": "ami",
+      "unit": "word",
+      "audio_seconds": 1043.36,
+      "ref_window": "full",
+      "runs": {
+        "whisper/auto": {
+          "finals": 193,
+          "foreign": {
+            "utterances": 193,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.017,
+          "elapsed": 17.698,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 988,
+            "ref_len": 2960,
+            "hyp_len": 2448,
+            "rate": 0.33378378378378376
+          },
+          "er": {
+            "errors": 525,
+            "ref_len": 2410,
+            "hyp_len": 2126,
+            "sub": 163,
+            "del": 323,
+            "ins": 39,
+            "max_del_run": 24,
+            "rate": 0.21784232365145229
+          },
+          "en_retention": {
+            "kept": 2014,
+            "ref": 2410,
+            "rate": 0.8356846473029046
+          }
+        },
+        "whisper/en": {
+          "finals": 196,
+          "foreign": {
+            "utterances": 196,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.017,
+          "elapsed": 17.218,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 985,
+            "ref_len": 2960,
+            "hyp_len": 2442,
+            "rate": 0.3327702702702703
+          },
+          "er": {
+            "errors": 527,
+            "ref_len": 2410,
+            "hyp_len": 2129,
+            "sub": 162,
+            "del": 323,
+            "ins": 42,
+            "max_del_run": 14,
+            "rate": 0.21867219917012448
+          },
+          "en_retention": {
+            "kept": 2006,
+            "ref": 2410,
+            "rate": 0.8323651452282158
+          }
+        },
+        "whisper/ja": {
+          "finals": 233,
+          "foreign": {
+            "utterances": 233,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.018,
+          "elapsed": 18.658,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 1124,
+            "ref_len": 2960,
+            "hyp_len": 2230,
+            "rate": 0.37972972972972974
+          },
+          "er": {
+            "errors": 583,
+            "ref_len": 2410,
+            "hyp_len": 2067,
+            "sub": 166,
+            "del": 380,
+            "ins": 37,
+            "max_del_run": 29,
+            "rate": 0.24190871369294606
+          },
+          "en_retention": {
+            "kept": 1945,
+            "ref": 2410,
+            "rate": 0.8070539419087137
+          }
+        },
+        "whisper-live/auto": {
+          "finals": 212,
+          "foreign": {
+            "utterances": 212,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 12,
+          "rtf": 0.114,
+          "elapsed": 119.108,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 1235,
+            "ref_len": 2960,
+            "hyp_len": 2394,
+            "rate": 0.4172297297297297
+          },
+          "er": {
+            "errors": 763,
+            "ref_len": 2410,
+            "hyp_len": 2020,
+            "sub": 241,
+            "del": 456,
+            "ins": 66,
+            "max_del_run": 26,
+            "rate": 0.31659751037344397
+          },
+          "en_retention": {
+            "kept": 1852,
+            "ref": 2410,
+            "rate": 0.7684647302904565
+          }
+        },
+        "whisper-live/en": {
+          "finals": 212,
+          "foreign": {
+            "utterances": 212,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 12,
+          "rtf": 0.059,
+          "elapsed": 61.21,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 1233,
+            "ref_len": 2960,
+            "hyp_len": 2397,
+            "rate": 0.41655405405405405
+          },
+          "er": {
+            "errors": 762,
+            "ref_len": 2410,
+            "hyp_len": 2022,
+            "sub": 242,
+            "del": 454,
+            "ins": 66,
+            "max_del_run": 14,
+            "rate": 0.31618257261410787
+          },
+          "en_retention": {
+            "kept": 1860,
+            "ref": 2410,
+            "rate": 0.7717842323651453
+          }
+        },
+        "whisper-live/ja": {
+          "finals": 212,
+          "foreign": {
+            "utterances": 212,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 3,
+          "rtf": 0.096,
+          "elapsed": 100.395,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 3126,
+            "ref_len": 2960,
+            "hyp_len": 3159,
+            "rate": 1.056081081081081
+          },
+          "er": {
+            "errors": 2867,
+            "ref_len": 2410,
+            "hyp_len": 2957,
+            "sub": 2222,
+            "del": 49,
+            "ins": 596,
+            "max_del_run": 16,
+            "rate": 1.1896265560165975
+          },
+          "en_retention": {
+            "kept": 202,
+            "ref": 2410,
+            "rate": 0.08381742738589211
+          }
+        }
+      }
+    },
+    "ami-IS1009c": {
+      "title": "AMI IS1009c（英語の会議・中間）",
+      "kind": "ami",
+      "unit": "word",
+      "audio_seconds": 1200.0,
+      "ref_window": "full",
+      "runs": {
+        "whisper/auto": {
+          "finals": 171,
+          "foreign": {
+            "utterances": 171,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.029,
+          "elapsed": 34.986,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 1090,
+            "ref_len": 3264,
+            "hyp_len": 2496,
+            "rate": 0.33394607843137253
+          },
+          "er": {
+            "errors": 424,
+            "ref_len": 2603,
+            "hyp_len": 2334,
+            "sub": 119,
+            "del": 287,
+            "ins": 18,
+            "max_del_run": 39,
+            "rate": 0.1628889742604687
+          },
+          "en_retention": {
+            "kept": 2246,
+            "ref": 2603,
+            "rate": 0.8628505570495582
+          }
+        },
+        "whisper/en": {
+          "finals": 173,
+          "foreign": {
+            "utterances": 173,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.017,
+          "elapsed": 20.167,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 1096,
+            "ref_len": 3264,
+            "hyp_len": 2489,
+            "rate": 0.33578431372549017
+          },
+          "er": {
+            "errors": 430,
+            "ref_len": 2603,
+            "hyp_len": 2342,
+            "sub": 131,
+            "del": 280,
+            "ins": 19,
+            "max_del_run": 29,
+            "rate": 0.16519400691509797
+          },
+          "en_retention": {
+            "kept": 2253,
+            "ref": 2603,
+            "rate": 0.8655397618132924
+          }
+        },
+        "whisper/ja": {
+          "finals": 133,
+          "foreign": {
+            "utterances": 133,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 14,
+          "rtf": 0.024,
+          "elapsed": 28.269,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 2243,
+            "ref_len": 3264,
+            "hyp_len": 1390,
+            "rate": 0.6871936274509803
+          },
+          "er": {
+            "errors": 1645,
+            "ref_len": 2603,
+            "hyp_len": 1230,
+            "sub": 250,
+            "del": 1384,
+            "ins": 11,
+            "max_del_run": 1087,
+            "rate": 0.6319631194775259
+          },
+          "en_retention": {
+            "kept": 996,
+            "ref": 2603,
+            "rate": 0.38263542066845946
+          }
+        },
+        "whisper-live/auto": {
+          "finals": 175,
+          "foreign": {
+            "utterances": 175,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.093,
+          "elapsed": 111.339,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 1193,
+            "ref_len": 3264,
+            "hyp_len": 2540,
+            "rate": 0.36550245098039214
+          },
+          "er": {
+            "errors": 608,
+            "ref_len": 2603,
+            "hyp_len": 2239,
+            "sub": 156,
+            "del": 408,
+            "ins": 44,
+            "max_del_run": 15,
+            "rate": 0.23357664233576642
+          },
+          "en_retention": {
+            "kept": 2130,
+            "ref": 2603,
+            "rate": 0.8182865923933922
+          }
+        },
+        "whisper-live/en": {
+          "finals": 175,
+          "foreign": {
+            "utterances": 175,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.042,
+          "elapsed": 50.701,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 1194,
+            "ref_len": 3264,
+            "hyp_len": 2541,
+            "rate": 0.36580882352941174
+          },
+          "er": {
+            "errors": 608,
+            "ref_len": 2603,
+            "hyp_len": 2239,
+            "sub": 156,
+            "del": 408,
+            "ins": 44,
+            "max_del_run": 15,
+            "rate": 0.23357664233576642
+          },
+          "en_retention": {
+            "kept": 2131,
+            "ref": 2603,
+            "rate": 0.8186707645024971
+          }
+        },
+        "whisper-live/ja": {
+          "finals": 175,
+          "foreign": {
+            "utterances": 175,
+            "with_unexpected": 1,
+            "rate": 0.005714285714285714,
+            "by_script": {
+              "REPLACEMENT": 1
+            }
+          },
+          "repetition": 7,
+          "rtf": 0.085,
+          "elapsed": 101.405,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 3772,
+            "ref_len": 3264,
+            "hyp_len": 3908,
+            "rate": 1.1556372549019607
+          },
+          "er": {
+            "errors": 3464,
+            "ref_len": 2603,
+            "hyp_len": 3615,
+            "sub": 2394,
+            "del": 29,
+            "ins": 1041,
+            "max_del_run": 8,
+            "rate": 1.330772185939301
+          },
+          "en_retention": {
+            "kept": 228,
+            "ref": 2603,
+            "rate": 0.08759124087591241
+          },
+          "exit_code": -6
+        }
+      }
+    },
+    "ami-TS3003c": {
+      "title": "AMI TS3003c（英語の会議・後半）",
+      "kind": "ami",
+      "unit": "word",
+      "audio_seconds": 1200.0,
+      "ref_window": "full",
+      "runs": {
+        "whisper/auto": {
+          "finals": 111,
+          "foreign": {
+            "utterances": 111,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.015,
+          "elapsed": 17.83,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 1052,
+            "ref_len": 2680,
+            "hyp_len": 1972,
+            "rate": 0.3925373134328358
+          },
+          "er": {
+            "errors": 382,
+            "ref_len": 2057,
+            "hyp_len": 1842,
+            "sub": 109,
+            "del": 244,
+            "ins": 29,
+            "max_del_run": 26,
+            "rate": 0.1857073407875547
+          },
+          "en_retention": {
+            "kept": 1779,
+            "ref": 2057,
+            "rate": 0.8648517258142927
+          }
+        },
+        "whisper/en": {
+          "finals": 116,
+          "foreign": {
+            "utterances": 116,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.015,
+          "elapsed": 17.517,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 1026,
+            "ref_len": 2680,
+            "hyp_len": 1998,
+            "rate": 0.38283582089552237
+          },
+          "er": {
+            "errors": 361,
+            "ref_len": 2057,
+            "hyp_len": 1857,
+            "sub": 103,
+            "del": 229,
+            "ins": 29,
+            "max_del_run": 26,
+            "rate": 0.1754982984929509
+          },
+          "en_retention": {
+            "kept": 1796,
+            "ref": 2057,
+            "rate": 0.87311618862421
+          }
+        },
+        "whisper/ja": {
+          "finals": 89,
+          "foreign": {
+            "utterances": 89,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 7,
+          "rtf": 0.024,
+          "elapsed": 28.669,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 1976,
+            "ref_len": 2680,
+            "hyp_len": 1279,
+            "rate": 0.7373134328358208
+          },
+          "er": {
+            "errors": 1341,
+            "ref_len": 2057,
+            "hyp_len": 1154,
+            "sub": 432,
+            "del": 906,
+            "ins": 3,
+            "max_del_run": 550,
+            "rate": 0.6519202722411278
+          },
+          "en_retention": {
+            "kept": 736,
+            "ref": 2057,
+            "rate": 0.3578026251823043
+          }
+        },
+        "whisper-live/auto": {
+          "finals": 263,
+          "foreign": {
+            "utterances": 263,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.124,
+          "elapsed": 148.614,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 1082,
+            "ref_len": 2680,
+            "hyp_len": 2105,
+            "rate": 0.40373134328358207
+          },
+          "er": {
+            "errors": 450,
+            "ref_len": 2057,
+            "hyp_len": 1795,
+            "sub": 134,
+            "del": 289,
+            "ins": 27,
+            "max_del_run": 27,
+            "rate": 0.2187651920272241
+          },
+          "en_retention": {
+            "kept": 1725,
+            "ref": 2057,
+            "rate": 0.8385999027710258
+          }
+        },
+        "whisper-live/en": {
+          "finals": 263,
+          "foreign": {
+            "utterances": 263,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.062,
+          "elapsed": 74.091,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 1079,
+            "ref_len": 2680,
+            "hyp_len": 2103,
+            "rate": 0.40261194029850744
+          },
+          "er": {
+            "errors": 446,
+            "ref_len": 2057,
+            "hyp_len": 1794,
+            "sub": 129,
+            "del": 290,
+            "ins": 27,
+            "max_del_run": 27,
+            "rate": 0.21682061254253768
+          },
+          "en_retention": {
+            "kept": 1728,
+            "ref": 2057,
+            "rate": 0.8400583373845406
+          }
+        },
+        "whisper-live/ja": {
+          "finals": 263,
+          "foreign": {
+            "utterances": 263,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 7,
+          "rtf": 0.072,
+          "elapsed": 86.832,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 3140,
+            "ref_len": 2680,
+            "hyp_len": 3257,
+            "rate": 1.171641791044776
+          },
+          "er": {
+            "errors": 2878,
+            "ref_len": 2057,
+            "hyp_len": 3039,
+            "sub": 1880,
+            "del": 8,
+            "ins": 990,
+            "max_del_run": 4,
+            "rate": 1.3991249392318912
+          },
+          "en_retention": {
+            "kept": 201,
+            "ref": 2057,
+            "rate": 0.09771511910549344
+          }
+        }
+      }
+    },
+    "kantei-toron": {
+      "title": "党首討論 2010-04-21（日本語の討議、整文済み会議録が正解）",
+      "kind": "kokkai",
+      "unit": "char",
+      "audio_seconds": 1200.0,
+      "ref_window": "calibrated",
+      "runs": {
+        "whisper/auto": {
+          "finals": 311,
+          "foreign": {
+            "utterances": 311,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.027,
+          "elapsed": 32.999,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 722,
+            "ref_len": 5597,
+            "hyp_len": 5355,
+            "rate": 0.12899767732713954
+          },
+          "er": {
+            "errors": 333,
+            "ref_len": 5258,
+            "hyp_len": 5359,
+            "sub": 110,
+            "del": 61,
+            "ins": 162,
+            "max_del_run": 11,
+            "rate": 0.06333206542411564
+          }
+        },
+        "whisper/ja": {
+          "finals": 322,
+          "foreign": {
+            "utterances": 322,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.032,
+          "elapsed": 37.987,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 723,
+            "ref_len": 5597,
+            "hyp_len": 5356,
+            "rate": 0.12917634447025192
+          },
+          "er": {
+            "errors": 335,
+            "ref_len": 5258,
+            "hyp_len": 5360,
+            "sub": 111,
+            "del": 61,
+            "ins": 163,
+            "max_del_run": 11,
+            "rate": 0.06371243818942564
+          }
+        },
+        "whisper-live/auto": {
+          "finals": 230,
+          "foreign": {
+            "utterances": 230,
+            "with_unexpected": 1,
+            "rate": 0.004347826086956522,
+            "by_script": {
+              "HANGUL": 1
+            }
+          },
+          "repetition": 1,
+          "rtf": 0.125,
+          "elapsed": 149.446,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 977,
+            "ref_len": 5597,
+            "hyp_len": 5287,
+            "rate": 0.17455779882079686
+          },
+          "er": {
+            "errors": 618,
+            "ref_len": 5258,
+            "hyp_len": 5258,
+            "sub": 172,
+            "del": 223,
+            "ins": 223,
+            "max_del_run": 15,
+            "rate": 0.11753518448079117
+          }
+        },
+        "whisper-live/ja": {
+          "finals": 230,
+          "foreign": {
+            "utterances": 230,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 1,
+          "rtf": 0.058,
+          "elapsed": 69.572,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 978,
+            "ref_len": 5597,
+            "hyp_len": 5286,
+            "rate": 0.17473646596390924
+          },
+          "er": {
+            "errors": 619,
+            "ref_len": 5258,
+            "hyp_len": 5268,
+            "sub": 173,
+            "del": 218,
+            "ins": 228,
+            "max_del_run": 15,
+            "rate": 0.11772537086344617
+          }
+        }
+      }
+    },
+    "kantei-us": {
+      "title": "日米共同記者会見 2017-02-10（日英が交互。正解は冒頭の英語のみ）",
+      "kind": "govinfo",
+      "unit": "word",
+      "audio_seconds": 1200.0,
+      "ref_window": "full",
+      "runs": {
+        "whisper/auto": {
+          "finals": 202,
+          "foreign": {
+            "utterances": 202,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.023,
+          "elapsed": 28.177,
+          "audio_seconds": null,
+          "er": {
+            "errors": 4,
+            "ref_len": 396,
+            "hyp_len": 392,
+            "sub": 0,
+            "del": 4,
+            "ins": 0,
+            "max_del_run": 4,
+            "rate": 0.010101010101010102
+          },
+          "en_wer": {
+            "errors": 4,
+            "ref_len": 396,
+            "hyp_len": 392,
+            "sub": 0,
+            "del": 4,
+            "ins": 0,
+            "max_del_run": 4,
+            "rate": 0.010101010101010102
+          },
+          "en_retention": {
+            "kept": 392,
+            "ref": 396,
+            "rate": 0.98989898989899
+          }
+        },
+        "whisper/ja": {
+          "finals": 182,
+          "foreign": {
+            "utterances": 182,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 1,
+          "rtf": 0.026,
+          "elapsed": 30.724,
+          "audio_seconds": null,
+          "er": {
+            "errors": 396,
+            "ref_len": 396,
+            "hyp_len": 0,
+            "sub": 0,
+            "del": 396,
+            "ins": 0,
+            "max_del_run": 396,
+            "rate": 1.0
+          },
+          "en_wer": {
+            "errors": 396,
+            "ref_len": 396,
+            "hyp_len": 0,
+            "sub": 0,
+            "del": 396,
+            "ins": 0,
+            "max_del_run": 396,
+            "rate": 1.0
+          },
+          "en_retention": {
+            "kept": 0,
+            "ref": 396,
+            "rate": 0.0
+          }
+        },
+        "whisper-live/auto": {
+          "finals": 298,
+          "foreign": {
+            "utterances": 298,
+            "with_unexpected": 1,
+            "rate": 0.003355704697986577,
+            "by_script": {
+              "HANGUL": 1
+            }
+          },
+          "repetition": 0,
+          "rtf": 0.13,
+          "elapsed": 155.472,
+          "audio_seconds": null,
+          "er": {
+            "errors": 2,
+            "ref_len": 396,
+            "hyp_len": 394,
+            "sub": 0,
+            "del": 2,
+            "ins": 0,
+            "max_del_run": 1,
+            "rate": 0.005050505050505051
+          },
+          "en_wer": {
+            "errors": 2,
+            "ref_len": 396,
+            "hyp_len": 394,
+            "sub": 0,
+            "del": 2,
+            "ins": 0,
+            "max_del_run": 1,
+            "rate": 0.005050505050505051
+          },
+          "en_retention": {
+            "kept": 394,
+            "ref": 396,
+            "rate": 0.9949494949494949
+          }
+        },
+        "whisper-live/ja": {
+          "finals": 298,
+          "foreign": {
+            "utterances": 298,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 2,
+          "rtf": 0.072,
+          "elapsed": 86.724,
+          "audio_seconds": null,
+          "er": {
+            "errors": 335,
+            "ref_len": 396,
+            "hyp_len": 62,
+            "sub": 1,
+            "del": 334,
+            "ins": 0,
+            "max_del_run": 83,
+            "rate": 0.8459595959595959
+          },
+          "en_wer": {
+            "errors": 335,
+            "ref_len": 396,
+            "hyp_len": 62,
+            "sub": 1,
+            "del": 334,
+            "ins": 0,
+            "max_del_run": 83,
+            "rate": 0.8459595959595959
+          },
+          "en_retention": {
+            "kept": 61,
+            "ref": 396,
+            "rate": 0.15404040404040403
+          }
+        }
+      }
+    },
+    "mixed-synth": {
+      "title": "合成の日英混在（AMI TS3003c 後半と党首討論 後半の区間を交互につないだもの）",
+      "kind": "mixed",
+      "unit": "word",
+      "audio_seconds": 287.707,
+      "ref_window": "full",
+      "runs": {
+        "whisper/auto": {
+          "finals": 48,
+          "foreign": {
+            "utterances": 48,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 5,
+          "rtf": 0.018,
+          "elapsed": 5.049,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 845,
+            "ref_len": 1086,
+            "hyp_len": 544,
+            "rate": 0.7780847145488029
+          },
+          "er": {
+            "errors": 711,
+            "ref_len": 969,
+            "hyp_len": 442,
+            "sub": 174,
+            "del": 532,
+            "ins": 5,
+            "max_del_run": 101,
+            "rate": 0.7337461300309598
+          },
+          "en_wer": {
+            "errors": 219,
+            "ref_len": 258,
+            "hyp_len": 351,
+            "sub": 46,
+            "del": 40,
+            "ins": 133,
+            "max_del_run": 6,
+            "rate": 0.8488372093023255
+          },
+          "en_retention": {
+            "kept": 207,
+            "ref": 258,
+            "rate": 0.8023255813953488
+          },
+          "ja_cer": {
+            "errors": 635,
+            "ref_len": 707,
+            "hyp_len": 90,
+            "sub": 8,
+            "del": 622,
+            "ins": 5,
+            "max_del_run": 620,
+            "rate": 0.8981612446958982
+          }
+        },
+        "whisper/ja": {
+          "finals": 33,
+          "foreign": {
+            "utterances": 33,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.016,
+          "elapsed": 4.695,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 481,
+            "ref_len": 1086,
+            "hyp_len": 905,
+            "rate": 0.4429097605893186
+          },
+          "er": {
+            "errors": 386,
+            "ref_len": 969,
+            "hyp_len": 827,
+            "sub": 188,
+            "del": 170,
+            "ins": 28,
+            "max_del_run": 44,
+            "rate": 0.39834881320949433
+          },
+          "en_wer": {
+            "errors": 233,
+            "ref_len": 258,
+            "hyp_len": 25,
+            "sub": 0,
+            "del": 233,
+            "ins": 0,
+            "max_del_run": 110,
+            "rate": 0.9031007751937985
+          },
+          "en_retention": {
+            "kept": 25,
+            "ref": 258,
+            "rate": 0.09689922480620156
+          },
+          "ja_cer": {
+            "errors": 258,
+            "ref_len": 707,
+            "hyp_len": 799,
+            "sub": 88,
+            "del": 39,
+            "ins": 131,
+            "max_del_run": 7,
+            "rate": 0.3649222065063649
+          }
+        },
+        "whisper-live/auto": {
+          "finals": 51,
+          "foreign": {
+            "utterances": 51,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.073,
+          "elapsed": 20.922,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 297,
+            "ref_len": 1086,
+            "hyp_len": 995,
+            "rate": 0.27348066298342544
+          },
+          "er": {
+            "errors": 171,
+            "ref_len": 969,
+            "hyp_len": 934,
+            "sub": 48,
+            "del": 79,
+            "ins": 44,
+            "max_del_run": 6,
+            "rate": 0.17647058823529413
+          },
+          "en_wer": {
+            "errors": 76,
+            "ref_len": 258,
+            "hyp_len": 204,
+            "sub": 16,
+            "del": 57,
+            "ins": 3,
+            "max_del_run": 6,
+            "rate": 0.29457364341085274
+          },
+          "en_retention": {
+            "kept": 194,
+            "ref": 258,
+            "rate": 0.751937984496124
+          },
+          "ja_cer": {
+            "errors": 91,
+            "ref_len": 707,
+            "hyp_len": 726,
+            "sub": 26,
+            "del": 23,
+            "ins": 42,
+            "max_del_run": 3,
+            "rate": 0.12871287128712872
+          }
+        },
+        "whisper-live/ja": {
+          "finals": 51,
+          "foreign": {
+            "utterances": 51,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 1,
+          "rtf": 0.051,
+          "elapsed": 14.758,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 497,
+            "ref_len": 1086,
+            "hyp_len": 1045,
+            "rate": 0.4576427255985267
+          },
+          "er": {
+            "errors": 398,
+            "ref_len": 969,
+            "hyp_len": 1015,
+            "sub": 258,
+            "del": 47,
+            "ins": 93,
+            "max_del_run": 15,
+            "rate": 0.4107327141382869
+          },
+          "en_wer": {
+            "errors": 250,
+            "ref_len": 258,
+            "hyp_len": 13,
+            "sub": 5,
+            "del": 245,
+            "ins": 0,
+            "max_del_run": 110,
+            "rate": 0.9689922480620154
+          },
+          "en_retention": {
+            "kept": 8,
+            "ref": 258,
+            "rate": 0.031007751937984496
+          },
+          "ja_cer": {
+            "errors": 356,
+            "ref_len": 707,
+            "hyp_len": 997,
+            "sub": 32,
+            "del": 17,
+            "ins": 307,
+            "max_del_run": 3,
+            "rate": 0.5035360678925035
+          }
+        }
+      }
+    }
+  }
+}

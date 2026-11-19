@@ -39,14 +39,15 @@ public struct UtteranceTranslator: Sendable {
     /// The cleaned translation; empty when the model produced nothing usable. A prompt longer than the model's
     /// context (`LlamaError.promptTooLong`) is retried with fewer history pairs, oldest dropped first; an utterance
     /// too long even alone is left untranslated (empty) rather than failing the whole run.
+    /// `maxTokens` replaces the per-utterance cap (`PlamoPrompt.maxTokens`) when given.
     public func translate(_ text: String, from source: TranslationLanguage, to target: TranslationLanguage,
-                          history: [TranslationPair]) async throws -> String {
+                          history: [TranslationPair], maxTokens: Int? = nil) async throws -> String {
         var history = Array(history.suffix(PlamoPrompt.historyLimit))
         while true {
             let prompt = PlamoPrompt.build(text: text, source: source, target: target, history: history)
             do {
                 let raw = try await completer.complete(prompt: prompt, stop: PlamoPrompt.stopStrings,
-                                                       maxTokens: PlamoPrompt.maxTokens(for: text))
+                                                       maxTokens: maxTokens ?? PlamoPrompt.maxTokens(for: text))
                 return PlamoPrompt.cleaned(raw)
             } catch LlamaError.promptTooLong(let tokens, let limit) {
                 guard !history.isEmpty else {

@@ -76,4 +76,15 @@ import Testing
         let finals = await collect(s).filter(\.isFinal)
         #expect(finals.map(\.text) == ["テスト"])
     }
+
+    /// 言語を固定したら、その言語で出てよい文字種にデコーダの語彙を絞る（ja でキリル文字などが混ざるのを防ぐ）。
+    @Test(arguments: [(Language.ja, ScriptRestriction.japanese), (.en, .english), (.auto, .unrestricted)])
+    func requestCarriesTheScriptRestrictionOfTheLanguage(language: Language, expected: ScriptRestriction) async throws {
+        let core = FakeWhisperCore(fixedText: "テスト"); let t = WhisperLiveTranscriber(core: core)
+        let s = try await t.start(language: language, hints: [])
+        await feed(t, tone(3) + silence(1), at: 0)
+        await t.finish(); _ = await collect(s)
+        #expect(!core.requests.isEmpty)
+        #expect(core.requests.allSatisfy { $0.scripts == expected })
+    }
 }

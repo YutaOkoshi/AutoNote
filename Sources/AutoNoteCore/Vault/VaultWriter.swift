@@ -67,6 +67,25 @@ public actor VaultWriter {
         return .written(target)
     }
 
+    /// Rewrites the meeting's note in place, only when it is still there (nil when there is none: a note the person
+    /// deleted is never brought back), unchanged since the last write (else `.conflict`), and made from the same
+    /// content as `plain` (the document without its additions), which catches a note written from newer minutes since
+    /// `document` was put together. For background rewrites (the minutes' translation); the queue keeps `write`.
+    public func rewriteExisting(_ document: MeetingDocument, basedOn plain: MeetingDocument) throws -> VaultWriteOutcome? {
+        try requireOutputFolder()
+        let id = document.manifest.id
+        guard let existing = try existingFile(for: id) else { return nil }
+        let data = try Data(contentsOf: existing)
+        guard let record = record(for: id), record.sha256 == Self.sha256(data) else { return .conflict(existing) }
+        let base = String(plain.render().dropLast())
+        guard String(decoding: data, as: UTF8.self).hasPrefix(base) else { return .conflict(existing) }
+        let rendered = Data(document.render().utf8)
+        try rendered.write(to: existing, options: .atomic)
+        try save(VaultWriteRecord(meeting: id, relativePath: relativePath(of: existing), sha256: Self.sha256(rendered),
+                                  writtenAt: now()))
+        return .written(existing)
+    }
+
     public func rebuildIndex() throws -> URL {
         try requireOutputFolder()
         let entries = try VaultScanner.scan(outputFolder: outputFolder)

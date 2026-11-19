@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "silence": 0.6,
+  "made_with": {
+    "commit": "7f7454acb007c6046e06d6ae17b5d0ef6658d26e",
+    "branch": "feature/eval-harness",
+    "model": "ggml-large-v3-turbo-q5_0.bin",
+    "norm_version": "norm-1"
+  },
+  "spans": [
+    {
+      "lang": "en",
+      "start": 1279.88,
+      "end": 1292.44
+    },
+    {
+      "lang": "ja",
+      "start": 1265.98,
+      "end": 1282.097,
+      "ref_start": 5928,
+      "ref_end": 6031,
+      "calibration_cer": 0.0729
+    },
+    {
+      "lang": "en",
+      "start": 1488.73,
+      "end": 1501.14
+    },
+    {
+      "lang": "ja",
+      "start": 1509.193,
+      "end": 1525.008,
+      "ref_start": 7157,
+      "ref_end": 7243,
+      "calibration_cer": 0.025
+    },
+    {
+      "lang": "en",
+      "start": 1569.12,
+      "end": 1584.36
+    },
+    {
+      "lang": "ja",
+      "start": 1728.027,
+      "end": 1746.387,
+      "ref_start": 8194,
+      "ref_end": 8294,
+      "calibration_cer": 0.0323
+    },
+    {
+      "lang": "en",
+      "start": 1607.63,
+      "end": 1622.13
+    },
+    {
+      "lang": "ja",
+      "start": 1935.348,
+      "end": 1966.697,
+      "ref_start": 9254,
+      "ref_end": 9372,
+      "calibration_cer": 0.1111
+    },
+    {
+      "lang": "en",
+      "start": 1717.53,
+      "end": 1732.54
+    },
+    {
+      "lang": "ja",
+      "start": 2179.07,
+      "end": 2195.907,
+      "ref_start": 10441,
+      "ref_end": 10531,
+      "calibration_cer": 0.0471
+    },
+    {
+      "lang": "en",
+      "start": 1738.34,
+      "end": 1753.01
+    },
+    {
+      "lang": "ja",
+      "start": 2443.587,
+      "end": 2464.945,
+      "ref_start": 11670,
+      "ref_end": 11757,
+      "calibration_cer": 0.1111
+    },
+    {
+      "lang": "en",
+      "start": 1973.8,
+      "end": 2001.13
+    },
+    {
+      "lang": "ja",
+      "start": 2671.692,
+      "end": 2687.189,
+      "ref_start": 12804,
+      "ref_end": 12892,
+      "calibration_cer": 0.0247
+    },
+    {
+      "lang": "en",
+      "start": 2001.76,
+      "end": 2014.45
+    },
+    {
+      "lang": "ja",
+      "start": 2853.32,
+      "end": 2871.684,
+      "ref_start": 13763,
+      "ref_end": 13855,
+      "calibration_cer": 0.0345
+    }
+  ]
+}

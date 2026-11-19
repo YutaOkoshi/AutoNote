@@ -9,3 +9,7 @@ tools/
 *.pem
 __pycache__/
 .superpowers/
+
+# 評価データ（音声・正解・実行結果。docs/eval/README.md）
+.eval-data/
+scripts/eval/datasets.local.json

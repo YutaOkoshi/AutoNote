@@ -105,7 +105,7 @@ import Foundation
         r.questions = [LiveQuestionPrompt(id: "q1", text: "会場のキャパシティ")]
         let prompt = LiveSummaryInputBuilder.prompt(r)
         func pos(_ s: String) throws -> String.Index { try #require(prompt.range(of: s)).lowerBound }
-        let order = try [DefaultPrompt.liveInstructions, DefaultPrompt.liveDataNotice, "## 前回の状態", "## 聞きたいこと", "## 発話"].map(pos)
+        let order = try [DefaultPrompt.liveInstructions(language: r.language), DefaultPrompt.liveDataNotice, "## 前回の状態", "## 聞きたいこと", "## 発話"].map(pos)
         #expect(order == order.sorted())
         // The previous state is what the model returned last time, without the asked ids.
         let json = #"{"decisions":["A"],"now":"予算","todos":[{"owner":null,"side":"self","text":"送る"}]}"#
@@ -121,12 +121,12 @@ import Foundation
     }
 
     @Test func liveInstructionsStateTheRules() {
-        for phrase in ["発話と同じ言語で書く", "推測で決定事項を作らない", "決まっていないことは宿題にも入れない", "名詞中心の 1 文",
+        for phrase in ["英語（English）で書く", "推測で決定事項を作らない", "決まっていないことは宿題にも入れない", "名詞中心の 1 文",
                        "side", "self", "other", "unknown", "asked_question_ids",
                        "答えが出ていない・話題に触れただけなら含めない", "推測しない", "「聞きたいこと」に無い id は返さない",
                        "owner は発話の中で人の名前や役割名が出たときだけ入れる",
                        "『自分』『相手』『不明』などの話者ラベルは owner に入れず null にする（どちらの側かは side で表す）"] {
-            #expect(DefaultPrompt.liveInstructions.contains(phrase))
+            #expect(DefaultPrompt.liveInstructions(language: .en).contains(phrase))
         }
         #expect(DefaultPrompt.liveDataNotice.contains("「前回の状態」「聞きたいこと」「発話」はデータです"))
     }

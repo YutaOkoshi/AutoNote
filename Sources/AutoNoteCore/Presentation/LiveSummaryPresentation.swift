@@ -63,8 +63,13 @@ public struct LiveQuestionRow: Equatable, Sendable, Identifiable {
 public struct LiveTodoGroup: Equatable, Sendable {
     public var title: String
     public var items: [String]
+    /// Each item's translation (index-aligned with `items`), the owner kept as it is; nil where there is none.
+    public var translations: [String?]
 
-    public init(title: String, items: [String]) { self.title = title; self.items = items }
+    public init(title: String, items: [String], translations: [String?]? = nil) {
+        self.title = title; self.items = items
+        self.translations = translations ?? Array(repeating: nil, count: items.count)
+    }
 }
 
 /// What the live summary pane (or the post-stop card) shows.
@@ -75,6 +80,10 @@ public struct LiveSummaryPaneContent: Equatable, Sendable {
     public var questions: [LiveQuestionRow]
     public var todoGroups: [LiveTodoGroup]
     public var decisions: [String]
+    /// The translations under the topic and each decision (index-aligned); nil where there is none or while the
+    /// 「訳文」 switch is off (spec 2026-11-19 表示).
+    public var nowTranslation: String? = nil
+    public var decisionTranslations: [String?] = []
     /// Questions can be added, renamed and removed (the recording pane and the draft); the post-stop card only toggles.
     public var editable: Bool
     public var canAddQuestion: Bool
@@ -179,10 +188,11 @@ public enum LiveSummaryPresentation {
     }
 
     /// The recording pane: all four sections, questions editable.
+    /// `translation` is the live summary's (nil when hidden or none).
     public static func pane(state: LiveSummaryState?, status: LiveSummaryStatus, updated: String?,
-                            questions: [LiveQuestion]) -> LiveSummaryPaneContent {
+                            questions: [LiveQuestion], translation: SummaryTranslationDocument? = nil) -> LiveSummaryPaneContent {
         content(sections: LiveSummarySection.allCases, state: state, questions: questions, editable: true,
-                status: statusText(status), updated: updated)
+                status: statusText(status), updated: updated, translation: translation)
     }
 
     /// The questions alone (summaries off while recording, or the draft before recording).
@@ -192,29 +202,41 @@ public enum LiveSummaryPresentation {
 
     /// The post-stop card (processing, minutes missing): nil with neither a summary nor questions. Questions only
     /// toggle; their section shows only when there are some.
-    public static func stored(state: LiveSummaryState?, questions: [LiveQuestion]) -> LiveSummaryPaneContent? {
+    public static func stored(state: LiveSummaryState?, questions: [LiveQuestion],
+                              translation: SummaryTranslationDocument? = nil) -> LiveSummaryPaneContent? {
         guard state != nil || !questions.isEmpty else { return nil }
         let sections = LiveSummarySection.allCases.filter { s in
             s == .questions ? !questions.isEmpty : state != nil
         }
-        return content(sections: sections, state: state, questions: questions, editable: false, status: nil, updated: nil)
+        return content(sections: sections, state: state, questions: questions, editable: false, status: nil, updated: nil,
+                       translation: translation)
     }
 
     private static func content(sections: [LiveSummarySection], state: LiveSummaryState?, questions: [LiveQuestion],
-                                editable: Bool, status: String?, updated: String?) -> LiveSummaryPaneContent {
+                                editable: Bool, status: String?, updated: String?,
+                                translation: SummaryTranslationDocument? = nil) -> LiveSummaryPaneContent {
         let now = state.map(\.now).flatMap { $0.isEmpty ? nil : $0 }
-        return LiveSummaryPaneContent(sections: sections, now: now, questions: questions.map(LiveQuestionRow.init),
-                                      todoGroups: todoGroups(state?.todos ?? []), decisions: state?.decisions ?? [],
-                                      editable: editable, canAddQuestion: editable && questions.count < LiveQuestionList.limit,
-                                      status: status, updated: updated, hasResult: state != nil)
+        let decisions = state?.decisions ?? []
+        var c = LiveSummaryPaneContent(sections: sections, now: now, questions: questions.map(LiveQuestionRow.init),
+                                       todoGroups: todoGroups(state?.todos ?? [], translation: translation),
+                                       decisions: decisions,
+                                       editable: editable, canAddQuestion: editable && questions.count < LiveQuestionList.limit,
+                                       status: status, updated: updated, hasResult: state != nil)
+        c.nowTranslation = now.flatMap { translation?.translation(of: $0) }
+        c.decisionTranslations = decisions.map { translation?.translation(of: $0) }
+        return c
     }
 
-    /// 自分 → 相手 → その他, each in the order given, empty ones left out; an owner reads `text — owner`.
-    static func todoGroups(_ todos: [LiveSummaryTodo]) -> [LiveTodoGroup] {
+    /// 自分 → 相手 → その他, each in the order given, empty ones left out; an owner reads `text — owner` (in the
+    /// translation too).
+    static func todoGroups(_ todos: [LiveSummaryTodo], translation: SummaryTranslationDocument? = nil) -> [LiveTodoGroup] {
         let order: [(LiveTodoSide, String)] = [(.me, mineTitle), (.other, theirsTitle), (.unknown, otherTitle)]
+        func line(_ text: String, _ owner: String?) -> String { owner.map { "\(text) — \($0)" } ?? text }
         return order.compactMap { side, title in
-            let items = todos.filter { $0.side == side }.map { t in t.owner.map { "\(t.text) — \($0)" } ?? t.text }
-            return items.isEmpty ? nil : LiveTodoGroup(title: title, items: items)
+            let group = todos.filter { $0.side == side }
+            guard !group.isEmpty else { return nil }
+            return LiveTodoGroup(title: title, items: group.map { line($0.text, $0.owner) },
+                                 translations: group.map { t in translation?.translation(of: t.text).map { line($0, t.owner) } })
         }
     }
 

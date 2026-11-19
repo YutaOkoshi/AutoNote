@@ -1,4 +1,5 @@
 import AutoNoteCore
+import AutoNoteTestSupport
 import Foundation
 import Testing
 
@@ -26,6 +27,44 @@ import Testing
         #expect(throws: DevSummarizeArguments.ParseError.self) {
             try DevSummarizeArguments.parse(["--fake", "t.json", "--out"])
         }
+    }
+
+    @Test func parsesMinutesOut() throws {
+        let a = try DevSummarizeArguments.parse(["--fake", "t.json", "--out", "d", "--claude", "--minutes-out", "o.json"])
+        #expect(a.minutesOut?.lastPathComponent == "o.json")
+        let none = try DevSummarizeArguments.parse(["--fake", "t.json", "--out", "d", "--claude"])
+        #expect(none.minutesOut == nil)
+        #expect(throws: DevSummarizeArguments.ParseError.self) {
+            try DevSummarizeArguments.parse(["--fake", "t.json", "--out", "d", "--claude", "--minutes-out"])
+        }
+    }
+
+    @Test func exportMinutesWritesTheMinutesJSON() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "DevSummarizeExport-\(UUID().uuidString)",
+                                                                   directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let minutes = try #require(try FixtureLibrary.meetings().compactMap(\.minutes).first)
+        let source = dir.appending(path: "minutes.json")
+        try AutoNoteJSON.encoder().encode(minutes).write(to: source)
+        let dest = dir.appending(path: "nested/out.json")
+
+        try DevSummarizeArguments.exportMinutes(from: source, to: dest)
+
+        let decoded = try AutoNoteJSON.decoder().decode(MinutesOutput.self, from: Data(contentsOf: dest))
+        #expect(decoded == minutes)
+    }
+
+    @Test func exportMinutesRejectsSomethingElse() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "DevSummarizeExport-\(UUID().uuidString)",
+                                                                   directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = dir.appending(path: "minutes.json")
+        try Data(#"{"not":"minutes"}"#.utf8).write(to: source)
+        let dest = dir.appending(path: "out.json")
+        #expect(throws: (any Error).self) { try DevSummarizeArguments.exportMinutes(from: source, to: dest) }
+        #expect(!FileManager.default.fileExists(atPath: dest.path))
     }
 
     @Test func minutesRequiredUnlessFailOrClaude() throws {
