@@ -5,7 +5,8 @@
           [--datasets ami-ES2008a] [--inputs reference,final] [--allow-claude] [--judge-model <id>]
 
 - 入力 2 通り: reference = AMI の正解の書き起こし（要約だけの力）、final = AutoNote の確定版（whisper、--lang en、
-  会議の全長）の書き起こし（通しの力）。
+  会議の全長）の書き起こし（通しの力）。reference-me-other = 正解の書き起こしで、話者 me_speaker（既定 A）を「自分」、
+  ほかを「相手」にしたもの（話者ありの要約。dev summarize --fake が自分・相手を別トラックに保つようになってから意味がある）。
 - 要約は `autonote dev summarize --fake <transcript> --claude --minutes-out <path>`（アプリと同じ Claude 呼び出し）。
 - 採点は `claude -p --output-format json --json-schema <schema>`（アプリと同じ固定の引数。道具なし・MCP なし・1 ターン）。
 - **Claude を呼ぶのは --allow-claude を付けたときだけ**。結果は入力のハッシュでキャッシュし（<data>/cache/）、
@@ -91,11 +92,16 @@ reward or penalize style. Return one verdict per item id, JSON only, following t
 
 # ---------------------------------------------------------------- inputs
 
-def transcript_from_reference(decl, ds):
+def transcript_from_reference(decl, ds, me=None):
+    """AMI の正解の書き起こし。me（話者の記号、例 "A"）を渡すと、その話者を「自分」、ほかを「相手」にする
+    （アプリの 2 トラック録音で、自分 1 人と遠隔の相手の形）。渡さなければ話者は unknown。"""
     ann = fetch.ann_dir(decl, ds)
     utts = refs.ami_utterances(refs.ami_words(ann, ds["meeting"]))
+
+    def speaker(u):
+        return "unknown" if me is None else ("me" if u["speaker"] == me else "other")
     return {"engine": "reference (AMI manual transcript)", "language": "en",
-            "utterances": [{"start": round(u["start"], 3), "end": round(u["end"], 3), "speaker": "unknown",
+            "utterances": [{"start": round(u["start"], 3), "end": round(u["end"], 3), "speaker": speaker(u),
                             "text": u["text"], "is_final": True} for u in utts]}
 
 
@@ -158,6 +164,8 @@ def labelled_text(transcript):
 
 def evaluate_open(ds, variant, args, calls):
     """人手の要約がないデータ: 忠実性だけ（根拠は常に正解の書き起こし）。"""
+    if variant not in ("reference", "final"):
+        raise ValueError("%s: 入力 %s はこのデータにない（reference / final）" % (ds["id"], variant))
     transcript = open_reference(ds) if variant == "reference" else open_final(ds, args.label)
     minutes, cached_summary = summarize(args.autonote, transcript, args.allow_claude, calls)
     items = faith_items(minutes)
@@ -307,6 +315,8 @@ def transcript_text(transcript):
 def evaluate(decl, ds, variant, args, calls):
     if variant == "reference":
         transcript = transcript_from_reference(decl, ds)
+    elif variant == "reference-me-other":
+        transcript = transcript_from_reference(decl, ds, me=ds.get("me_speaker", "A"))
     else:
         transcript = transcript_from_final(decl, ds, args.autonote, args.label, runner.model_path(decl, ""))
     minutes, cached_summary = summarize(args.autonote, transcript, args.allow_claude, calls)

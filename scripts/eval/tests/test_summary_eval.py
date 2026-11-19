@@ -90,3 +90,21 @@ class OpenDataInputTests(unittest.TestCase):
     def test_table_cell_without_gold(self):
         self.assertEqual(summary_eval.match_cell({"pred": 3}, "recall", "matched_gold", "gold"), "–")
         self.assertEqual(summary_eval.match_cell({"pred": 3}, "precision", "matched_pred", "pred"), "–（生成 3 件）")
+
+
+class AmiSpeakerTests(unittest.TestCase):
+    def test_reference_with_me_and_other(self):
+        import refs
+        saved = refs.ami_words, refs.ami_utterances
+        refs.ami_utterances = lambda words: [{"start": 0.0, "end": 1.0, "speaker": "A", "text": "hi"},
+                                             {"start": 1.0, "end": 2.0, "speaker": "C", "text": "hello"}]
+        refs.ami_words = lambda ann, meeting: []
+        try:
+            decl = {"sources": {"ann": {"extract": "ami/ann"}}}
+            ds = {"annotations": "ann", "meeting": "X"}
+            plain = summary_eval.transcript_from_reference(decl, ds)
+            split = summary_eval.transcript_from_reference(decl, ds, me="A")
+        finally:
+            refs.ami_words, refs.ami_utterances = saved
+        self.assertEqual([u["speaker"] for u in plain["utterances"]], ["unknown", "unknown"])
+        self.assertEqual([u["speaker"] for u in split["utterances"]], ["me", "other"])
