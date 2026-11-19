@@ -4,8 +4,8 @@ import Foundation
 
 /// `autonote dev summarize` — runs the whole post-processing queue (transcribe, summarize, write_vault,
 /// update_index) on one fictional meeting with fake transcription and summarization (or the real `claude` with
-/// `--claude`). Prints one JSON line `{"meeting_id","file","status"}`. Exit codes: 0 done, 1 job not done / error,
-/// 2 usage.
+/// `--claude`). Prints one JSON line `{"meeting_id","file","status"}`; `--minutes-out` also copies the structured
+/// `minutes.json` (MinutesOutput) out for evaluation. Exit codes: 0 done, 1 job not done / error, 2 usage.
 enum DevSummarize {
     static let usage = DevSummarizeArguments.usage
 
@@ -84,6 +84,9 @@ enum DevSummarize {
         guard let file = meetingFile(in: vault) else {
             DevCommands.printError("error: no meeting file in the vault")
             return 1
+        }
+        if let minutesOut = o.minutesOut {
+            try DevSummarizeArguments.exportMinutes(from: paths.minutesFile(id), to: minutesOut)
         }
         let status = try await ManifestStore(paths: paths).load(id).status
         let line = try AutoNoteJSON.compactEncoder().encode(Result(meetingId: id.rawValue, file: file, status: status.rawValue))

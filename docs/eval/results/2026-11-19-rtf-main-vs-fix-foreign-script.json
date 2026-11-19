@@ -1,0 +1,163 @@
+{
+  "date": "2026-11-19",
+  "a": "main",
+  "b": "fix-foreign-script",
+  "rounds": 3,
+  "model": "ggml-large-v3-turbo-q5_0.bin",
+  "builds": {
+    "main": {
+      "autonote": "eval-harness/.build/release/autonote",
+      "sha256": "88fbb7abd9318454462d1df8025d75aa69c3026346ce5f3e5357cb43253961aa",
+      "commit": "ee24cc6cbadbcd00f98ad78b34dc7bc470d51cc2",
+      "branch": "feature/eval-harness"
+    },
+    "fix-foreign-script": {
+      "autonote": "fix-live-whisper-foreign-script/.build/release/autonote",
+      "sha256": "b1fa94224bedefa2ab669b14fd2034df8ac336b01a2a3851b1ee8fb99469eeff",
+      "commit": "58f7d162a6b8970c958c47b021236fe23020b619",
+      "branch": "fix/live-whisper-foreign-script"
+    }
+  },
+  "cases": {
+    "kantei-toron whisper/ja": {
+      "main": [
+        {
+          "elapsed": 19.248,
+          "rtf": 0.016
+        },
+        {
+          "elapsed": 20.301,
+          "rtf": 0.017
+        },
+        {
+          "elapsed": 19.494,
+          "rtf": 0.016
+        }
+      ],
+      "fix-foreign-script": [
+        {
+          "elapsed": 19.528,
+          "rtf": 0.016
+        },
+        {
+          "elapsed": 21.801,
+          "rtf": 0.018
+        },
+        {
+          "elapsed": 20.12,
+          "rtf": 0.017
+        }
+      ],
+      "median_rtf": {
+        "main": 0.016,
+        "fix-foreign-script": 0.017
+      },
+      "ratio": 1.0625
+    },
+    "kantei-toron whisper-live/ja": {
+      "main": [
+        {
+          "elapsed": 49.903,
+          "rtf": 0.042
+        },
+        {
+          "elapsed": 56.848,
+          "rtf": 0.047
+        },
+        {
+          "elapsed": 51.988,
+          "rtf": 0.043
+        }
+      ],
+      "fix-foreign-script": [
+        {
+          "elapsed": 51.349,
+          "rtf": 0.043
+        },
+        {
+          "elapsed": 55.6,
+          "rtf": 0.046
+        },
+        {
+          "elapsed": 52.038,
+          "rtf": 0.043
+        }
+      ],
+      "median_rtf": {
+        "main": 0.043,
+        "fix-foreign-script": 0.043
+      },
+      "ratio": 1.0
+    },
+    "ami-IS1009c whisper/en": {
+      "main": [
+        {
+          "elapsed": 16.467,
+          "rtf": 0.014
+        },
+        {
+          "elapsed": 16.282,
+          "rtf": 0.014
+        },
+        {
+          "elapsed": 16.349,
+          "rtf": 0.014
+        }
+      ],
+      "fix-foreign-script": [
+        {
+          "elapsed": 16.835,
+          "rtf": 0.014
+        },
+        {
+          "elapsed": 16.412,
+          "rtf": 0.014
+        },
+        {
+          "elapsed": 16.537,
+          "rtf": 0.014
+        }
+      ],
+      "median_rtf": {
+        "main": 0.014,
+        "fix-foreign-script": 0.014
+      },
+      "ratio": 1.0
+    },
+    "ami-IS1009c whisper-live/en": {
+      "main": [
+        {
+          "elapsed": 43.111,
+          "rtf": 0.036
+        },
+        {
+          "elapsed": 39.44,
+          "rtf": 0.033
+        },
+        {
+          "elapsed": 39.422,
+          "rtf": 0.033
+        }
+      ],
+      "fix-foreign-script": [
+        {
+          "elapsed": 42.496,
+          "rtf": 0.035
+        },
+        {
+          "elapsed": 39.717,
+          "rtf": 0.033
+        },
+        {
+          "elapsed": 40.377,
+          "rtf": 0.034
+        }
+      ],
+      "median_rtf": {
+        "main": 0.033,
+        "fix-foreign-script": 0.034
+      },
+      "ratio": 1.0303030303030303
+    }
+  }
+}
