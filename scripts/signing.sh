@@ -13,12 +13,15 @@
 #       AUTONOTE_CERT_SHA1）。同梱の CLI とフレームワークも同じ証明書か。署名が strict に有効か。
 #   scripts/signing.sh import-ci <キーチェーンのパス>
 #       環境変数 AUTONOTE_SIGNING_P12_BASE64 / AUTONOTE_SIGNING_P12_PASSWORD の p12 を新しい一時キーチェーンに取り込み、
-#       codesign が確認なしで使えるようにする。証明書の SHA-1 が期待値（AUTONOTE_EXPECT_CERT_SHA1、既定は
+#       codesign が確認なしで使えるようにし、ユーザーのキーチェーンの検索リストの先頭に足す（delete-keychain で外す）。
+#       証明書の SHA-1 が期待値（AUTONOTE_EXPECT_CERT_SHA1、既定は
 #       AUTONOTE_CERT_SHA1）と違えば失敗。SHA-1 を標準出力に 1 行で出す。release.yml の署名ジョブが使う。
 #   scripts/signing.sh delete-keychain <キーチェーンのパス>
 #   scripts/signing.sh selftest [<AutoNote.app>]
 #       手元で release.yml と同じ手順を回す: 使い捨ての証明書を作り → import-ci → sign-app.sh → check、
-#       さらに期待値違いの check が失敗することも確かめる。login キーチェーンと検索リストは変えない。
+#       さらに期待値違いの check が失敗することも確かめる。証明書はどこにも信頼設定が無く（ランナーと同じ）、codesign が
+#       --keychain なしでも識別子を引けることを確かめる。login キーチェーンは変えない。検索リストには途中で一時
+#       キーチェーンが入り、終わると元に戻る。
 #   scripts/signing.sh export-to-1password
 #       login キーチェーンの「AutoNote Dev」（証明書と秘密鍵）を p12 にして 1Password に保存し、GitHub の Environment
 #       「release」の Secrets に入れる。要: `op` にサインイン済み（1Password アプリの CLI 連携）、`gh` にログイン済み、swift。
@@ -132,11 +135,34 @@ cmd_import_ci() {
     sha1="$(security find-identity -p codesigning "${keychain}" | awk '/^ *[0-9]+\)/{print $2; exit}' | lower)"
     [[ -n "${sha1}" ]] || die "取り込んだ p12 にコード署名用の識別子がありません"
     [[ "${sha1}" == "${expect}" ]] || die "取り込んだ証明書の SHA-1 ${sha1} が期待値 ${expect} と違います（scripts/config.sh の AUTONOTE_CERT_SHA1）"
+    # codesign は検索リストに無いキーチェーンの identity を見つけない（"<SHA-1>: no identity found"。v0.7.0 の sign ジョブ、
+    # macOS 26 のランナーで --keychain を渡していても起きた）。検索リストの先頭に足し、codesign が実際に引く経路
+    # （キーチェーンを指定しない find-identity）で見えることを確かめてから返す
+    add_to_search_list "${keychain}"
+    security find-identity -p codesigning | grep -qi " ${sha1} " \
+        || die "検索リストに足しても、codesign が使う経路で識別子 ${sha1} が見えません"
     echo "${sha1}"
+}
+
+# ユーザーのキーチェーンの検索リスト（1 行 1 つ、引用符なし）
+search_list() { security list-keychains -d user | sed -E 's/^[[:space:]]*"(.*)"[[:space:]]*$/\1/'; }
+
+# 検索リストの先頭に足す / 外す（ほかの項目と順は保つ）
+add_to_search_list() {
+    local k list=("$1")
+    while IFS= read -r k; do [[ -n "${k}" && "${k}" != "$1" ]] && list+=("${k}"); done < <(search_list)
+    security list-keychains -d user -s "${list[@]}"
+}
+remove_from_search_list() {
+    local k list=()
+    while IFS= read -r k; do [[ -n "${k}" && "${k}" != "$1" ]] && list+=("${k}"); done < <(search_list)
+    [[ ${#list[@]} -gt 0 ]] && security list-keychains -d user -s "${list[@]}"
+    return 0
 }
 
 cmd_delete_keychain() {
     local keychain="${1:?使い方: $0 delete-keychain <キーチェーンのパス>}"
+    remove_from_search_list "${keychain}"
     [[ -e "${keychain}" ]] && security delete-keychain "${keychain}"
     return 0
 }
@@ -148,7 +174,8 @@ cmd_selftest() {
     local keychain="${work}/selftest.keychain-db"
     # shellcheck disable=SC2064
     # 後始末は 1 つ失敗しても続ける（trap の中でも set -e が効くため、|| true を付ける）
-    trap "security delete-keychain '${keychain}' 2>/dev/null || true; security delete-keychain '${work}/export.keychain-db' 2>/dev/null || true; rm -rf '${work}'" EXIT
+    # import-ci が検索リストに足すので、delete-keychain で外す（ユーザーの検索リストは前後で同じに戻る）
+    trap "'${BASH_SOURCE[0]}' delete-keychain '${keychain}' 2>/dev/null || true; security delete-keychain '${work}/export.keychain-db' 2>/dev/null || true; rm -rf '${work}'" EXIT
     cat >"${work}/cert.cnf" <<CNF
 [ req ]
 distinguished_name = dn
@@ -177,6 +204,16 @@ CNF
         AUTONOTE_EXPECT_CERT_SHA1="${sha1}" "${BASH_SOURCE[0]}" import-ci "${keychain}")"
     rm -f "${work}/id.p12"
     echo "import-ci: 識別子 ${identity}"
+    # ランナーと同じ条件: 信頼設定の無い証明書で、codesign が --keychain なしでも（検索リストから）識別子を引けること。
+    # v0.7.0 の sign ジョブはここが満たされず "no identity found" で止まった
+    security verify-cert -c "${work}/cert.pem" -p codeSign >/dev/null 2>&1 \
+        && die "使い捨ての証明書が信頼されている（ランナーと条件が違う）"
+    echo "使い捨ての証明書はどこにも信頼設定が無い（verify-cert -p codeSign が失敗する）"
+    printf 'int main(void){return 0;}\n' >"${work}/probe.c"
+    clang -o "${work}/probe" "${work}/probe.c" 2>/dev/null || cp /usr/bin/true "${work}/probe"
+    codesign --force --sign "${identity}" --timestamp=none "${work}/probe" >/dev/null 2>&1 \
+        || die "codesign が --keychain なしで識別子 ${identity} を引けない（一時キーチェーンが検索リストに無い）"
+    echo "codesign は --keychain なしでも識別子を引ける（検索リストに入っている）"
     ditto "${app}" "${work}/AutoNote.app"
     AUTONOTE_CODESIGN_KEYCHAIN="${keychain}" "${ROOT}/scripts/sign-app.sh" "${work}/AutoNote.app" "${identity}" >/dev/null 2>&1 \
         || die "sign-app.sh が一時キーチェーンの識別子で署名できない"
