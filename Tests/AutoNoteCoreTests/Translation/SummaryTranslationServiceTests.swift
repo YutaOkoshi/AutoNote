@@ -145,6 +145,28 @@ import Testing
         #expect(f.store.loadSummary(f.id, .minutes)?.modelRevision != "older")
     }
 
+    /// Review L2: minutes edited and saved in the app are translated right away, only the edited items.
+    @Test func minutesSavedInTheAppTranslateOnlyTheEditedItems() async throws {
+        let f = try TranslationFixture()
+        let fake = FakeTextCompleter()
+        let rewrites = Collected<MeetingID>()
+        let service = service(f, fake, rewrites: rewrites)
+        try writeMinutes(f)
+        await service.minutesSaved(f.id)
+        await service.waitForJob(f.id)
+        let before = fake.snapshot.prompts.count
+        #expect(f.store.loadSummary(f.id, .minutes) != nil)
+        var edited = SummaryTranslationTests.minutes
+        edited.decisions = [Decision(text: "移行は来月半ばまでに終える", t: "00:01:00")]
+        try await Task.sleep(for: .milliseconds(20))   // a newer modification date
+        try writeMinutes(f, edited)
+        await service.minutesSaved(f.id)
+        await service.waitForJob(f.id)
+        #expect(fake.snapshot.prompts.count == before + 1)
+        #expect(f.store.loadSummary(f.id, .minutes)?.translation(of: "移行は来月半ばまでに終える") != nil)
+        #expect(rewrites.values == [f.id, f.id])
+    }
+
     @Test func nothingIsTranslatedWhenTheTargetIsTheSummarysOwnLanguage() async throws {
         let f = try TranslationFixture()
         f.settings.withLock { $0.translationTarget = .ja }

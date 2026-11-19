@@ -203,6 +203,12 @@ public actor TranslationService: TranslationPort {
         return summariesAttempted[id] != modified
     }
 
+    /// Minutes edited and saved in the app (`MeetingsAdapter.saveMinutes`, which bypasses the queue): their changed
+    /// items are translated as for regenerated minutes (review L2).
+    public func minutesSaved(_ id: MeetingID) async {
+        await startSummariesIfDue(id)
+    }
+
     private static func modificationDate(_ url: URL) -> Date? {
         (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
     }

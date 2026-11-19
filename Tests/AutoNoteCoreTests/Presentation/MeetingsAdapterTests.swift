@@ -12,7 +12,7 @@ import AutoNoteTestSupport
         let adapter: MeetingsAdapter
         let id = Samples.manifest.id
 
-        init() async throws {
+        init(minutesSaved: @escaping @Sendable (MeetingID) async -> Void = { _ in }) async throws {
             let root = try TemporaryDirectory.make()
             paths = AppPaths(root: root.appending(path: "data", directoryHint: .isDirectory))
             try paths.createBaseDirectories()
@@ -23,7 +23,7 @@ import AutoNoteTestSupport
             adapter = MeetingsAdapter(paths: paths, manifests: manifests, settings: SettingsStore(paths: paths), output: output,
                                       importer: AudioImporter(paths: paths, manifests: manifests),
                                       crashRecovery: CrashRecovery(paths: paths, manifests: manifests),
-                                      route: { _ in }, appVersion: "0.1.0")
+                                      route: { _ in }, appVersion: "0.1.0", minutesSaved: minutesSaved)
             // Fixture meeting 20261024-1400-a1b2: manifest and final.json.
             try await manifests.save(Samples.manifest)
             let final = Transcript(utterances: [u(1, .me, "では始めます"), u(5, .other, "お願いします")],
@@ -53,6 +53,22 @@ import AutoNoteTestSupport
         #expect(FileManager.default.fileExists(atPath: url.path))
         #expect(try String(contentsOf: url, encoding: .utf8).contains("新しいタイトル"))
         #expect(FileManager.default.fileExists(atPath: f.folder.appending(path: "_index.md").path))
+    }
+
+    /// Review L2: minutes saved in the app reach the translation (which translates the changed items only); a save
+    /// the Vault declined (edited outside) changes no minutes, so it tells nothing.
+    @Test func savedMinutesAreHandedToTheTranslation() async throws {
+        let saved = Collected<MeetingID>()
+        let f = try await Fixture(minutesSaved: { saved.append($0) })
+        _ = try await f.output.rebuild(outputFolder: f.folder.path)
+        guard case .saved(let url) = try await f.adapter.saveMinutes(f.id, f.minutes(title: "一回目"), renameFile: false,
+                                                                     overwrite: false) else {
+            Issue.record("first save did not write"); return
+        }
+        #expect(saved.values == [f.id])
+        try Data("---\nautonote_id: \(f.id.rawValue)\n---\n外で書き換えた\n".utf8).write(to: url)
+        _ = try await f.adapter.saveMinutes(f.id, f.minutes(title: "二回目"), renameFile: false, overwrite: false)
+        #expect(saved.values == [f.id])
     }
 
     @Test func externalEditIsReportedThenForced() async throws {
