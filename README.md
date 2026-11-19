@@ -9,7 +9,7 @@ macOS のメニューバーに常駐して会議を録音し、手元で文字�
 - 文字起こしは Mac の中で行う。録音中は Apple の音声認識（SpeechTranscriber / DictationTranscriber）でリアルタイムに流し、止めたあとに whisper.cpp で精度の高い確定版を作る（whisper のモデルを取得していないときは、確定版も Apple の音声認識で作る）
 - 確定版の文字起こしから、手元の Claude Code（`claude -p`）が 要約・出席者・議題・決定事項・アクション（優先度付き）・質問・締め切り・リスク・構成図などを持つ議事録を作る
 - 録音中にリアルタイム要約を出せる（設定でオンにしたとき）
-- 文字起こしを Mac の中で翻訳し、各行に訳文を併記できる（日本語 ↔ 英語。設定でオンにしたとき。Preferred Networks の PLaMo 3 Translate を使う。Built with PLaMo）
+- 文字起こしを Mac の中で翻訳し、各行に訳文を併記できる（日本語 ↔ 英語。設定でオンにしたとき。Preferred Networks の PLaMo 3 Translate を使う。Built with PLaMo）。ライブ要約と議事録は会議の言語で作り、できた要約も同じように訳して各項目の下に併記する
 - 議事録は 1 会議 1 ファイルの Markdown で、Obsidian などの Vault のフォルダに保存する。Claude Code がフォルダを読んで「先月決まったこと」に答えられる形にしてある
 - 登録した会議用のマイク機材をつなぐと録音が始まり、外すと止まる
 - CLI（`autonote start` / `stop` / `latest` など）と、議事録ができたときに自分のコマンドを走らせる Automations を持つ
@@ -57,6 +57,7 @@ macOS のメニューバーに常駐して会議を録音し、手元で文字�
 | [録音中のリアルタイム要約](docs/superpowers/specs/2026-10-28-live-summary-design.md) | 録音中に要約を更新する機能の設計 |
 | [要約を右ペインに置き「聞きたいこと」を足す](docs/superpowers/specs/2026-11-14-live-summary-side-pane-design.md) | 上の表示と入出力を置き換えた設計 |
 | [文字起こしを端末内で翻訳する](docs/superpowers/specs/2026-11-14-transcript-translation-design.md) | PLaMo 3 Translate で各行に訳文を併記する機能の設計 |
+| [要約の翻訳](docs/superpowers/specs/2026-11-19-summary-translation-design.md) | ライブ要約と議事録を会議の言語で作り、端末内で訳して併記する設計 |
 
 調査記録（`docs/superpowers/research/`）:
 
