@@ -15,7 +15,7 @@ Safety (checked before each trial; unsafe → wait 5 min, give up after --wait-m
   connected, installed AutoNote relaunched if it was running. Sound budget per run: --sound-budget seconds.
 Device names and addresses are never written to files: the headset is found by --bt-name (substring) at run time.
 """
-import argparse, json, os, re, shutil, signal, subprocess, sys, threading, time
+import argparse, json, os, re, shutil, signal, subprocess, sys, tempfile, threading, time
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 INSTALLED_APP = "/Applications/AutoNote.app"
@@ -287,13 +287,31 @@ def recordings(data):
 
 # ---------- one trial ----------
 def trial(env, spec, idx):
-    """spec: id, app (none|before|after), page (none|tone|webrtc), order (page_then_connect|connect_then_page),
-    start (auto|manual|none), countdown, mic_probe (bool: meter opens the headset mic when HFP)."""
-    a = env.a
     tid = f"{idx:02d}-{spec['id']}"
     tdir = os.path.join(env.out, tid)
     os.makedirs(tdir, exist_ok=True)
     res = {"trial": tid, **spec, "events": {}}
+    try:
+        trial_body(env, spec, res, tdir)
+    except KeyboardInterrupt:
+        res["error"] = "interrupted"
+        raise
+    except Exception as e:   # one broken trial must not end the run
+        res["error"] = f"exception: {e!r}"
+    finally:
+        if res.get("error") or res.get("skipped"):
+            log(f"  {tid}: {res.get('error') or res.get('skipped')}")
+        if "skipped" not in res:
+            analyze_trial(env, res, tdir)
+        json.dump(res, open(os.path.join(tdir, "result.json"), "w"), indent=1, default=str)
+    return res
+
+
+def trial_body(env, spec, res, tdir):
+    """spec: id, app (none|before|after), page (none|tone|webrtc), order (page_then_connect|connect_then_page),
+    start (auto|manual|none), countdown, mic_probe (bool: meter opens the headset mic when HFP)."""
+    a = env.a
+    tid = res["trial"]
     ev = res["events"]
     log(f"=== trial {tid}: {spec}")
     if not env.wait_safe(tid):
@@ -302,7 +320,9 @@ def trial(env, spec, idx):
     if env.sound_seconds + spec.get("sound_estimate", 60) > a.sound_budget:
         res["skipped"] = "sound budget"
         return res
-    data = os.path.join(env.out, f"data-{tid}")
+    # Short path: the app's Unix socket lives in the data directory (sun_path is 104 bytes).
+    data = tempfile.mkdtemp(prefix=f"btv{tid[:2]}-")
+    res["data_dir"] = data
     app = {"before": a.before_app, "after": a.after_app}.get(spec["app"])
     meter_out = os.path.join(tdir, "meter.jsonl")
     with env.lock:
@@ -373,8 +393,6 @@ def trial(env, spec, idx):
         env.quit_app()
         with env.lock:
             res["page_status"] = list(env.status_lines)
-    analyze_trial(env, res, tdir)
-    json.dump(res, open(os.path.join(tdir, "result.json"), "w"), indent=1, default=str)
     return res
 
 
