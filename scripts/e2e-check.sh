@@ -632,7 +632,7 @@ check_claude_probe_files() {
 }
 
 check_bt_verify_script() {
-    CURRENT="15. scripts/bt-verify.sh の静的確認（構文・計測プログラムのコンパイル・--dry-run）"
+    CURRENT="17. scripts/bt-verify.sh の静的確認（構文・計測プログラムのコンパイル・--dry-run）"
     if ! run bash -n scripts/bt-verify.sh; then fail "bt-verify.sh に構文エラー"; return; fi
     if ! run python3 -I -m py_compile scripts/bt-verify.py; then fail "bt-verify.py に構文エラー"; return; fi
     # --dry-run は何も鳴らさず・つながず・起動しない（既定の入出力を読むだけ）。--bt-name なしでも exit 0
