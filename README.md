@@ -9,7 +9,7 @@ macOS のメニューバーに常駐して会議を録音し、手元で文字�
 - 文字起こしは Mac の中で行う。録音中は Apple の音声認識（SpeechTranscriber / DictationTranscriber）でリアルタイムに流し、止めたあとに whisper.cpp で精度の高い確定版を作る（whisper のモデルを取得していないときは、確定版も Apple の音声認識で作る）
 - 確定版の文字起こしから、手元の Claude Code（`claude -p`）が 要約・出席者・議題・決定事項・アクション（優先度付き）・質問・締め切り・リスク・構成図などを持つ議事録を作る
 - 録音中にリアルタイム要約を出せる（設定でオンにしたとき）
-- 文字起こしを Mac の中で翻訳し、各行に訳文を併記できる（日本語 ↔ 英語。設定でオンにしたとき。Preferred Networks の PLaMo 3 Translate を使う。Built with PLaMo）
+- 文字起こしを Mac の中で翻訳し、各行に訳文を併記できる（日本語 ↔ 英語。設定でオンにしたとき。Preferred Networks の PLaMo 3 Translate を使う。Built with PLaMo）。ライブ要約と議事録は会議の言語で作り、できた要約も同じように訳して各項目の下に併記する
 - 議事録は 1 会議 1 ファイルの Markdown で、Obsidian などの Vault のフォルダに保存する。Claude Code がフォルダを読んで「先月決まったこと」に答えられる形にしてある
 - 登録した会議用のマイク機材をつなぐと録音が始まり、外すと止まる
 - CLI（`autonote start` / `stop` / `latest` など）と、議事録ができたときに自分のコマンドを走らせる Automations を持つ
@@ -19,6 +19,7 @@ macOS のメニューバーに常駐して会議を録音し、手元で文字�
 - 音声はこの Mac から出ない。録音・文字起こしはすべてローカルで行う
 - 外に渡るのは、議事録（とリアルタイム要約）を作るために Claude Code（`claude -p`）へ渡す文字起こしのテキストだけ（リアルタイム要約がオンのときは、書いておいた「聞きたいこと」も）
 - 翻訳は Mac の中だけで行い、文字起こしも訳文も外に送らない。通信するのは、翻訳モデルを Hugging Face からダウンロードするときだけ
+- 自動アップデート（既定オン、設定の「一般 › アップデート」で切れる）は 1 日に 1 回 GitHub に最新版を問い合わせ、新しい版があればダウンロードする。送るのは通常の HTTP 要求だけ
 - 根拠: [要件書](docs/superpowers/specs/2026-10-24-autonote-design.md) のゴール G9
 
 ## 動作環境
@@ -35,6 +36,9 @@ macOS のメニューバーに常駐して会議を録音し、手元で文字�
    ```sh
    xattr -d com.apple.quarantine /Applications/AutoNote.app
    ```
+
+3. 以後は、アプリが 1 日に 1 回新しい版を確かめ、録音や議事録の作成をしていないときに自分で入れ替えて再起動する。すべての版を同じ証明書で署名しているので、入れ替えてもマイク・システム音声の許可は保たれる。ただし、この署名に切り替わる最初の版（自動アップデートを入れた版）へ古い版から入れ替えるときだけは、許可をもう一度求められる
+   - 入れ替えは 1 回の操作で行うので、途中で電源が切れても `/Applications/AutoNote.app` は古い版か新しい版のどちらかのまま残る。隣に隠しフォルダ `.AutoNote-update.app` が残っていたら、次の起動で自動で消える（手で消してもよい）。万一 `AutoNote.app` が無く、`.AutoNote-update.app` か `.AutoNote-update-backup.app` だけがあるときは、ターミナルで `mv /Applications/.AutoNote-update.app /Applications/AutoNote.app` のように名前を戻す
 
 最初の録音まで:
 
@@ -57,6 +61,7 @@ macOS のメニューバーに常駐して会議を録音し、手元で文字�
 | [録音中のリアルタイム要約](docs/superpowers/specs/2026-10-28-live-summary-design.md) | 録音中に要約を更新する機能の設計 |
 | [要約を右ペインに置き「聞きたいこと」を足す](docs/superpowers/specs/2026-11-14-live-summary-side-pane-design.md) | 上の表示と入出力を置き換えた設計 |
 | [文字起こしを端末内で翻訳する](docs/superpowers/specs/2026-11-14-transcript-translation-design.md) | PLaMo 3 Translate で各行に訳文を併記する機能の設計 |
+| [要約の翻訳](docs/superpowers/specs/2026-11-19-summary-translation-design.md) | ライブ要約と議事録を会議の言語で作り、端末内で訳して併記する設計 |
 
 調査記録（`docs/superpowers/research/`）:
 

@@ -5,17 +5,20 @@ import SwiftUI
 /// 「文字起こし」 tab (`onJump`).
 struct MinutesSummaryView: View {
     let minutes: MinutesOutput
+    /// The minutes' translation, nil when hidden or none: each text's translation goes under it.
+    var translation: SummaryTranslationDocument?
     let onJump: (TimelineTime) -> Void
 
     @State private var filter: MinutesActionFilter = .all
     @State private var openAgenda: Set<String> = []
     @State private var previewDiagram: PreviewDiagram?
 
-    private var sections: [MinutesSection] { MinutesPresentation.sections(minutes) }
+    private var sections: [MinutesSection] { MinutesPresentation.sections(minutes, translation: translation) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text(minutes.title.isEmpty ? "（無題）" : minutes.title)
+            TranslatedText(original: minutes.title.isEmpty ? "（無題）" : minutes.title,
+                           translation: MinutesPresentation.titleTranslation(minutes, translation: translation))
                 .font(.title2.bold())
                 .textSelection(.enabled)
             if sections.isEmpty {
@@ -61,7 +64,7 @@ struct MinutesSummaryView: View {
             }
         case .summary:
             VStack(alignment: .leading, spacing: 10) {
-                ForEach(section.rows) { Text($0.text).fixedSize(horizontal: false, vertical: true) }
+                ForEach(section.rows) { TranslatedText(original: $0.text, translation: $0.textTranslation) }
             }
             .textSelection(.enabled)
         case .diagram:
@@ -110,7 +113,9 @@ struct MinutesSummaryView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Image(systemName: open ? "chevron.down" : "chevron.right")
                             .font(.caption).foregroundStyle(.secondary).frame(width: 10)
-                        Text("\(number). \(row.text)").bold()
+                        TranslatedText(original: "\(number). \(row.text)",
+                                       translation: row.textTranslation.map { "\(number). \($0)" })
+                            .bold()
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .contentShape(Rectangle())
@@ -120,8 +125,7 @@ struct MinutesSummaryView: View {
                 timeButton(row)
             }
             if open, let detail = row.detail {
-                Text(detail)
-                    .fixedSize(horizontal: false, vertical: true)
+                TranslatedText(original: detail, translation: row.detailTranslation)
                     .textSelection(.enabled)
                     .padding(.leading, 16)
             }
@@ -132,7 +136,7 @@ struct MinutesSummaryView: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             ForEach(Array(row.badges.enumerated()), id: \.offset) { _, b in badge(b) }
             VStack(alignment: .leading, spacing: 2) {
-                Text(row.text).fixedSize(horizontal: false, vertical: true)
+                TranslatedText(original: row.text, translation: row.textTranslation)
                 if let s = row.secondary { Text(s).font(.caption).foregroundStyle(.secondary) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -146,7 +150,7 @@ struct MinutesSummaryView: View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             leading().frame(width: 16)
             VStack(alignment: .leading, spacing: 3) {
-                Text(row.text).fixedSize(horizontal: false, vertical: true)
+                TranslatedText(original: row.text, translation: row.textTranslation)
                 if row.secondary != nil || !row.badges.isEmpty {
                     HStack(spacing: 6) {
                         if let s = row.secondary {
@@ -156,7 +160,8 @@ struct MinutesSummaryView: View {
                     }
                 }
                 if let detail = row.detail {
-                    Text(detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    TranslatedText(original: detail, translation: row.detailTranslation)
+                        .font(.callout).foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

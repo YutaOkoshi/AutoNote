@@ -26,7 +26,9 @@ struct LiveSummarySections: View {
             switch section {
             case .now:
                 if let now = content.now {
-                    Text(now).font(.title3.bold()).textSelection(.enabled)
+                    TranslatedText(original: now, translation: content.nowTranslation)
+                        .font(.title3.bold())
+                        .textSelection(.enabled)
                 }
             case .questions:
                 LiveQuestionsList(rows: content.questions, editable: content.editable,
@@ -37,10 +39,10 @@ struct LiveSummarySections: View {
                         .font(.caption.bold())
                         .foregroundStyle(Color.accentColor)
                         .padding(.top, 2)
-                    BulletList(items: group.items)
+                    BulletList(items: group.items, translations: group.translations)
                 }
             case .decisions:
-                BulletList(items: content.decisions)
+                BulletList(items: content.decisions, translations: content.decisionTranslations)
             }
         }
     }
@@ -90,15 +92,16 @@ private struct CollapsibleSection<Content: View>: View {
     }
 }
 
-/// One 「・」 row per item.
+/// One 「・」 row per item, each with its translation underneath when there is one (index-aligned).
 private struct BulletList: View {
     let items: [String]
+    var translations: [String?] = []
 
     var body: some View {
-        ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+        ForEach(Array(items.enumerated()), id: \.offset) { i, item in
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text("・").foregroundStyle(.secondary)
-                Text(item).fixedSize(horizontal: false, vertical: true)
+                TranslatedText(original: item, translation: translations.indices.contains(i) ? translations[i] : nil)
             }
             .textSelection(.enabled)
         }
@@ -380,10 +383,13 @@ struct StoredLiveSummary: View {
     let model: AppModel
     let id: MeetingID
     let stored: LiveSummaryState?
+    /// The meeting's live summary translation (`MeetingTranslation.liveSummary`).
+    var translation: SummaryTranslationDocument?
 
     var body: some View {
-        if let content = LiveSummaryPresentation.stored(state: model.liveSummary(for: id)?.state ?? stored,
-                                                        questions: model.questions(.meeting(id))) {
+        if let content = LiveSummaryPresentation.stored(
+            state: model.liveSummary(for: id)?.state ?? stored, questions: model.questions(.meeting(id)),
+            translation: TranslationPresentation.summaryTranslation(translation, shown: model.translationShown)) {
             StoredLiveSummaryCard(content: content) { edit in
                 guard case .setAsked = edit else { return }   // read-only otherwise
                 Task { await model.perform(.editQuestion(edit, in: .meeting(id))) }

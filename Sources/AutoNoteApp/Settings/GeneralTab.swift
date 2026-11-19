@@ -19,6 +19,7 @@ struct GeneralTab: View {
     @State private var liveSummaryEnabled = false
     @State private var liveSummaryInterval = 20
     @State private var liveSummaryModel = ""
+    @State private var autoUpdateEnabled = true
     @State private var loaded = false
     /// `launchAtLogin` as last loaded or saved, to tell whether a save changed the toggle.
     @State private var savedLaunchAtLogin = true
@@ -95,6 +96,7 @@ struct GeneralTab: View {
                     Text(PrivacyCopy.liveSummaryNote)
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                updateSection
                 Section("コマンドライン（autonote）") {
                     Text(cliCommand)
                         .font(.system(.caption, design: .monospaced))
@@ -114,6 +116,45 @@ struct GeneralTab: View {
             SaveBar(state: saveState, disabled: !loaded) { save() }
         }
         .task { await load() }
+    }
+
+    /// アップデート: the switch (saved with 保存), the running version, the last check, the status and 「今すぐ確認」.
+    private var updateSection: some View {
+        let updater = env.updater
+        return Section("アップデート") {
+            Toggle("自動でアップデートする", isOn: $autoUpdateEnabled)
+            LabeledContent("今の版", value: updater.currentVersion)
+            LabeledContent("最後の確認", value: updater.lastCheckedAt.map {
+                $0.formatted(date: .abbreviated, time: .shortened)
+            } ?? "まだありません")
+            Text(updater.status.text)
+                .font(.caption)
+                .foregroundStyle(Self.isProblem(updater.status) ? .orange : .secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button("今すぐ確認") { Task { await updater.check(manual: true) } }
+                    .disabled(Self.isWorking(updater.status))
+                if case .readyToInstall = updater.status {
+                    Button("アップデートして再起動") { updater.installNow() }
+                }
+            }
+            Text(PrivacyCopy.autoUpdateNote)
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private static func isWorking(_ s: UpdateStatus) -> Bool {
+        switch s {
+        case .checking, .downloading, .installing: true
+        default: false
+        }
+    }
+
+    private static func isProblem(_ s: UpdateStatus) -> Bool {
+        switch s {
+        case .failed, .manualRequired: true
+        default: false
+        }
     }
 
     /// Tokens with × each, then a field that adds one token on Enter (spaces stay inside the token).
@@ -180,6 +221,7 @@ struct GeneralTab: View {
         liveSummaryEnabled = s.liveSummaryEnabled
         liveSummaryInterval = s.liveSummaryIntervalSeconds
         liveSummaryModel = s.liveSummaryModel
+        autoUpdateEnabled = s.autoUpdateEnabled
         savedLaunchAtLogin = s.launchAtLogin
         loaded = true
         showLoginItemStatus()
@@ -215,6 +257,7 @@ struct GeneralTab: View {
         let login = launchAtLogin, kind = summarizerKind
         let liveOn = liveSummaryEnabled, liveInterval = liveSummaryInterval
         let liveModel = Self.nilIfBlank(liveSummaryModel) ?? Settings.defaultLiveSummaryModel
+        let autoUpdate = autoUpdateEnabled
         do {
             try FileManager.default.createDirectory(
                 at: URL(filePath: folder, directoryHint: .isDirectory), withIntermediateDirectories: true)
@@ -235,6 +278,7 @@ struct GeneralTab: View {
                     $0.liveSummaryEnabled = liveOn
                     $0.liveSummaryIntervalSeconds = liveInterval
                     $0.liveSummaryModel = liveModel
+                    $0.autoUpdateEnabled = autoUpdate
                 }
                 outputFolder = saved.outputFolder ?? ""
                 liveSummaryModel = saved.liveSummaryModel

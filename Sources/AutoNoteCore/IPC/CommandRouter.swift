@@ -74,6 +74,10 @@ public struct CommandRouter: IPCHandler {
             return IPCResult(meetingID: try await ports.meetings.merge(ids.map(MeetingID.init(rawValue:))).rawValue)
         case .automationsList:
             return IPCResult(automations: await ports.automations.summaries().0)
+        case .updateStatus:
+            return IPCResult(update: await ports.update.status())
+        case .updateCheck:
+            return IPCResult(update: await ports.update.checkNow())
         case .automationsRun:
             guard let name = args.name, let id = args.meetingID else { throw AppCommandError.invalid("Automation の名前と会議 ID が要ります") }
             return IPCResult(run: try await ports.automations.run(name: name, meetingID: MeetingID(rawValue: id)))

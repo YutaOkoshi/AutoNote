@@ -16,11 +16,15 @@ public struct TranslationDependencies: Sendable {
     public var installedModel: @Sendable (TranslationModel) async -> URL?
     public var profile: MachineProfile
     public var now: @Sendable () -> Date
+    /// Rewrites the meeting's Vault note once the minutes' translation changed (spec 2026-11-19 表示). An edited
+    /// note is left alone (the writer's `.ifUnchanged` rule).
+    public var rewriteNote: @Sendable (MeetingID) async -> Void
 
     public init(settings: @Sendable @escaping () async -> Settings, saveShown: @Sendable @escaping (Bool) async -> Void,
                 store: TranslationStore, runtime: TranslationRuntime, runtimeAvailable: Bool,
                 installedModel: @Sendable @escaping (TranslationModel) async -> URL?, profile: MachineProfile,
-                now: @Sendable @escaping () -> Date = { Date() }) {
+                now: @Sendable @escaping () -> Date = { Date() },
+                rewriteNote: @Sendable @escaping (MeetingID) async -> Void = { _ in }) {
         self.settings = settings
         self.saveShown = saveShown
         self.store = store
@@ -29,6 +33,7 @@ public struct TranslationDependencies: Sendable {
         self.installedModel = installedModel
         self.profile = profile
         self.now = now
+        self.rewriteNote = rewriteNote
     }
 
     /// The model to use and its file, or why translation cannot run now (mode aside).
@@ -55,6 +60,8 @@ public actor TranslationService: TranslationPort {
     private var revisions: [MeetingID: Int] = [:]
     /// Final transcripts (by `final.json` modification date) already translated automatically in this launch.
     private var autoAttempted: [MeetingID: Date] = [:]
+    /// `minutes.json` (by modification date) already translated in this launch.
+    private var summariesAttempted: [MeetingID: Date] = [:]
     private var recording = false
     /// A queue job is making a final transcript (stage `transcribe`, running or about to).
     private var transcribing = false
@@ -75,9 +82,19 @@ public actor TranslationService: TranslationPort {
         broadcaster.subscribe(initial: states.map { .job($0.key, $0.value, revision: revisions[$0.key] ?? 0) })
     }
 
-    public func meetingTranslation(_ id: MeetingID) -> MeetingTranslation {
-        MeetingTranslation.make(document: deps.store.load(id), transcript: deps.store.finalTranscript(id),
-                                live: deps.store.loadLive(id))
+    /// The summaries' translations only in the current setting's direction (review L3).
+    public func meetingTranslation(_ id: MeetingID) async -> MeetingTranslation {
+        let setting = await deps.settings().translationTarget
+        let live = deps.store.liveSummary(id).flatMap {
+            SummaryTranslation.current(deps.store.loadSummary(id, .live), texts: SummaryTranslation.liveTexts($0),
+                                       setting: setting)
+        }
+        let minutes = deps.store.minutes(id).flatMap {
+            SummaryTranslation.current(deps.store.loadSummary(id, .minutes), texts: SummaryTranslation.minutesTexts($0),
+                                       setting: setting)
+        }
+        return MeetingTranslation.make(document: deps.store.load(id), transcript: deps.store.finalTranscript(id),
+                                       live: deps.store.loadLive(id), liveSummary: live, minutes: minutes)
     }
 
     public func translate(_ id: MeetingID) async throws {
@@ -118,6 +135,7 @@ public actor TranslationService: TranslationPort {
                 if let item = items[raw], item.stage == StageName.transcribe { continue }
                 if items[raw] == nil { tracked.remove(raw) }
                 await startAutomaticallyIfDue(MeetingID(rawValue: raw))
+                await startSummariesIfDue(MeetingID(rawValue: raw))
             }
         }
     }
@@ -176,14 +194,42 @@ public actor TranslationService: TranslationPort {
         start(id, automatic: true)
     }
 
+    /// Minutes made (or made again) after the transcript's translation — the usual order, since the summary comes
+    /// after the final transcript — are translated once per `minutes.json` modification, if the mode asks for it.
+    /// A running job of the meeting translates them itself when it gets there.
+    func startSummariesIfDue(_ id: MeetingID) async {
+        guard jobs[id] == nil, let modified = Self.modificationDate(deps.store.paths.minutesFile(id)),
+              modified >= startedAt, summariesAttempted[id] != modified else { return }
+        let s = await deps.settings()
+        guard TranslationModelPolicy.effectiveMode(s.translationMode, profile: deps.profile).translatesAfterRecording,
+              case .success = await deps.resolve(s) else { return }
+        start(id, automatic: true, summariesOnly: true)
+    }
+
+    /// Whether `minutes.json` exists with a modification the summaries' translation has not started from.
+    private func minutesChangedSinceAttempt(_ id: MeetingID) -> Bool {
+        guard let modified = Self.modificationDate(deps.store.paths.minutesFile(id)) else { return false }
+        return summariesAttempted[id] != modified
+    }
+
+    /// Minutes edited and saved in the app (`MeetingsAdapter.saveMinutes`, which bypasses the queue): their changed
+    /// items are translated as for regenerated minutes (review L2).
+    public func minutesSaved(_ id: MeetingID) async {
+        await startSummariesIfDue(id)
+    }
+
+    private static func modificationDate(_ url: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+    }
+
     // MARK: - Jobs
 
     /// Starts the meeting's job unless one runs. The task is not a child of the caller.
-    func start(_ id: MeetingID, automatic: Bool) {
+    func start(_ id: MeetingID, automatic: Bool, summariesOnly: Bool = false) {
         guard jobs[id] == nil else { return }
         publish(id, .queued)
         jobs[id] = Task(priority: .utility) { [weak self] in
-            await self?.runJob(id, automatic: automatic)
+            await self?.runJob(id, automatic: automatic, summariesOnly: summariesOnly)
         }
     }
 
@@ -202,10 +248,16 @@ public actor TranslationService: TranslationPort {
 
     func state(_ id: MeetingID) -> TranslationJobState? { states[id] }
 
-    private func runJob(_ id: MeetingID, automatic: Bool) async {
+    private func runJob(_ id: MeetingID, automatic: Bool, summariesOnly: Bool) async {
         defer { jobs[id] = nil }
         do {
-            try await translateMeeting(id, automatic: automatic)
+            if !summariesOnly { try await translateMeeting(id, automatic: automatic) }
+            // Then the summaries (spec 2026-11-19: 文字起こしに続けて議事録も訳す).
+            // 「訳し直す」 redoes the summaries too, like the transcript (review M2).
+            try await translateSummaries(id, fresh: !automatic)
+            // Minutes written (or redone) while this job ran: `startSummariesIfDue` skipped them because the job was
+            // running, and the meeting may have left the queue meanwhile, so the job takes them before it ends.
+            while minutesChangedSinceAttempt(id) { try await translateSummaries(id) }
             revisions[id, default: 0] += 1
             publish(id, nil)
         } catch is CancellationError {
@@ -236,7 +288,7 @@ public actor TranslationService: TranslationPort {
         try deps.store.save(document, for: id)
 
         while true {
-            await waitWhilePaused(id, document)
+            await waitWhilePaused(id, TranslationProgress(done: document.processed, total: document.total))
             try Task.checkCancellation()
             publish(id, .running(TranslationProgress(done: document.processed, total: document.total)))
             let start = document
@@ -264,6 +316,98 @@ public actor TranslationService: TranslationPort {
         logger.notice("\(id.rawValue, privacy: .public): translated \(document.entries.count, privacy: .public) of \(document.total, privacy: .public) utterances")
     }
 
+    // MARK: - Summaries (spec 2026-11-19)
+
+    /// The minutes' and the live summary's texts still to translate, each saved after every text; the Vault note is
+    /// rewritten when the minutes' translation changed. Paused like the transcript's translation.
+    /// `fresh` (a manual run) starts the stored translations over; so does a translation by another model or revision.
+    private func translateSummaries(_ id: MeetingID, fresh: Bool = false) async throws {
+        if let modified = Self.modificationDate(deps.store.paths.minutesFile(id)) { summariesAttempted[id] = modified }
+        let s = await deps.settings()
+        let current = try? await deps.resolve(s).get().0
+        var work: [SummaryWork] = []
+        if let m = deps.store.minutes(id) {
+            work += summaryWork(id, .minutes, SummaryTranslation.minutesTexts(m), SummaryTranslation.minutesContext(m), s,
+                                model: current, fresh: fresh)
+        }
+        if let l = deps.store.liveSummary(id) {
+            work += summaryWork(id, .live, SummaryTranslation.liveTexts(l), SummaryTranslation.liveContext(l), s,
+                                model: current, fresh: fresh)
+        }
+        let total = work.reduce(0) { $0 + $1.pending }
+        guard total > 0 else { return }
+        let (model, url) = try await deps.resolve(s).get()
+        for i in work.indices {
+            work[i].document.model = model.name
+            work[i].document.modelRevision = model.revision
+            work[i].document.target = s.translationTarget
+        }
+        var done = 0
+        while true {
+            await waitWhilePaused(id, TranslationProgress(done: done, total: total))
+            try Task.checkCancellation()
+            publish(id, .running(TranslationProgress(done: done, total: total)))
+            let start = work, startDone = done
+            let (finished, after, afterDone) = try await deps.runtime.withModel(url) { translator in
+                var current = start, count = startDone
+                for i in current.indices {
+                    let kind = current[i].kind
+                    let ok = try await SummaryTranslation.run(&current[i].document, texts: current[i].texts,
+                                                              context: current[i].context, target: current[i].target,
+                                                              translator: translator) { document in
+                        count += 1
+                        return await self.summaryCheckpoint(id, kind, document, TranslationProgress(done: count, total: total))
+                    }
+                    if !ok { return (false, current, count) }
+                }
+                return (true, current, count)
+            }
+            work = after
+            done = afterDone
+            if finished { break }
+        }
+        let now = deps.now()
+        for var w in work {
+            w.document.updatedAt = now
+            try deps.store.saveSummary(w.document, w.kind, for: id)
+        }
+        logger.notice("\(id.rawValue, privacy: .public): translated \(total, privacy: .public) summary texts")
+        if work.contains(where: { $0.kind == .minutes }) { await deps.rewriteNote(id) }
+    }
+
+    private struct SummaryWork: Sendable {
+        var kind: SummaryKind
+        var texts: [String]
+        var context: [String]
+        var target: TranslationLanguage
+        var document: SummaryTranslationDocument
+        var pending: Int
+    }
+
+    /// One summary's work, or nothing when its target is its own language or every text is translated already.
+    private func summaryWork(_ id: MeetingID, _ kind: SummaryKind, _ texts: [String], _ context: [String],
+                             _ s: Settings, model: TranslationModel?, fresh: Bool) -> [SummaryWork] {
+        guard let target = SummaryTranslation.targetLanguage(for: texts, setting: s.translationTarget) else { return [] }
+        let empty = SummaryTranslationDocument(model: "", modelRevision: "", target: s.translationTarget, updatedAt: deps.now())
+        var document = deps.store.loadSummary(id, kind) ?? empty
+        let otherModel = model.map { document.model != $0.name || document.modelRevision != $0.revision } ?? false
+        if fresh || (otherModel && !document.entries.isEmpty) { document = empty }
+        let pending = SummaryTranslation.pending(texts, target: target, document: document).count
+        guard pending > 0 else { return [] }
+        return [SummaryWork(kind: kind, texts: texts, context: context, target: target, document: document, pending: pending)]
+    }
+
+    private func summaryCheckpoint(_ id: MeetingID, _ kind: SummaryKind, _ document: SummaryTranslationDocument,
+                                   _ progress: TranslationProgress) -> TranscriptTranslation.Checkpoint {
+        publish(id, .running(progress))
+        do {
+            try deps.store.saveSummary(document, kind, for: id)
+        } catch {
+            logger.error("\(id.rawValue, privacy: .public): \(kind.fileName, privacy: .public) not saved (\(String(describing: type(of: error)), privacy: .public))")
+        }
+        return pauseReason == nil ? .proceed : .suspend
+    }
+
     private static func fresh(_ model: TranslationModel, _ s: Settings, _ digest: String, _ total: Int,
                               _ now: Date) -> TranslationDocument {
         TranslationDocument(model: model.name, modelRevision: model.revision, target: s.translationTarget,
@@ -287,9 +431,8 @@ public actor TranslationService: TranslationPort {
     }
 
     /// Parks the job (the model released) while a recording or a final transcription runs; the state says which.
-    private func waitWhilePaused(_ id: MeetingID, _ document: TranslationDocument) async {
+    private func waitWhilePaused(_ id: MeetingID, _ p: TranslationProgress) async {
         while let reason = pauseReason, !Task.isCancelled {
-            let p = TranslationProgress(done: document.processed, total: document.total)
             publish(id, reason == .recording ? .waitingForRecording(p) : .waitingForTranscription(p))
             await withTaskCancellationHandler {
                 await withCheckedContinuation { c in

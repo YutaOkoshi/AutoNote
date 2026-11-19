@@ -70,6 +70,23 @@ import AutoNoteTestSupport
         for call in calls { #expect(call.environment["CLAUDE_CONFIG_DIR"] == "/Fictional/claude-work") }
     }
 
+    /// Lead 差し戻し 2-5: an English meeting's call carries the English schema (title up to 60), a Japanese one the
+    /// spec's schema.
+    @Test func anEnglishMeetingIsSummarizedWithTheEnglishSchema() async throws {
+        let dir = try TemporaryDirectory.make()
+        let claude = try FakeClaude.make(in: dir.appending(path: "fake"), responses: [])
+        for (language, text) in [(TranslationLanguage.en, "We moved sixty percent of the tenants."), (.ja, "週末に六割を移しました。")] {
+            let runner = RecordingProcessRunner(responses: [Self.minutesOK])
+            let s = ClaudeCodeSummarizer(claudePath: claude.path(percentEncoded: false), model: nil,
+                                         workingDirectory: dir.appending(path: "work"), runner: runner)
+            let transcript = Transcript(utterances: [u(0, .other, text)], engine: "whisper", language: .auto)
+            _ = try await s.summarize(SummaryInput(instructions: "指示", terms: [], bookmarks: [], transcript: transcript,
+                                                   language: .auto))
+            #expect(runner.recorded.last?.arguments == ClaudeCodeSummarizer.arguments(model: nil, language: language))
+            #expect(runner.recorded.last?.arguments.contains(MinutesSchema.json(for: language)) == true)
+        }
+    }
+
     @Test func liveSummarizerPassesTheExtrasToTheSummaryCall() async throws {
         let dir = try TemporaryDirectory.make(), paths = AppPaths(root: dir.appending(path: "root"))
         let claude = try FakeClaude.make(in: dir.appending(path: "fake"), responses: [])

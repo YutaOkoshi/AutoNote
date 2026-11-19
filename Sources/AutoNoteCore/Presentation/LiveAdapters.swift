@@ -247,14 +247,17 @@ public struct MeetingsAdapter: MeetingsPort {
     private let appVersion: String
     private let queueStatus: @Sendable () async -> QueueStatus
     private let timeZone: TimeZone
+    private let minutesSaved: @Sendable (MeetingID) async -> Void
 
     /// `route` is `AppWiring.route` (enqueue, or the too-short notice). `queueStatus` feeds the
     /// rows' processing labels (wire it to `QueuePort.status`).
     public init(paths: AppPaths, manifests: ManifestStore, settings: SettingsStore, output: OutputFolderServices,
                 importer: AudioImporter, crashRecovery: CrashRecovery, route: @escaping @Sendable (Manifest) async -> Void,
                 appVersion: String = AutoNoteVersion.current,
-                queueStatus: @escaping @Sendable () async -> QueueStatus = { .empty }, timeZone: TimeZone = .current) {
+                queueStatus: @escaping @Sendable () async -> QueueStatus = { .empty }, timeZone: TimeZone = .current,
+                minutesSaved: @escaping @Sendable (MeetingID) async -> Void = { _ in }) {
         self.paths = paths
+        self.minutesSaved = minutesSaved
         self.manifests = manifests
         self.settings = settings
         self.output = output
@@ -315,7 +318,10 @@ public struct MeetingsAdapter: MeetingsPort {
             let text = try await output.portable().read(.frontmatter).map { String(decoding: $0, as: UTF8.self) }
                 ?? FrontmatterTemplate.defaultText
             let document = MeetingDocument(manifest: updated, transcript: final, minutes: m,
-                                           frontmatter: FrontmatterTemplate(text: text), appVersion: appVersion, timeZone: timeZone)
+                                           frontmatter: FrontmatterTemplate(text: text), appVersion: appVersion, timeZone: timeZone,
+                                           minutesTranslation: WriteVaultStage.minutesTranslation(
+                                               id, m, paths: paths,
+                                               setting: (try? await settings.load())?.translationTarget ?? .auto))
             outcome = try await vault.writer.write(document, policy: overwrite ? .force : .ifUnchanged, renameToMatchTitle: renameFile)
         } catch VaultError.outputFolderUnavailable {
             throw AppCommandError.outputFolderMissing
@@ -341,6 +347,8 @@ public struct MeetingsAdapter: MeetingsPort {
             do { _ = try await vault.writer.rebuildIndex() } catch {
                 logger.error("\(id.rawValue, privacy: .public): index rebuild failed (\(String(describing: type(of: error)), privacy: .public))")
             }
+            // The minutes' translation takes the edited items (review L2); it never touches the minutes.
+            await minutesSaved(id)
             return .saved(url)
         case .conflict(let url): return .externallyEdited(url)
         }

@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "notes": "取得元・ライセンス・切り出し範囲の宣言。音声と正解の本文はリポジトリに入れず、fetch.py が .eval-data/ に取得する。sha256 が空のものは取得時の値を表示するので、確かめてから書き込む。",
+  "model": {
+    "file": "ggml-large-v3-turbo-q5_0.bin",
+    "dir": "~/Library/Application Support/AutoNote/models"
+  },
+  "sources": {
+    "ami-annotations": {
+      "url": "https://groups.inf.ed.ac.uk/ami/AMICorpusAnnotations/ami_public_manual_1.6.2.zip",
+      "sha256": "b56e5babb2496b8795deeeda7e71178d7fbc9963f94276cf2a3f4b56ebbc9f9d",
+      "path": "ami/ann.zip",
+      "extract": "ami/ann",
+      "license": "CC BY 4.0",
+      "attribution": "AMI Meeting Corpus, manual annotations 1.6.2 (University of Edinburgh / AMI Consortium), CC BY 4.0"
+    },
+    "ami-ES2008a": {
+      "url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2008a/audio/ES2008a.Mix-Headset.wav",
+      "sha256": "65fcfc924e9bdb0388cbc3242a17bda88291ebc638f486e39a9ede78e92cb1e6",
+      "path": "ami/ES2008a.Mix-Headset.wav",
+      "license": "CC BY 4.0",
+      "attribution": "AMI Meeting Corpus ES2008a (Mix-Headset), CC BY 4.0"
+    },
+    "ami-IS1009c": {
+      "url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/IS1009c/audio/IS1009c.Mix-Headset.wav",
+      "sha256": "f317910070db0f2649315decbb34686d648bbe9dc3f7576710184f4d572bdbcc",
+      "path": "ami/IS1009c.Mix-Headset.wav",
+      "license": "CC BY 4.0",
+      "attribution": "AMI Meeting Corpus IS1009c (Mix-Headset), CC BY 4.0"
+    },
+    "ami-TS3003c": {
+      "url": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/TS3003c/audio/TS3003c.Mix-Headset.wav",
+      "sha256": "b9f455870e8cb0ba765523a1767cc366775ab7e5e3eabf37d9c91289e5a1a70a",
+      "path": "ami/TS3003c.Mix-Headset.wav",
+      "license": "CC BY 4.0",
+      "attribution": "AMI Meeting Corpus TS3003c (Mix-Headset), CC BY 4.0"
+    },
+    "kantei-toron-video": {
+      "url": "https://upload.wikimedia.org/wikipedia/commons/5/50/%E7%B7%8F%E7%90%86%E3%81%AE%E5%8B%95%E3%81%8D-%E5%9B%BD%E5%AE%B6%E5%9F%BA%E6%9C%AC%E6%94%BF%E7%AD%96%E5%A7%94%E5%93%A1%E4%BC%9A%E5%90%88%E5%90%8C%E5%AF%A9%E6%9F%BB%E4%BC%9A%EF%BC%88%E5%85%9A%E9%A6%96%E8%A8%8E%E8%AB%96%EF%BC%89-%E5%B9%B3%E6%88%9022%E5%B9%B44%E6%9C%8821%E6%97%A5.webm",
+      "sha256": "a6d8a82792cd36f960ef83b53b9c95f34c5ed83022bde78679ccf4a60822c141",
+      "path": "kantei/toron.webm",
+      "license": "CC BY 3.0（Wikimedia Commons の表示。ライセンス審査は未了）",
+      "attribution": "首相官邸「総理の動き-国家基本政策委員会合同審査会（党首討論）-平成22年4月21日」, Wikimedia Commons, CC BY 3.0"
+    },
+    "kantei-toron-record": {
+      "url": "https://kokkai.ndl.go.jp/api/speech?nameOfMeeting=%E5%9B%BD%E5%AE%B6%E5%9F%BA%E6%9C%AC%E6%94%BF%E7%AD%96%E5%A7%94%E5%93%A1%E4%BC%9A%E5%90%88%E5%90%8C%E5%AF%A9%E6%9F%BB%E4%BC%9A&from=2010-04-21&until=2010-04-21&maximumRecords=100&recordPacking=json",
+      "sha256": "8f170f0b5fd480b9827439594f4eeca171e5f8eb756f571f69be3c1f45c59019",
+      "sha256_may_change": true,
+      "path": "kantei/kokkai.json",
+      "license": "国会会議録（発言者に著作権が残る。評価のための情報解析に限って使い、本文を再配布しない）",
+      "attribution": "国立国会図書館 国会会議録検索システム 第174回国会 国家基本政策委員会合同審査会 第3号（2010-04-21）"
+    },
+    "kantei-us-video": {
+      "url": "https://upload.wikimedia.org/wikipedia/commons/b/b2/%E6%97%A5%E7%B1%B3%E5%85%B1%E5%90%8C%E8%A8%98%E8%80%85%E4%BC%9A%E8%A6%8B-%E5%B9%B3%E6%88%9029%E5%B9%B42%E6%9C%8810%E6%97%A5.webm",
+      "sha256": "be3bd0269008f3469348baa6f38ea489a41b3aef0147d0a7ab9f9593f6e641de",
+      "path": "kantei-us/us.webm",
+      "license": "CC BY 3.0（Wikimedia Commons の表示。ライセンス審査は未了）",
+      "attribution": "首相官邸「日米共同記者会見-平成29年2月10日」, Wikimedia Commons, CC BY 3.0"
+    },
+    "kantei-us-record": {
+      "url": "https://www.govinfo.gov/content/pkg/DCPD-201700110/html/DCPD-201700110.htm",
+      "sha256": "56efc9a822c27149317b0e697eaecf48b5d3d63deb97fd2523cd9b1cccd802d3",
+      "sha256_may_change": true,
+      "path": "kantei-us/gov.html",
+      "license": "米国政府の著作物（public domain）",
+      "attribution": "Daily Compilation of Presidential Documents DCPD-201700110 (govinfo.gov)"
+    }
+  },
+  "datasets": [
+    {
+      "id": "ami-ES2008a",
+      "kind": "ami",
+      "title": "AMI ES2008a（英語の会議・設計の初回）",
+      "meeting": "ES2008a",
+      "audio": "ami-ES2008a",
+      "annotations": "ami-annotations",
+      "max_seconds": 1200,
+      "unit": "word",
+      "langs": ["en", "ja", "auto"],
+      "summary": true
+    },
+    {
+      "id": "ami-IS1009c",
+      "kind": "ami",
+      "title": "AMI IS1009c（英語の会議・中間）",
+      "meeting": "IS1009c",
+      "audio": "ami-IS1009c",
+      "annotations": "ami-annotations",
+      "max_seconds": 1200,
+      "unit": "word",
+      "langs": ["en", "ja", "auto"],
+      "summary": true
+    },
+    {
+      "id": "ami-TS3003c",
+      "kind": "ami",
+      "title": "AMI TS3003c（英語の会議・後半）",
+      "meeting": "TS3003c",
+      "audio": "ami-TS3003c",
+      "annotations": "ami-annotations",
+      "max_seconds": 1200,
+      "unit": "word",
+      "langs": ["en", "ja", "auto"],
+      "summary": true
+    },
+    {
+      "id": "kantei-toron",
+      "kind": "kokkai",
+      "title": "党首討論 2010-04-21（日本語の討議、整文済み会議録が正解）",
+      "audio": "kantei-toron-video",
+      "record": "kantei-toron-record",
+      "max_seconds": 1200,
+      "unit": "char",
+      "langs": ["ja", "auto"],
+      "ref_window": "calibrated"
+    },
+    {
+      "id": "kantei-us",
+      "kind": "govinfo",
+      "title": "日米共同記者会見 2017-02-10（日英が交互。正解は冒頭の英語のみ）",
+      "audio": "kantei-us-video",
+      "record": "kantei-us-record",
+      "max_seconds": 1200,
+      "unit": "word",
+      "langs": ["ja", "auto"],
+      "en_excerpt": {"start": "President Trump.", "end": "Prime Minister Abe. This is the fourth time"},
+      "en_range": [0, 240]
+    },
+    {
+      "id": "mixed-synth",
+      "kind": "mixed",
+      "title": "合成の日英混在（AMI TS3003c 後半と党首討論 後半の区間を交互につないだもの）",
+      "spans": "mixed-spans.json",
+      "en_source": {"meeting": "TS3003c", "audio": "ami-TS3003c", "annotations": "ami-annotations"},
+      "ja_source": {"dataset": "kantei-toron"},
+      "unit": "word",
+      "langs": ["ja", "auto"]
+    },
+    {
+      "id": "rwcp-sp01",
+      "kind": "rwcp",
+      "disabled": true,
+      "title": "RWCP-SP01 会議音声データベース（日本語の会議、要申請）",
+      "notes": "利用者が NII 音声資源（https://research.nii.ac.jp/src/en/RWCP-SP01.html）に申請中。届いたら、配布物の音声と書き起こしの形を確かめ、再配布不可なので datasets.local.json 側に kind local（正解は書き起こしから作る）として宣言するか、ここに変換を足す。音声・書き起こしはリポジトリに入れない。",
+      "unit": "char",
+      "langs": ["ja", "auto"]
+    }
+  ]
+}

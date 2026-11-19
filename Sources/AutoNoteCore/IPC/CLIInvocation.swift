@@ -21,6 +21,7 @@ public struct CLIInvocation: Equatable, Sendable {
         case .start, .stop: 30
         case .import: 86_400
         case .merge: 120
+        case .updateCheck: 30
         case .automationsRun: AutomationDefinition.timeoutRange.upperBound + AutomationRunner.defaultKillGraceSeconds + 30
         default: 10
         }

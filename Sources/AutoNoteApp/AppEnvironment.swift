@@ -38,6 +38,8 @@ final class AppEnvironment {
     let automationsFile: AutomationsFile
     let retention: Retention
     let retentionScheduler: RetentionScheduler
+    /// The daily update check and the swap (spec: アプリ内の自動アップデート).
+    let updater: AppUpdater
     let ports: AppPorts
     let readiness: LiveReadinessPort
     let model: AppModel
@@ -70,7 +72,7 @@ final class AppEnvironment {
                  translationRuntimeAvailable: Bool, crashRecovery: CrashRecovery,
                  catalog: EngineCatalog, models: ModelManager,
                  automationsFile: AutomationsFile, retention: Retention, retentionScheduler: RetentionScheduler,
-                 ports: AppPorts, readiness: LiveReadinessPort, model: AppModel, notifier: SystemUserNotifier,
+                 updater: AppUpdater, ports: AppPorts, readiness: LiveReadinessPort, model: AppModel, notifier: SystemUserNotifier,
                  server: SocketServer, routing: NoticeRouting) {
         self.environment = environment
         self.paths = paths
@@ -95,6 +97,7 @@ final class AppEnvironment {
         self.automationsFile = automationsFile
         self.retention = retention
         self.retentionScheduler = retentionScheduler
+        self.updater = updater
         self.ports = ports
         self.readiness = readiness
         self.model = model
@@ -213,7 +216,13 @@ final class AppEnvironment {
             runtime: TranslationRuntime(completer: onDevice ?? UnavailableTextCompleter()),
             runtimeAvailable: onDevice != nil,
             installedModel: { await translationModels.fileURL($0) },
-            profile: MachineProfile.current())
+            profile: MachineProfile.current(),
+            // Once the minutes' translation changed, the untouched note gets its translated section.
+            rewriteNote: { id in
+                _ = await WriteVaultStage.rewriteForTranslation(
+                    id, paths: paths, settings: (try? await settings.load()) ?? AutoNoteCore.Settings(),
+                    manifests: manifests)
+            })
         let translationBroadcaster = TranslationBroadcaster()
         let translation = TranslationService(translationDeps, broadcaster: translationBroadcaster)
         let liveTranslation = LiveTranslator(translationDeps, broadcaster: translationBroadcaster)
@@ -239,6 +248,7 @@ final class AppEnvironment {
         let importer = AudioImporter(paths: paths, manifests: manifests)
         let readiness = LiveReadinessPort(settings: settings, outputFolder: PortableOutputFolderPort(output: output),
                                           models: models, catalog: catalog, opener: WorkspaceOpener())
+        let updater = AppUpdater(paths: paths, settings: settings, environment: environment)
         let ports = AppPorts(
             recorder: CoordinatorRecorderPort(coordinator: coordinator, elapsed: { await session.elapsed() },
                                               levels: { await session.levels() }),
@@ -247,7 +257,8 @@ final class AppEnvironment {
             meetings: MeetingsAdapter(paths: paths, manifests: manifests, settings: settings, output: output,
                                       importer: importer, crashRecovery: crashRecovery,
                                       route: { await wiring.route($0) },
-                                      queueStatus: { await queuePort.status() }, timeZone: .current),
+                                      queueStatus: { await queuePort.status() }, timeZone: .current,
+                                      minutesSaved: { await translation.minutesSaved($0) }),
             automations: AutomationsAdapter(file: automationsFile, dispatcher: dispatcher, runner: runner,
                                             manifests: manifests, paths: paths, output: output),
             live: live,
@@ -256,8 +267,18 @@ final class AppEnvironment {
             readiness: readiness,
             liveSummary: liveSummary,
             questions: questions,
-            translation: translation)
+            translation: translation,
+            update: AppUpdatePort(updater: updater))
         let model = AppModel(ports: ports)
+        updater.model = model
+        let recorderPort = ports.recorder, translationManager = translationModels.manager
+        updater.recorderState = { await recorderPort.current().state }
+        updater.busyWork = {
+            let whisper = await models.isDownloading()
+            let translationModel = await translationManager.isDownloading()
+            return UpdateBusyWork(modelDownload: whisper || translationModel, audioImport: importer.isImporting,
+                                  automation: await runner.isRunning())
+        }
         model.withdrawNotice = { [notifier] id in await notifier.withdraw(id: id) }
         routing.model = model
         let server = SocketServer(socketURL: paths.socketFile, handler: CommandRouter(ports: ports))
@@ -274,7 +295,7 @@ final class AppEnvironment {
             translationRuntimeAvailable: onDevice != nil, crashRecovery: crashRecovery, catalog: catalog,
             models: models,
             automationsFile: automationsFile, retention: retention, retentionScheduler: retentionScheduler,
-            ports: ports, readiness: readiness, model: model, notifier: notifier, server: server, routing: routing)
+            updater: updater, ports: ports, readiness: readiness, model: model, notifier: notifier, server: server, routing: routing)
     }
 
     /// What a save did beyond writing `settings.json`, for the settings screen to show.
@@ -297,6 +318,7 @@ final class AppEnvironment {
         model.translationShown = new.translationShown
         let hotKeys = shortcutsChanged(new.shortcuts)
         let loginItem = reconcileLoginItem(launchAtLogin: new.launchAtLogin)
+        updater.setEnabled(new.autoUpdateEnabled)
         logger.notice("settings save applied: hot keys re-registered (\(hotKeys.count, privacy: .public)), login item \(String(describing: loginItem), privacy: .public)")
         return SaveResult(hotKeys: hotKeys, loginItem: loginItem)
     }
@@ -317,13 +339,16 @@ final class AppEnvironment {
         await liveSummary.run(feeds: await live.confirmedFeeds())
     }
 
-    /// Launch item 2: the live translation of each recording, the post-recording translation following the queue,
-    /// and the pause while recording. Never on the recording's or the queue's path (they are only observed).
+    /// Launch item 2: the live translation of each recording (its live summary too), the post-recording translation
+    /// following the queue, and the pause while recording. Never on the recording's or the queue's path (they are only observed).
     func runTranslation() async {
         let translation = translation, liveTranslation = liveTranslation, live = live, ports = ports
+        let liveSummary = liveSummary
         let activity = RecordingSessionActivity(session: session)
         await withDiscardingTaskGroup { group in
             group.addTask { await liveTranslation.run(feeds: await live.confirmedFeeds()) }
+            // The live summary's texts are translated inside the live translation's session (one model).
+            group.addTask { await liveTranslation.follow(summaries: await liveSummary.updates()) }
             group.addTask { await translation.follow(queue: await ports.queue.updates()) }
             group.addTask { await translation.follow(recording: await activity.isRecordingUpdates()) }
         }

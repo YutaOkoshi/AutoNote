@@ -1,0 +1,770 @@
+{
+  "label": "main",
+  "date": "2026-11-19",
+  "judge_model": "claude-sonnet-5-5",
+  "prompt_version": "match=judge-1,faith=judge-2",
+  "summary_cache_version": "summary-1",
+  "build": {
+    "autonote": "eval-harness/.build/release/autonote",
+    "sha256": "88fbb7abd9318454462d1df8025d75aa69c3026346ce5f3e5357cb43253961aa",
+    "commit": "e21bcba7c873da9a92d9e65cb5b1e9ef0ab0b753",
+    "branch": "feature/eval-harness"
+  },
+  "datasets": {
+    "ami-ES2008a": {
+      "reference": {
+        "transcript_utterances": 162,
+        "minutes_schema_version": 2,
+        "decisions": {
+          "gold": 6,
+          "pred": 4,
+          "matched_gold": 1,
+          "matched_pred": 1,
+          "recall": 0.16666666666666666,
+          "precision": 0.25
+        },
+        "actions": {
+          "gold": 5,
+          "pred": 7,
+          "matched_gold": 5,
+          "matched_pred": 4,
+          "recall": 1.0,
+          "precision": 0.5714285714285714
+        },
+        "faithfulness": {
+          "supported": 23,
+          "partial": 0,
+          "unsupported": 0,
+          "missing": 0,
+          "items": 23,
+          "score": 1.0,
+          "by_kind": {
+            "summary": {
+              "items": 4,
+              "supported": 4,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "decision": {
+              "items": 4,
+              "supported": 4,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "action": {
+              "items": 7,
+              "supported": 7,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "key_point": {
+              "items": 8,
+              "supported": 8,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            }
+          }
+        },
+        "cached": {
+          "summary": true,
+          "match": true,
+          "faithfulness": false
+        },
+        "judge_models": [
+          "claude-sonnet-5-5"
+        ],
+        "judge_usage": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 237,
+            "cache_creation_input_tokens": 4751,
+            "cache_read_input_tokens": 0,
+            "cost_usd": 0.021378
+          },
+          {
+            "input_tokens": 2,
+            "output_tokens": 1204,
+            "cache_creation_input_tokens": 9012,
+            "cache_read_input_tokens": 1158,
+            "cost_usd": 0.048207799999999995
+          }
+        ],
+        "summarize_input_chars": 27048
+      },
+      "final": {
+        "transcript_utterances": 193,
+        "minutes_schema_version": 2,
+        "decisions": {
+          "gold": 6,
+          "pred": 4,
+          "matched_gold": 0,
+          "matched_pred": 0,
+          "recall": 0.0,
+          "precision": 0.0
+        },
+        "actions": {
+          "gold": 5,
+          "pred": 7,
+          "matched_gold": 5,
+          "matched_pred": 4,
+          "recall": 1.0,
+          "precision": 0.5714285714285714
+        },
+        "faithfulness": {
+          "supported": 20,
+          "partial": 4,
+          "unsupported": 0,
+          "missing": 0,
+          "items": 24,
+          "score": 0.9166666666666666,
+          "by_kind": {
+            "summary": {
+              "items": 5,
+              "supported": 3,
+              "partial": 2,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "decision": {
+              "items": 4,
+              "supported": 4,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "action": {
+              "items": 7,
+              "supported": 6,
+              "partial": 1,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "key_point": {
+              "items": 8,
+              "supported": 7,
+              "partial": 1,
+              "unsupported": 0,
+              "missing": 0
+            }
+          }
+        },
+        "cached": {
+          "summary": true,
+          "match": true,
+          "faithfulness": false
+        },
+        "judge_models": [
+          "claude-sonnet-5-5"
+        ],
+        "judge_usage": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 236,
+            "cache_creation_input_tokens": 3353,
+            "cache_read_input_tokens": 1260,
+            "cost_usd": 0.015902
+          },
+          {
+            "input_tokens": 2,
+            "output_tokens": 1326,
+            "cache_creation_input_tokens": 8828,
+            "cache_read_input_tokens": 1158,
+            "cost_usd": 0.0486918
+          }
+        ],
+        "summarize_input_chars": 27844
+      }
+    },
+    "ami-IS1009c": {
+      "reference": {
+        "transcript_utterances": 283,
+        "minutes_schema_version": 2,
+        "decisions": {
+          "gold": 3,
+          "pred": 6,
+          "matched_gold": 3,
+          "matched_pred": 4,
+          "recall": 1.0,
+          "precision": 0.6666666666666666
+        },
+        "actions": {
+          "gold": 4,
+          "pred": 6,
+          "matched_gold": 4,
+          "matched_pred": 3,
+          "recall": 1.0,
+          "precision": 0.5
+        },
+        "faithfulness": {
+          "supported": 34,
+          "partial": 0,
+          "unsupported": 0,
+          "missing": 0,
+          "items": 34,
+          "score": 1.0,
+          "by_kind": {
+            "summary": {
+              "items": 4,
+              "supported": 4,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "decision": {
+              "items": 6,
+              "supported": 6,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "action": {
+              "items": 6,
+              "supported": 6,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "key_point": {
+              "items": 18,
+              "supported": 18,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            }
+          }
+        },
+        "cached": {
+          "summary": true,
+          "match": true,
+          "faithfulness": false
+        },
+        "judge_models": [
+          "claude-sonnet-5-5"
+        ],
+        "judge_usage": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 186,
+            "cache_creation_input_tokens": 4663,
+            "cache_read_input_tokens": 0,
+            "cost_usd": 0.020516
+          },
+          {
+            "input_tokens": 2,
+            "output_tokens": 1758,
+            "cache_creation_input_tokens": 13289,
+            "cache_read_input_tokens": 1158,
+            "cost_usd": 0.0708558
+          }
+        ],
+        "summarize_input_chars": 48009
+      },
+      "final": {
+        "transcript_utterances": 252,
+        "minutes_schema_version": 2,
+        "decisions": {
+          "gold": 3,
+          "pred": 7,
+          "matched_gold": 3,
+          "matched_pred": 5,
+          "recall": 1.0,
+          "precision": 0.7142857142857143
+        },
+        "actions": {
+          "gold": 4,
+          "pred": 5,
+          "matched_gold": 4,
+          "matched_pred": 3,
+          "recall": 1.0,
+          "precision": 0.6
+        },
+        "faithfulness": {
+          "supported": 28,
+          "partial": 1,
+          "unsupported": 0,
+          "missing": 0,
+          "items": 29,
+          "score": 0.9827586206896551,
+          "by_kind": {
+            "summary": {
+              "items": 4,
+              "supported": 4,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "decision": {
+              "items": 7,
+              "supported": 6,
+              "partial": 1,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "action": {
+              "items": 5,
+              "supported": 5,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "key_point": {
+              "items": 13,
+              "supported": 13,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            }
+          }
+        },
+        "cached": {
+          "summary": true,
+          "match": true,
+          "faithfulness": false
+        },
+        "judge_models": [
+          "claude-sonnet-5-5"
+        ],
+        "judge_usage": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 186,
+            "cache_creation_input_tokens": 3365,
+            "cache_read_input_tokens": 1260,
+            "cost_usd": 0.01545
+          },
+          {
+            "input_tokens": 2,
+            "output_tokens": 1548,
+            "cache_creation_input_tokens": 13119,
+            "cache_read_input_tokens": 1158,
+            "cost_usd": 0.0680758
+          }
+        ],
+        "summarize_input_chars": 41173
+      }
+    },
+    "ami-TS3003c": {
+      "reference": {
+        "transcript_utterances": 371,
+        "minutes_schema_version": 2,
+        "decisions": {
+          "gold": 6,
+          "pred": 10,
+          "matched_gold": 6,
+          "matched_pred": 4,
+          "recall": 1.0,
+          "precision": 0.4
+        },
+        "actions": {
+          "gold": 3,
+          "pred": 3,
+          "matched_gold": 3,
+          "matched_pred": 1,
+          "recall": 1.0,
+          "precision": 0.3333333333333333
+        },
+        "faithfulness": {
+          "supported": 29,
+          "partial": 0,
+          "unsupported": 0,
+          "missing": 0,
+          "items": 29,
+          "score": 1.0,
+          "by_kind": {
+            "summary": {
+              "items": 4,
+              "supported": 4,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "decision": {
+              "items": 10,
+              "supported": 10,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "action": {
+              "items": 3,
+              "supported": 3,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "key_point": {
+              "items": 12,
+              "supported": 12,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            }
+          }
+        },
+        "cached": {
+          "summary": true,
+          "match": true,
+          "faithfulness": false
+        },
+        "judge_models": [
+          "claude-sonnet-5-5"
+        ],
+        "judge_usage": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 212,
+            "cache_creation_input_tokens": 3385,
+            "cache_read_input_tokens": 1260,
+            "cost_usd": 0.01579
+          },
+          {
+            "input_tokens": 2,
+            "output_tokens": 1444,
+            "cache_creation_input_tokens": 13027,
+            "cache_read_input_tokens": 1158,
+            "cost_usd": 0.0666678
+          }
+        ],
+        "summarize_input_chars": 55532
+      },
+      "final": {
+        "transcript_utterances": 255,
+        "minutes_schema_version": 2,
+        "decisions": {
+          "gold": 6,
+          "pred": 10,
+          "matched_gold": 5,
+          "matched_pred": 4,
+          "recall": 0.8333333333333334,
+          "precision": 0.4
+        },
+        "actions": {
+          "gold": 3,
+          "pred": 4,
+          "matched_gold": 3,
+          "matched_pred": 2,
+          "recall": 1.0,
+          "precision": 0.5
+        },
+        "faithfulness": {
+          "supported": 25,
+          "partial": 5,
+          "unsupported": 0,
+          "missing": 0,
+          "items": 30,
+          "score": 0.9166666666666666,
+          "by_kind": {
+            "summary": {
+              "items": 5,
+              "supported": 3,
+              "partial": 2,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "decision": {
+              "items": 10,
+              "supported": 10,
+              "partial": 0,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "action": {
+              "items": 4,
+              "supported": 3,
+              "partial": 1,
+              "unsupported": 0,
+              "missing": 0
+            },
+            "key_point": {
+              "items": 11,
+              "supported": 9,
+              "partial": 2,
+              "unsupported": 0,
+              "missing": 0
+            }
+          }
+        },
+        "cached": {
+          "summary": true,
+          "match": true,
+          "faithfulness": false
+        },
+        "judge_models": [
+          "claude-sonnet-5-5"
+        ],
+        "judge_usage": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 213,
+            "cache_creation_input_tokens": 3582,
+            "cache_read_input_tokens": 1260,
+            "cost_usd": 0.016588
+          },
+          {
+            "input_tokens": 2,
+            "output_tokens": 1311,
+            "cache_creation_input_tokens": 13269,
+            "cache_read_input_tokens": 1158,
+            "cost_usd": 0.0663058
+          }
+        ],
+        "summarize_input_chars": 41455
+      }
+    }
+  },
+  "judge_models_seen": [
+    "claude-sonnet-5-5"
+  ],
+  "claude_calls_this_run": [
+    {
+      "kind": "judge-faithfulness",
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 9012,
+        "cache_read_input_tokens": 1158,
+        "output_tokens": 1204,
+        "output_tokens_details": {
+          "thinking_tokens": 713
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 9012,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "global",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 1204,
+            "cache_read_input_tokens": 1158,
+            "cache_creation_input_tokens": 9012,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 9012
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "cost_usd": 0.048207799999999995,
+      "models": [
+        "claude-sonnet-5-5"
+      ]
+    },
+    {
+      "kind": "judge-faithfulness",
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 8828,
+        "cache_read_input_tokens": 1158,
+        "output_tokens": 1326,
+        "output_tokens_details": {
+          "thinking_tokens": 816
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 8828,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "global",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 1326,
+            "cache_read_input_tokens": 1158,
+            "cache_creation_input_tokens": 8828,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 8828
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "cost_usd": 0.0486918,
+      "models": [
+        "claude-sonnet-5-5"
+      ]
+    },
+    {
+      "kind": "judge-faithfulness",
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 13289,
+        "cache_read_input_tokens": 1158,
+        "output_tokens": 1758,
+        "output_tokens_details": {
+          "thinking_tokens": 1047
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 13289,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "global",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 1758,
+            "cache_read_input_tokens": 1158,
+            "cache_creation_input_tokens": 13289,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 13289
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "cost_usd": 0.0708558,
+      "models": [
+        "claude-sonnet-5-5"
+      ]
+    },
+    {
+      "kind": "judge-faithfulness",
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 13119,
+        "cache_read_input_tokens": 1158,
+        "output_tokens": 1548,
+        "output_tokens_details": {
+          "thinking_tokens": 936
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 13119,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "global",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 1548,
+            "cache_read_input_tokens": 1158,
+            "cache_creation_input_tokens": 13119,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 13119
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "cost_usd": 0.0680758,
+      "models": [
+        "claude-sonnet-5-5"
+      ]
+    },
+    {
+      "kind": "judge-faithfulness",
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 13027,
+        "cache_read_input_tokens": 1158,
+        "output_tokens": 1444,
+        "output_tokens_details": {
+          "thinking_tokens": 831
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 13027,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "global",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 1444,
+            "cache_read_input_tokens": 1158,
+            "cache_creation_input_tokens": 13027,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 13027
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "cost_usd": 0.0666678,
+      "models": [
+        "claude-sonnet-5-5"
+      ]
+    },
+    {
+      "kind": "judge-faithfulness",
+      "usage": {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 13269,
+        "cache_read_input_tokens": 1158,
+        "output_tokens": 1311,
+        "output_tokens_details": {
+          "thinking_tokens": 681
+        },
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 0
+        },
+        "service_tier": "standard",
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 13269,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "inference_geo": "global",
+        "iterations": [
+          {
+            "input_tokens": 2,
+            "output_tokens": 1311,
+            "cache_read_input_tokens": 1158,
+            "cache_creation_input_tokens": 13269,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 13269
+            },
+            "type": "message"
+          }
+        ],
+        "speed": "standard",
+        "fallback_credit": null
+      },
+      "cost_usd": 0.0663058,
+      "models": [
+        "claude-sonnet-5-5"
+      ]
+    }
+  ]
+}

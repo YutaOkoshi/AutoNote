@@ -1,6 +1,7 @@
 import Foundation
 
-/// Assembles the `claude -p` stdin: instructions → (part note) → data notice → terms → bookmarks → transcript.
+/// Assembles the `claude -p` stdin: instructions → language → (part note) → data notice → terms → bookmarks →
+/// transcript. The language line is the app's, outside `prompt.md`, so an edited prompt gets it too.
 public struct PromptBuilder: Sendable {
     /// Estimate coefficients are deliberately on the high side. Spike item 6: going from 60 to 120 minutes
     /// added 22,257 characters and 18,751 tokens (about 1.19 chars per token), with a fixed overhead of about
@@ -22,7 +23,7 @@ public struct PromptBuilder: Sendable {
     public func build(_ input: SummaryInput, utterances: ArraySlice<Utterance>, part: (index: Int, count: Int)?) -> String {
         let instructions = input.instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? DefaultPrompt.instructions : input.instructions
-        var blocks = [instructions]
+        var blocks = [instructions, DefaultPrompt.languageLine(Self.language(input))]
         if let part { blocks.append(DefaultPrompt.partNote(index: part.index, count: part.count)) }
         blocks.append(DefaultPrompt.dataNotice)
         let terms = input.terms.map { "- " + Self.flatten($0) }
@@ -35,6 +36,11 @@ public struct PromptBuilder: Sendable {
         let lines = utterances.map(Self.line)
         blocks.append(([Self.transcriptBegin] + lines + [Self.transcriptEnd]).joined(separator: "\n"))
         return blocks.joined(separator: "\n\n")
+    }
+
+    /// The meeting's summary language, from the whole transcript (every part of a split meeting gets the same one).
+    public static func language(_ input: SummaryInput) -> TranslationLanguage {
+        SummaryLanguagePolicy.decide(utterances: input.transcript.utterances)
     }
 
     /// `[HH:MM:SS] 話者: 本文` with newlines flattened (shared with the live summary input).
@@ -124,12 +130,13 @@ public struct PromptBuilder: Sendable {
         })
     }
 
-    /// Merge prompt: merge instructions, the per-part instructions (reference), then each partial as JSON data.
-    public func mergePrompt(instructions: String, partials: [MinutesOutput]) -> String {
+    /// Merge prompt: merge instructions, the language, the per-part instructions (reference), then each partial as
+    /// JSON data.
+    public func mergePrompt(instructions: String, partials: [MinutesOutput], language: TranslationLanguage) -> String {
         let reference = instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? DefaultPrompt.instructions : instructions
         let encoder = AutoNoteJSON.encoder()
-        var blocks = [DefaultPrompt.mergeInstructions, "## 各部の作成に使った指示文（参考）\n" + reference,
+        var blocks = [DefaultPrompt.mergeInstructions, DefaultPrompt.languageLine(language), "## 各部の作成に使った指示文（参考）\n" + reference,
                       "----- ここから部分議事録（データ） -----"]
         for (i, p) in partials.enumerated() {
             let json = (try? encoder.encode(p)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"

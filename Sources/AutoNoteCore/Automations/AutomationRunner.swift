@@ -19,6 +19,10 @@ public actor AutomationRunner {
     public static let defaultKillGraceSeconds = 5
     private let maxLogRuns: Int
     private var subscribers: [UUID: AsyncStream<AutomationRunRecord>.Continuation] = [:]
+    private var active = 0
+
+    /// True while a run is in progress (the updater waits for it before restarting the app).
+    public func isRunning() -> Bool { active > 0 }
 
     public init(logsDirectory: URL, ledgerFile: URL, shell: [String] = defaultShell, killGrace: Duration = .seconds(defaultKillGraceSeconds),
                 maxLogRuns: Int = 200) {
@@ -30,6 +34,8 @@ public actor AutomationRunner {
     }
 
     public func run(_ def: AutomationDefinition, context: AutomationContext, dedupeKey: String?) async -> AutomationRunRecord {
+        active += 1
+        defer { active -= 1 }
         let startedAt = Date()
         let folder = { self.makeLogFolder(startedAt: startedAt, meetingID: context.meetingID.rawValue, name: def.name) }
         if let key = dedupeKey {

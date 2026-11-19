@@ -114,7 +114,7 @@ public actor WhisperLiveTranscriber: LiveTranscriber {
 
     private func decode(_ job: Job) async -> String {
         let request = WhisperRunRequest(samples: PCMAudio.floats(job.samples), offsetSeconds: 0, language: language,
-                                        prompt: prompt, mode: .live)
+                                        prompt: prompt, mode: .live, scripts: ScriptRestriction(language: language))
         let tokens = Mutex<[TimedToken]>([])
         do {
             _ = try await core.run(request, onSegment: { _, t in tokens.withLock { $0.append(contentsOf: t) } },
