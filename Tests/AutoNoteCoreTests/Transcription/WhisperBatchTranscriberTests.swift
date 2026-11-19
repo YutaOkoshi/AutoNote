@@ -335,11 +335,13 @@ extension WhisperBatchTranscriberTests {
         #expect(u.isEmpty)
     }
 
-    @Test(arguments: [(Language.ja, ScriptRestriction.japanese), (.en, .english), (.auto, .unrestricted)])
-    func requestCarriesTheScriptRestrictionOfTheLanguage(language: Language, expected: ScriptRestriction) async throws {
+    /// 文字種の制限はライブだけ。確定版（beam 5・temperature fallback・10 分窓の中で文脈を引き継ぐ）は、禁止したトークンの
+    /// わずかな確率の付け替えで経路が変わり、英語の会議を ja 固定で回すと繰り返しに入って後半が消えた（2026-11-19 の評価）。
+    @Test(arguments: [Language.ja, .en, .auto])
+    func batchDecodingIsNotScriptRestricted(language: Language) async throws {
         let core = FakeWhisperCore(segments: [.init(start: 0, end: 2, text: "こんにちは")])
         _ = try await transcribe(core, language: language)
         #expect(!core.requests.isEmpty)
-        #expect(core.requests.allSatisfy { $0.scripts == expected })
+        #expect(core.requests.allSatisfy { $0.scripts == .unrestricted })
     }
 }

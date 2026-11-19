@@ -38,6 +38,7 @@ public struct WhisperRunRequest: Sendable {
     public var prompt: String?
     public var mode: WhisperDecodeMode
     /// Tokens of other scripts are never chosen while decoding (`.unrestricted` = the whole multilingual vocabulary).
+    /// Only live decoding sets it (see ScriptRestriction.swift).
     public var scripts: ScriptRestriction
 
     public init(samples: [Float], offsetSeconds: Double, language: Language, prompt: String?, mode: WhisperDecodeMode,

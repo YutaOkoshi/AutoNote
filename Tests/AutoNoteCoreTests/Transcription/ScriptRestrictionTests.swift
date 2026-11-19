@@ -43,11 +43,17 @@ import Testing
         #expect(ScriptRestriction.japanese.forbids(Array("会".utf8) + [0xD1]))
     }
 
-    /// 続きのバイトから始まるトークンは単独では判定できない（前のトークン次第）ので許す。後ろの完全な文字は判定する。
-    @Test func leadingContinuationBytesAreUnknownAlone() {
-        #expect(!ScriptRestriction.japanese.forbids([0x81, 0x82]))
-        #expect(!ScriptRestriction.japanese.forbids([0x82] + Array("会".utf8)))
-        #expect(ScriptRestriction.japanese.forbids([0x82] + Array("сл".utf8)))
+    /// 続きのバイトから始まるトークンは、文字の切れ目では U+FFFD にしかならないので禁止する（2026-11-19 の評価で
+    /// ライブ ja に「し」+ [0x80] が出た）。文字の途中で切れた並び・余った続きのバイトも同じく禁止する。
+    @Test func bytesThatCannotBeValidUTF8AreForbidden() {
+        let ja = ScriptRestriction.japanese
+        #expect(ja.forbids([0x81, 0x82]))
+        #expect(ja.forbids([0x80]))
+        #expect(ja.forbids([0x82] + Array("会".utf8)))
+        #expect(ja.forbids([0xE3, 0x41]))                           // 先頭バイトの後に ASCII
+        #expect(ja.forbids(Array("会".utf8) + [0x81]))               // 文字の後に余った続きのバイト
+        #expect(ScriptRestriction.english.forbids([0x80]))
+        #expect(!ScriptRestriction.unrestricted.forbids([0x80]))     // auto は何も禁止しない
     }
 
     @Test func pendingPrefixCompletesTheCharacter() {
@@ -58,6 +64,10 @@ import Testing
         #expect(ja.forbids([0x84], after: [0xE3]))                  // U+3100–313F
         #expect(!ja.forbids([0x82], after: [0xE3, 0x81]))           // あ
         #expect(ja.forbids([0xB5], after: [0xD0]))                  // е U+0435
+        #expect(!ja.forbids([0x81], after: [0xE3]))                 // まだ途中（U+3040–307F はひらがな）
+        #expect(ja.forbids(Array("a".utf8), after: [0xE3]))         // 文字を完成させずに次の文字
+        #expect(ja.forbids(Array("会".utf8), after: [0xE3, 0x81]))
+        #expect(ja.forbids([0x81, 0x82, 0x83], after: [0xE3]))      // 完成した後に余った続きのバイト
     }
 
     @Test func pendingPrefixIsTheTrailingIncompleteCharacter() {
@@ -76,25 +86,26 @@ import Testing
         Array("会議".utf8), Array(" ok".utf8), Array("сл".utf8), [0xD0], [0xEA], [0xB0, 0x80], [0x9C, 0xA0], Array("한".utf8),
     ]
 
-    @Test func bansTokensThatCanOnlyBeOtherScripts() {
+    @Test func atACharacterBoundaryBansOtherScriptsAndStrayContinuations() {
         let filter = WhisperScriptFilter(restriction: .japanese, vocabulary: vocabulary)
-        #expect(filter.alwaysBanned == [2, 3, 7])
-        #expect(filter.banned(after: [0, 1]).isEmpty)
+        #expect(Set(filter.banned(after: [])) == [2, 3, 5, 6, 7])
+        #expect(Set(filter.banned(after: [0, 1])) == [2, 3, 5, 6, 7])
     }
 
-    @Test func bansContinuationsThatWouldCompleteAnotherScript() {
+    /// 文字の途中では、その文字を許される文字として完成させるトークンだけが残る。
+    @Test func insideACharacterOnlyAllowedCompletionsRemain() {
         let filter = WhisperScriptFilter(restriction: .japanese, vocabulary: vocabulary)
-        #expect(filter.banned(after: [1, 4]) == [5])                 // " ok" + 0xEA → 가 は不可、U+A720 は可
+        #expect(Set(filter.banned(after: [1, 4])) == [0, 1, 2, 3, 4, 5, 7])   // " ok" + 0xEA → U+A720 の 6 だけ
     }
 
-    @Test func idsOutsideTheVocabularyAreIgnored() {
+    @Test func aSpecialTokenEndsTheTextRun() {
         let filter = WhisperScriptFilter(restriction: .japanese, vocabulary: vocabulary)
-        #expect(filter.banned(after: [4, 50_000]).isEmpty)           // 特殊トークン（範囲外）の後は文字の途中ではない
+        #expect(Set(filter.banned(after: [4, 50_000])) == [2, 3, 5, 6, 7])    // 特殊トークン（範囲外）の後は文字の切れ目
     }
 
     @Test func unrestrictedBansNothing() {
         let filter = WhisperScriptFilter(restriction: .unrestricted, vocabulary: vocabulary)
-        #expect(filter.alwaysBanned.isEmpty)
+        #expect(filter.banned(after: []).isEmpty)
         #expect(filter.banned(after: [4]).isEmpty)
     }
 }

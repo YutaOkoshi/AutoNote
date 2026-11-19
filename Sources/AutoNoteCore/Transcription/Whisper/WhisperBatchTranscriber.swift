@@ -90,8 +90,7 @@ public actor WhisperBatchTranscriber: BatchTranscriber {
             try Task.checkCancellation()
             let stop = Locked(false)
             let start = offset
-            let request = WhisperRunRequest(samples: samples, offsetSeconds: start, language: language, prompt: prompt, mode: .batch,
-                                            scripts: ScriptRestriction(language: language))
+            let request = WhisperRunRequest(samples: samples, offsetSeconds: start, language: language, prompt: prompt, mode: .batch)
             let outcome = try await withTaskCancellationHandler {
                 try await core.run(
                     request,

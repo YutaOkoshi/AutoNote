@@ -1,7 +1,10 @@
 // whisper の語彙は多言語なので、言語を ja に固定しても greedy のライブではキリル文字・ハングル・デーヴァナーガリーの
-// トークンが出ることがある（2026-11-19 の実データ。バッチの beam 5 では出ていない）。言語を固定したときは、その言語で
+// トークンが出ることがある（2026-11-19 の実データ。バッチの beam 5 では出ていない）。言語を固定したライブでは、その言語で
 // 出てよい文字種のトークンだけを選べるように、デコード時に他のトークンの logit を落とす（WhisperContext の logits_filter_callback）。
 // ja は日本語の会話に英単語が混ざるのでラテン文字も残す。auto は制限しない。
+// 確定版（バッチ）には掛けない: 禁止したトークンの確率（1 ステップあたり平均 0.06%）を付け替えるだけで beam と temperature
+// fallback の経路が変わり、10 分窓の中で文脈を引き継ぐので、英語の会議を ja 固定で回すと繰り返しに入って後半が消えた。
+// ライブは 8 秒以内の窓ごとに文脈なしでデコードするので、経路の違いが窓の外に広がらない。
 
 /// The scripts a decoder may emit for a language.
 public enum ScriptRestriction: Sendable, Hashable {
@@ -56,25 +59,26 @@ public enum ScriptRestriction: Sendable, Hashable {
     }
 
     /// Whether a token with these raw bytes must not follow `pending` (the incomplete UTF-8 character the decoded
-    /// text ends with, see `pendingPrefix`). A complete character outside the allowed scripts forbids the token; an
-    /// incomplete one at the end forbids it when no character it can still become is allowed. Continuation bytes at
-    /// the start with no `pending` belong to an unknown character and are skipped. Invalid bytes are ignored.
+    /// text ends with, see `pendingPrefix`; empty on a character boundary). Forbidden: a complete character outside
+    /// the allowed scripts, an incomplete one at the end that cannot become an allowed character, and bytes that can
+    /// never be valid UTF-8 there (a continuation byte with no character to continue, a character cut short by the
+    /// next one) since they only decode to U+FFFD.
     public func forbids(_ bytes: [UInt8], after pending: [UInt8] = []) -> Bool {
         guard let allowed else { return false }
         let all = pending + bytes
         var i = 0
-        if pending.isEmpty { while i < all.count, Self.isContinuation(all[i]) { i += 1 } }
         while i < all.count {
-            guard let length = Self.sequenceLength(all[i]) else { i += 1; continue }
+            guard let length = Self.sequenceLength(all[i]) else { return true }
             var value = UInt32(all[i]) & (0xFF >> (length + 1))
             var have = 1
-            while have < length, i + have < all.count, Self.isContinuation(all[i + have]) {
+            while have < length, i + have < all.count {
+                guard Self.isContinuation(all[i + have]) else { return true }
                 value = value << 6 | UInt32(all[i + have] & 0x3F)
                 have += 1
             }
             if have == length {
                 if !Self.contains(allowed, value) { return true }
-            } else if i + have == all.count {
+            } else {
                 let free = UInt32(6 * (length - have))   // payload bits the missing bytes can still set
                 let low = value << free
                 if !Self.overlaps(allowed, low...(low | (1 << free - 1))) { return true }
@@ -120,29 +124,33 @@ public enum ScriptRestriction: Sendable, Hashable {
 /// are never banned.
 struct WhisperScriptFilter: Sendable {
     let restriction: ScriptRestriction
-    /// Tokens banned at every step.
-    let alwaysBanned: [Int32]
     private let vocabulary: [[UInt8]]
-    /// Tokens that start with a continuation byte: the only ones that can finish a character split across tokens.
+    /// Banned while the decoded text ends on a character boundary.
+    private let atBoundary: [Int32]
+    /// Text tokens that do not start with a continuation byte: they can never finish a character split across tokens.
+    private let starters: [Int32]
+    /// Text tokens that start with a continuation byte: the only ones that can.
     private let continuations: [Int32]
 
     init(restriction: ScriptRestriction, vocabulary: [[UInt8]]) {
         self.restriction = restriction
         self.vocabulary = vocabulary
-        var banned: [Int32] = []
-        var continuations: [Int32] = []
+        var atBoundary: [Int32] = [], starters: [Int32] = [], continuations: [Int32] = []
         if restriction != .unrestricted {
-            for (id, bytes) in vocabulary.enumerated() {
-                if restriction.forbids(bytes) { banned.append(Int32(id)) }
-                if let first = bytes.first, first & 0xC0 == 0x80 { continuations.append(Int32(id)) }
+            for (index, bytes) in vocabulary.enumerated() {
+                let id = Int32(index)
+                if restriction.forbids(bytes) { atBoundary.append(id) }
+                if let first = bytes.first, first & 0xC0 == 0x80 { continuations.append(id) } else { starters.append(id) }
             }
         }
-        alwaysBanned = banned
+        self.atBoundary = atBoundary
+        self.starters = starters
         self.continuations = continuations
     }
 
-    /// Extra tokens to ban when the text decoded so far (`history`, token ids in order) ends inside a character:
-    /// the continuations that would complete it as a character outside the allowed scripts.
+    /// The tokens to ban for the next step, given the tokens decoded so far in this sequence (`history`, in order;
+    /// only the last few matter). Inside a character split across tokens, only continuations that complete it as an
+    /// allowed character stay.
     func banned(after history: [Int32]) -> [Int32] {
         guard restriction != .unrestricted else { return [] }
         var tail: [UInt8] = []
@@ -152,7 +160,7 @@ struct WhisperScriptFilter: Sendable {
             if tail.count >= 3 { break }
         }
         let pending = ScriptRestriction.pendingPrefix(tail)
-        guard !pending.isEmpty else { return [] }
-        return continuations.filter { restriction.forbids(vocabulary[Int($0)], after: pending) }
+        guard !pending.isEmpty else { return atBoundary }
+        return starters + continuations.filter { restriction.forbids(vocabulary[Int($0)], after: pending) }
     }
 }

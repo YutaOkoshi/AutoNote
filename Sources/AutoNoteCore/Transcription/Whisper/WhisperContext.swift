@@ -151,9 +151,7 @@ private final class RunCallbacks: @unchecked Sendable {
     /// May run on several decoder threads at once; `scriptFilter` is immutable.
     func filterLogits(_ tokens: UnsafePointer<whisper_token_data>?, _ count: Int, _ logits: UnsafeMutablePointer<Float>) {
         guard let scriptFilter else { return }
-        for id in scriptFilter.alwaysBanned { logits[Int(id)] = -.infinity }
-        guard let tokens, count > 0 else { return }
-        let history = (max(0, count - 3)..<count).map { tokens[$0].id }   // a split character spans at most 3 bytes before
+        let history = tokens.map { tokens in (max(0, count - 3)..<count).map { tokens[$0].id } } ?? []   // a split character spans at most 3 bytes before
         for id in scriptFilter.banned(after: history) { logits[Int(id)] = -.infinity }
     }
 
