@@ -11,6 +11,10 @@
 - **Claude を呼ぶのは --allow-claude を付けたときだけ**。結果は入力のハッシュでキャッシュし（<data>/cache/）、
   同じ入力では呼び直さない。キャッシュがなく --allow-claude もなければ、何を呼ぶかを表示して止まる。
 - 結果は集計値だけ: docs/eval/results/<日付>-summary-<label>.json と .md。
+- 人手の要約がないデータ（会見 kind kaiken・雑談 kind eaf）は忠実性だけを採点する。入力の reference は正解の
+  書き起こし（会見は会見録の範囲。時刻は文字数の比で割り振る。雑談は ELAN の発話と話者）、final は run.py の
+  確定版・ja の出力（雑談は 2 トラックを「自分」「相手」として時刻順に並べたもの。アプリの録音と同じ形）。
+  先に eval.sh / run.py で文字起こしを済ませておく。
 """
 
 import argparse
@@ -31,7 +35,7 @@ import run as runner  # noqa: E402
 
 MATCH_PROMPT_VERSION = "judge-1"
 FAITH_PROMPT_VERSION = "judge-2"   # judge-2: 要点（key_points）の本文を正しく渡す（judge-1 は空文字を渡していた）
-PROMPT_VERSION = "match=%s,faith=%s" % (MATCH_PROMPT_VERSION, FAITH_PROMPT_VERSION)
+PROMPT_VERSION = "match=%s,faith=%s" % (MATCH_PROMPT_VERSION, FAITH_PROMPT_VERSION)   # AMI 以外は faith=judge-2-generic
 SUMMARY_CACHE_VERSION = "summary-1"
 DEFAULT_JUDGE_MODEL = "claude-sonnet-5-5"
 CLAUDE_FIXED_ARGS = ["--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
@@ -62,6 +66,18 @@ same action item (same substance; wording, language and level of detail may diff
 covers it still counts if its core is the same). Use an empty list when nothing matches. A generated item may match
 several reference items. Compare decisions only with generated decisions and actions only with generated next
 actions. Return JSON only, following the schema."""
+
+FAITH_GENERIC_VERSION = "judge-2-generic"   # 人手の要約がないデータ用（書き起こしの言語を決めつけない）
+FAITH_GENERIC_INSTRUCTIONS = """You are checking meeting minutes for faithfulness to the transcript above.
+
+For each minutes item listed above, decide whether the transcript supports it:
+- supported: everything the item states is stated or clearly implied in the transcript.
+- partial: the core is supported but some detail (a name, number, owner, date, speaker, or claim) is not.
+- unsupported: the transcript does not support the item, or contradicts it.
+Speaker labels in the transcript (if any) are [me] and [other]. The transcript may be a press conference or a casual
+conversation rather than a meeting; judge only whether each item is supported, not whether it is a good minutes item.
+Judge the meaning, not the wording. Do not reward or penalize style. Return one verdict per item id, JSON only,
+following the schema."""
 
 FAITH_INSTRUCTIONS = """You are checking meeting minutes for faithfulness to the meeting transcript above.
 
@@ -97,6 +113,71 @@ def transcript_from_final(decl, ds, autonote, label, model):
     return {"engine": "autonote whisper (final)", "language": "en",
             "utterances": [{"start": u["start"], "end": u["end"], "speaker": "unknown", "text": u["text"],
                             "is_final": True} for u in finals if u["text"].strip()]}
+
+
+def _utterance(start, end, speaker, text):
+    return {"start": round(start, 3), "end": round(end, 3), "speaker": speaker, "text": text, "is_final": True}
+
+
+def open_reference(ds):
+    """人手の要約がないデータの正解の書き起こし（prepared/<id>/ref.json から）。"""
+    ref = common.load_json(os.path.join(common.prepared_dir(ds["id"]), "ref.json"))
+    if ds["kind"] == "eaf":
+        utts = [_utterance(u["start"], u["end"], u.get("track") or "unknown", u["text"]) for u in ref["utterances"]]
+    else:   # 会見録には時刻がないので、文字数の比で音声の長さに割り振る
+        lines = [l for l in ref["text"].split("\n") if l.strip()]
+        total = float(sum(len(l) for l in lines)) or 1.0
+        utts, pos = [], 0
+        for l in lines:
+            a, pos = pos, pos + len(l)
+            utts.append(_utterance(ref["audio_seconds"] * a / total, ref["audio_seconds"] * pos / total, "unknown", l))
+    return {"engine": "reference (human transcript)", "language": "ja", "utterances": utts}
+
+
+def open_final(ds, label):
+    """run.py の確定版・ja の出力。話者別のトラックがあれば「自分」「相手」として時刻順に並べる（TranscriptMerger と同じ）。"""
+    run_dir = common.run_dir(label, ds["id"])
+    parts = [(name, os.path.join(run_dir, "tracks", "%s-whisper-ja.jsonl" % name)) for name in sorted(ds["tracks"])] \
+        if ds.get("tracks") else [("unknown", os.path.join(run_dir, "whisper-ja.jsonl"))]
+    utts = []
+    for rank, (speaker, path) in enumerate(parts):
+        if not runner.is_done(path):
+            sys.exit("%s がない（先に run.py --label %s --datasets %s）" % (os.path.relpath(path, common.ROOT), label, ds["id"]))
+        finals, _ = common.read_jsonl(path)
+        utts += [(u["start"], 0 if speaker == "me" else rank, len(utts),
+                  _utterance(u["start"], u["end"] if u["end"] is not None else u["start"], speaker, u["text"]))
+                 for u in finals if u["text"].strip()]
+    utts.sort(key=lambda x: x[:3])
+    return {"engine": "autonote whisper (final)", "language": "ja", "utterances": [u[-1] for u in utts]}
+
+
+def labelled_text(transcript):
+    return "\n".join(("[%s] " % u["speaker"] if u["speaker"] in ("me", "other") else "") + u["text"]
+                     for u in transcript["utterances"])
+
+
+def evaluate_open(ds, variant, args, calls):
+    """人手の要約がないデータ: 忠実性だけ（根拠は常に正解の書き起こし）。"""
+    transcript = open_reference(ds) if variant == "reference" else open_final(ds, args.label)
+    minutes, cached_summary = summarize(args.autonote, transcript, args.allow_claude, calls)
+    items = faith_items(minutes)
+    faith_prompt = "\n\n".join([
+        "<transcript>\n%s\n</transcript>" % labelled_text(open_reference(ds)),
+        "<minutes_items>\n%s\n</minutes_items>" % "\n".join("%s: %s" % (i, t) for i, t in items),
+        FAITH_GENERIC_INSTRUCTIONS])
+    faith, cached_faith = claude_json(faith_prompt, FAITH_SCHEMA, args.judge_model, args.allow_claude, calls,
+                                      "judge-faithfulness", FAITH_GENERIC_VERSION)
+    return {
+        "transcript_utterances": len(transcript["utterances"]),
+        "minutes_schema_version": minutes.get("schema_version"),
+        "decisions": {"pred": len(minutes.get("decisions", []))},
+        "actions": {"pred": len(generated_actions(minutes))},
+        "faithfulness": faith_scores(items, faith["structured_output"].get("items", [])),
+        "cached": {"summary": cached_summary, "faithfulness": cached_faith},
+        "judge_models": sorted((faith.get("modelUsage") or {}).keys()),
+        "judge_usage": [usage_of(faith)],
+        "summarize_input_chars": len(json.dumps(transcript, ensure_ascii=False)),
+    }
 
 
 # ---------------------------------------------------------------- claude
@@ -274,6 +355,12 @@ def pct(x):
     return "–" if x is None else "%.0f%%" % (100 * x)
 
 
+def match_cell(m, rate_key, num_key, den_key):
+    if rate_key not in m:   # 人手の要約がないデータ（件数だけ）
+        return "–（生成 %d 件）" % m.get("pred", 0) if rate_key == "precision" else "–"
+    return "%s (%d/%d)" % (pct(m[rate_key]), m[num_key], m[den_key])
+
+
 def render(res):
     lines = ["# 要約の評価: %s" % res["label"], "",
              "- 日付: %s、採点モデル: %s（%s）、プロンプト: %s" % (res["date"], res["judge_model"],
@@ -288,12 +375,12 @@ def render(res):
     for ds_id, ds in res["datasets"].items():
         for variant, r in ds.items():
             f = r["faithfulness"]
-            lines.append("| %s | %s | %s (%d/%d) | %s (%d/%d) | %s (%d/%d) | %s (%d/%d) | %s | %d (%d/%d/%d) |" % (
+            lines.append("| %s | %s | %s | %s | %s | %s | %s | %d (%d/%d/%d) |" % (
                 ds_id, variant,
-                pct(r["decisions"]["recall"]), r["decisions"]["matched_gold"], r["decisions"]["gold"],
-                pct(r["decisions"]["precision"]), r["decisions"]["matched_pred"], r["decisions"]["pred"],
-                pct(r["actions"]["recall"]), r["actions"]["matched_gold"], r["actions"]["gold"],
-                pct(r["actions"]["precision"]), r["actions"]["matched_pred"], r["actions"]["pred"],
+                match_cell(r["decisions"], "recall", "matched_gold", "gold"),
+                match_cell(r["decisions"], "precision", "matched_pred", "pred"),
+                match_cell(r["actions"], "recall", "matched_gold", "gold"),
+                match_cell(r["actions"], "precision", "matched_pred", "pred"),
                 pct(f["score"]), f["items"], f["supported"], f["partial"], f["unsupported"]))
     lines.append("")
     return "\n".join(lines) + "\n"
@@ -318,10 +405,12 @@ def main(argv):
         for ds in common.select(decl, args.datasets):
             if not ds.get("summary"):
                 continue
-            fetch.ensure_source(ds["annotations"], decl["sources"][ds["annotations"]])
+            if ds["kind"] == "ami":
+                fetch.ensure_source(ds["annotations"], decl["sources"][ds["annotations"]])
             for variant in [v for v in args.inputs.split(",") if v]:
                 print("要約の評価: %s %s" % (ds["id"], variant), flush=True)
-                result["datasets"].setdefault(ds["id"], {})[variant] = evaluate(decl, ds, variant, args, calls)
+                result["datasets"].setdefault(ds["id"], {})[variant] = (
+                    evaluate(decl, ds, variant, args, calls) if ds["kind"] == "ami" else evaluate_open(ds, variant, args, calls))
     except NeedsClaude as e:
         sys.exit("Claude の呼び出しが要る（%s）。キャッシュがない。呼んでよければ --allow-claude を付ける" % e)
     seen = set()

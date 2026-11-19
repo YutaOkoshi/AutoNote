@@ -44,3 +44,49 @@ class FaithfulnessTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OpenDataInputTests(unittest.TestCase):
+    """人手の要約がないデータ（会見・雑談）の入力の組み立て。"""
+
+    def setUp(self):
+        import tempfile
+        import common
+        self.common = common
+        self.saved = common.DATA
+        self.tmp = tempfile.TemporaryDirectory()
+        common.DATA = self.tmp.name
+
+    def tearDown(self):
+        self.common.DATA = self.saved
+        self.tmp.cleanup()
+
+    def write_jsonl(self, path, finals):
+        import json
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            for u in finals:
+                f.write(json.dumps(dict(u, final=True), ensure_ascii=False) + "\n")
+            f.write(json.dumps({"summary": {"rtf": 0.1}}) + "\n")
+
+    def test_kaiken_reference_spreads_time_by_length(self):
+        self.common.write_json(os.path.join(self.common.prepared_dir("k"), "ref.json"),
+                               {"audio_seconds": 30.0, "text": "あいう\nえおかきくけ"})
+        t = summary_eval.open_reference({"id": "k", "kind": "kaiken"})
+        self.assertEqual([(u["start"], u["end"]) for u in t["utterances"]], [(0.0, 10.0), (10.0, 30.0)])
+        self.assertEqual(summary_eval.labelled_text(t), "あいう\nえおかきくけ")
+
+    def test_tracks_become_me_and_other_in_time_order(self):
+        run_dir = self.common.run_dir("lab", "c")
+        self.write_jsonl(os.path.join(run_dir, "tracks", "me-whisper-ja.jsonl"),
+                         [{"start": 0.0, "end": 1.0, "text": "こんにちは"}, {"start": 5.0, "end": 6.0, "text": "はい"}])
+        self.write_jsonl(os.path.join(run_dir, "tracks", "other-whisper-ja.jsonl"),
+                         [{"start": 2.0, "end": 3.0, "text": "どうも"}, {"start": 4.0, "end": 4.5, "text": " "}])
+        t = summary_eval.open_final({"id": "c", "kind": "eaf", "tracks": {"me": {}, "other": {}}}, "lab")
+        self.assertEqual([(u["speaker"], u["text"]) for u in t["utterances"]],
+                         [("me", "こんにちは"), ("other", "どうも"), ("me", "はい")])
+        self.assertEqual(summary_eval.labelled_text(t), "[me] こんにちは\n[other] どうも\n[me] はい")
+
+    def test_table_cell_without_gold(self):
+        self.assertEqual(summary_eval.match_cell({"pred": 3}, "recall", "matched_gold", "gold"), "–")
+        self.assertEqual(summary_eval.match_cell({"pred": 3}, "precision", "matched_pred", "pred"), "–（生成 3 件）")
