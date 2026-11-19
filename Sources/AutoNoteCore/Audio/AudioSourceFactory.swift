@@ -29,7 +29,8 @@ public struct LiveAudioSourceFactory: AudioSourceFactory {
     }
 
     public func makeMicrophoneSource(deviceUID: String?, clock: MeetingClock) -> any AudioSource {
-        MicrophoneSource(deviceUID: deviceUID, clock: clock, voiceProcessing: voiceProcessing)
+        MicrophoneSource(deviceUID: deviceUID, clock: clock, voiceProcessing: voiceProcessing,
+                         engine: RoutingMicrophoneEngine(), inputHold: CoreAudioBluetoothInputHold())
     }
 
     public func inputDevice(uid: String?) -> DeviceRef? {

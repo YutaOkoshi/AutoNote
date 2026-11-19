@@ -241,3 +241,72 @@ private func feed(_ engine: FakeMicrophoneEngine, host: FakeHostClock, from: Dou
         #expect(got.withLock { $0 } == ["first"])
     }
 }
+
+/// The Bluetooth input is held open (`MicrophoneInputHolding`) so the headset stays on HFP while the engine is rebuilt.
+@Suite struct MicrophoneInputHoldTests {
+    private func source(_ engine: FakeMicrophoneEngine, _ clock: MeetingClock, _ hold: FakeMicrophoneInputHold,
+                        settleTimeout: Duration = .seconds(1)) -> MicrophoneSource {
+        var policy = micRecoveryTestPolicy
+        policy.holdSettle = .milliseconds(100)
+        policy.holdSettleTimeout = settleTimeout
+        return MicrophoneSource(deviceUID: nil, clock: clock, permission: FakeMicrophonePermission(.authorized), engine: engine,
+                                lookup: FakeDeviceLookup(), policy: policy, inputHold: hold)
+    }
+
+    @Test func holdsTheInputForTheWholeRecordingAcrossRebuilds() async throws {
+        let engine = FakeMicrophoneEngine(); engine.stopItselfOnStarts = 1
+        let hold = FakeMicrophoneInputHold()
+        let src = source(engine, .fake(), hold)
+        try await src.start { _ in }
+        #expect(hold.holdCount == 1)
+        #expect(await eventuallyTrue { engine.startCount == 2 && engine.isRunning })
+        #expect(hold.isHeld)
+        #expect(hold.holdCount == 1)
+        #expect(hold.releaseCount == 0)
+        await src.stop()
+        #expect(!hold.isHeld)
+        #expect(hold.releaseCount == 1)
+    }
+
+    @Test func aRebuildWaitsUntilTheHeldInputIsSteady() async throws {
+        let engine = FakeMicrophoneEngine(); engine.stopItselfOnStarts = 1
+        let hold = FakeMicrophoneInputHold(steady: false)
+        let src = source(engine, .fake(), hold)
+        try await src.start { _ in }
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(engine.startCount == 1)   // stopped itself; the rebuild waits for the headset to settle
+        hold.steady = true
+        #expect(await eventuallyTrue { engine.startCount == 2 && engine.isRunning })
+        await src.stop()
+    }
+
+    @Test func aRebuildGoesOnWhenTheHeldInputNeverSettles() async throws {
+        let engine = FakeMicrophoneEngine(); engine.stopItselfOnStarts = 1
+        let hold = FakeMicrophoneInputHold(steady: false)
+        let src = source(engine, .fake(), hold, settleTimeout: .milliseconds(200))
+        try await src.start { _ in }
+        #expect(await eventuallyTrue { engine.startCount == 2 && engine.isRunning })
+        await src.stop()
+        #expect(hold.releaseCount == 1)
+    }
+
+    @Test func aFailedStartReleasesTheHold() async throws {
+        let engine = FakeMicrophoneEngine(); engine.failPrepare(1, with: AudioSourceError.unsupportedFormat)
+        let hold = FakeMicrophoneInputHold()
+        let src = source(engine, .fake(), hold)
+        await #expect(throws: (any Error).self) { try await src.start { _ in } }
+        #expect(hold.holdCount == 1)
+        #expect(!hold.isHeld)
+    }
+
+    @Test func givingUpReleasesTheHold() async throws {
+        let engine = FakeMicrophoneEngine()   // never pushes: every rebuild stalls
+        let hold = FakeMicrophoneInputHold()
+        let src = source(engine, .fake(), hold)
+        try await src.start { _ in }
+        #expect(await eventuallyTrue(.seconds(8)) { !hold.isHeld })
+        #expect(hold.releaseCount == 1)
+        await src.stop()
+        #expect(hold.releaseCount == 1)
+    }
+}

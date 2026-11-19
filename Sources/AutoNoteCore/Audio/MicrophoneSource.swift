@@ -16,12 +16,19 @@ public struct MicrophoneRecoveryPolicy: Sendable, Equatable {
     public var maxConsecutiveFailures: Int
     /// Rebuilds per recording, whatever their outcome, before the source gives up.
     public var maxRebuilds: Int
+    /// With a held Bluetooth input (`MicrophoneInputHolding`): before a rebuild starts the engine, the held input must
+    /// have delivered without a gap for this long (the headset settled on HFP)…
+    public var holdSettle: Duration
+    /// …waiting at most this long; then the rebuild goes on anyway.
+    public var holdSettleTimeout: Duration
 
     public init(checkInterval: Duration = .milliseconds(250), settleDelay: Duration = .milliseconds(300),
                 stallTimeout: Duration = .seconds(2), retryDelay: Duration = .milliseconds(500),
-                maxConsecutiveFailures: Int = 5, maxRebuilds: Int = 30) {
+                maxConsecutiveFailures: Int = 5, maxRebuilds: Int = 30,
+                holdSettle: Duration = .milliseconds(300), holdSettleTimeout: Duration = .seconds(2)) {
         self.checkInterval = checkInterval; self.settleDelay = settleDelay; self.stallTimeout = stallTimeout
         self.retryDelay = retryDelay; self.maxConsecutiveFailures = maxConsecutiveFailures; self.maxRebuilds = maxRebuilds
+        self.holdSettle = holdSettle; self.holdSettleTimeout = holdSettleTimeout
     }
 
     public static let standard = MicrophoneRecoveryPolicy()
@@ -38,6 +45,9 @@ public struct MicrophoneRecoveryPolicy: Sendable, Equatable {
 /// and then rebuilds: engine stop → re-resolve the device → `prepare` (re-reads the format) → new ring, converter
 /// and drain → `start`. Chunks keep their host-time stamps, so the gap becomes silence on the track's timeline.
 /// After `policy.maxConsecutiveFailures` rebuilds without a callback, it gives up and reports through `health`.
+/// A Bluetooth input is also held open by `inputHold` for the whole recording: without it, every rebuild's engine stop
+/// lets the headset fall back to A2DP and the next start's switch to HFP stops the new engine again (seen on the real
+/// headset). A rebuild waits (bounded) until the held input runs steadily before it starts the engine.
 public actor MicrophoneSource: AudioSource {
     public nonisolated let track: Track = .mic
     public nonisolated let health: SourceHealth? = SourceHealth()
@@ -65,6 +75,7 @@ public actor MicrophoneSource: AudioSource {
     private let lookup: any AudioDeviceLookup
     private let stopTimeout: Duration
     private let policy: MicrophoneRecoveryPolicy
+    private let inputHold: any MicrophoneInputHolding
     private let controlQueue = DispatchQueue(label: "com.yutaokoshi.autonote.mic.control", qos: .userInitiated)
 
     private var state: State = .idle
@@ -85,16 +96,19 @@ public actor MicrophoneSource: AudioSource {
     private var rebuilds = 0
     private var nextRebuildAllowedAt = ContinuousClock.now
     private var gaveUp = false
+    /// Whether `inputHold` holds a Bluetooth input for this recording.
+    private var holdingInput = false
 
     public init(deviceUID: String?, clock: MeetingClock, voiceProcessing: Bool = false,
                 permission: any MicrophonePermissionChecking = AVMicrophonePermission(),
                 engine: any MicrophoneEngine = AVMicrophoneEngine(),
                 lookup: any AudioDeviceLookup = CoreAudioDeviceLookup(),
                 stopTimeout: Duration = .seconds(5),
-                policy: MicrophoneRecoveryPolicy = .standard) {
+                policy: MicrophoneRecoveryPolicy = .standard,
+                inputHold: any MicrophoneInputHolding = NoMicrophoneInputHold()) {
         self.deviceUID = deviceUID; self.clock = clock; self.voiceProcessing = voiceProcessing
         self.permission = permission; self.engine = engine; self.lookup = lookup; self.stopTimeout = stopTimeout
-        self.policy = policy
+        self.policy = policy; self.inputHold = inputHold
     }
 
     /// Safety net when the owner drops a running source without `stop()`: no waiting, the engine stops in the background.
@@ -102,8 +116,8 @@ public actor MicrophoneSource: AudioSource {
         if case .running = state {
             watchdog?.cancel()
             pipeline?.drain.cancel()
-            let engine = self.engine
-            controlQueue.async { engine.stop(); engine.setConfigurationChangeHandler(nil) }
+            let engine = self.engine, hold = self.inputHold
+            controlQueue.async { engine.stop(); engine.setConfigurationChangeHandler(nil); hold.release() }
         }
     }
 
@@ -119,7 +133,10 @@ public actor MicrophoneSource: AudioSource {
         state = .starting
         stopRequestedWhileStarting = false
 
-        let engine = self.engine, voiceProcessing = self.voiceProcessing
+        let engine = self.engine, voiceProcessing = self.voiceProcessing, hold = self.inputHold
+        // Held before the engine opens the input, so rebuilds find the headset already on HFP.
+        holdingInput = await controlQueue.runAwaiting(timeout: stopTimeout, { hold.hold(deviceID: deviceID) },
+                                                      abandoned: { held in if held { hold.release() } }) ?? false
         let handler: @Sendable () -> Void = { [weak self] in
             let postedAt = ContinuousClock.now   // before the hop, so a rebuild in between can tell it is stale
             Task { await self?.configurationChanged(postedAt: postedAt) }
@@ -133,11 +150,13 @@ public actor MicrophoneSource: AudioSource {
         } catch {
             state = .idle
             await controlQueue.runAwaiting(timeout: stopTimeout) { engine.setConfigurationChangeHandler(nil) }
+            await releaseHold()
             throw error
         }
         guard let ring = Self.makeRing(format), let drain = makeDrain(ring: ring, format: format, onBuffer: onBuffer) else {
             state = .idle
             await controlQueue.runAwaiting(timeout: stopTimeout) { engine.stop(); engine.setConfigurationChangeHandler(nil) }
+            await releaseHold()
             throw AudioSourceError.unsupportedFormat
         }
         do {
@@ -147,6 +166,7 @@ public actor MicrophoneSource: AudioSource {
             await controlQueue.runAwaiting(timeout: stopTimeout) { engine.stop(); engine.setConfigurationChangeHandler(nil) }
             drain.cancel()
             await drain.value
+            await releaseHold()
             throw error
         }
         pipeline = Pipeline(ring: ring, drain: drain, format: format)
@@ -173,6 +193,7 @@ public actor MicrophoneSource: AudioSource {
             let finished = await controlQueue.runAwaiting(timeout: stopTimeout) { engine.stop(); engine.setConfigurationChangeHandler(nil) }
             lastStopTimedOut = !finished
             if !finished { Self.logger.error("engine stop timeout") }
+            await releaseHold()
             if let pipeline {
                 pipeline.drain.cancel()
                 await pipeline.drain.value
@@ -293,6 +314,10 @@ public actor MicrophoneSource: AudioSource {
             fail(attempt, "device lookup", error, backoff: backoff)
             return
         }
+        if holdingInput {
+            await waitForSteadyInput(attempt)
+            guard case .running = state else { return }
+        }
         let voiceProcessing = self.voiceProcessing
         let result: Result<(InputFormat, AudioRingBuffer), any Error>? = await controlQueue.runAwaiting(timeout: timeout, {
             Result {
@@ -348,9 +373,32 @@ public actor MicrophoneSource: AudioSource {
             await old.drain.value
         }
         pipeline = nil
+        await releaseHold()
         let message = "microphone input stopped and \(rebuilds) rebuild(s) did not bring it back (\(reason))"
         Self.logger.error("mic gave up after \(self.rebuilds, privacy: .public) rebuild(s): \(reason, privacy: .public)")
         health?.reportFailure(message)
+    }
+
+    /// Lets the held headset settle on HFP before the engine opens the input again; bounded by `holdSettleTimeout`.
+    private func waitForSteadyInput(_ attempt: Int) async {
+        let hold = inputHold, need = policy.holdSettle
+        let started = ContinuousClock.now, deadline = started + policy.holdSettleTimeout
+        while ContinuousClock.now < deadline {
+            if hold.isSteady(for: need) {
+                Self.logger.notice("mic rebuild #\(attempt, privacy: .public): held input steady after \(Self.seconds(.now - started), privacy: .public) s")
+                return
+            }
+            guard case .running = state else { return }
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+        Self.logger.notice("mic rebuild #\(attempt, privacy: .public): held input not steady after \(Self.seconds(.now - started), privacy: .public) s; starting anyway")
+    }
+
+    private func releaseHold() async {
+        guard holdingInput else { return }
+        holdingInput = false
+        let hold = inputHold
+        await controlQueue.runAwaiting(timeout: stopTimeout) { hold.release() }
     }
 
     // MARK: - Helpers
