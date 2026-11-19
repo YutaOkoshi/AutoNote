@@ -631,6 +631,18 @@ check_claude_probe_files() {
     LAST_LOG=""; pass "（claude の実呼び出しは費用がかかるので E2E では行わない）"
 }
 
+check_bt_verify_script() {
+    CURRENT="15. scripts/bt-verify.sh の静的確認（構文・端末なしで止まる・--dry-run）"
+    if ! run bash -n scripts/bt-verify.sh; then fail "bt-verify.sh に構文エラー"; return; fi
+    run scripts/bt-verify.sh --out "${WORK}/bt-verify-notty" </dev/null; local code=$?
+    [[ ${code} -eq 2 ]] || { fail "端末なしの本番実行が exit ${code}（期待 2）"; return; }
+    # --dry-run は音・マイク・アプリ・Chrome を使わない（既定の入出力を読むだけ）。前提が欠けていても exit 0
+    run_timeout 120 scripts/bt-verify.sh --dry-run --out "${WORK}/bt-verify-dry" </dev/null; code=$?
+    [[ ${code} -eq 0 ]] || { fail "--dry-run が exit ${code}"; return; }
+    grep -q '\[dry-run\] ここまで' "${LAST_LOG}" || { fail "--dry-run の終わりの行が無い"; return; }
+    LAST_LOG=""; pass "（実機の Bluetooth での実行は利用者が端末で行う）"
+}
+
 check_render_fixture() {
     CURRENT="01.1 render-fixture が golden と一致"
     cli_or_skip || return
@@ -1143,6 +1155,7 @@ CHECKS=(
     check_results_doc
     check_fake_transcript
     check_claude_probe_files
+    check_bt_verify_script
     check_render_fixture
     check_render_fixture_detects_diff
     check_dev_record
