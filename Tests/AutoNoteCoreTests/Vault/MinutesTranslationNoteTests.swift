@@ -97,6 +97,62 @@ import Testing
         #expect(try await manifests.load(id).status == .minutesGenerated)
     }
 
+    /// A meeting whose note the queue wrote (minutes_generated), its minutes and a translation; the note's URL.
+    private func written(_ minutes: MinutesOutput = Samples.minutes) async throws
+        -> (AppPaths, ManifestStore, Settings, SharedVaultServices, URL) {
+        let paths = AppPaths(root: try TemporaryDirectory.make())
+        let manifests = ManifestStore(paths: paths)
+        var manifest = Samples.manifest
+        manifest.status = .generating
+        try await manifests.save(manifest)
+        let id = manifest.id
+        let final = Transcript(utterances: [u(1, .me, "はじめます")], engine: "whisper.cpp", language: .ja)
+        try FileManager.default.createDirectory(at: paths.transcriptsDirectory(id), withIntermediateDirectories: true)
+        try AutoNoteJSON.encoder().encode(final).write(to: paths.transcriptFile(id, .final))
+        try AutoNoteJSON.encoder().encode(minutes).write(to: paths.minutesFile(id))
+        var settings = Settings()
+        settings.outputFolder = try TemporaryDirectory.make().path
+        let services = SharedVaultServices()
+        let context = StageContext(paths: paths, settings: settings, manifests: manifests,
+                                   now: { Date(timeIntervalSince1970: 1_800_000_000) }, reportProgress: { _ in })
+        var job = Job(id: id.rawValue, meeting: id, stages: StageName.all,
+                      completedStages: [StageName.transcribe, StageName.summarize], state: .running, attempts: 0,
+                      lastError: nil, notBefore: nil, createdAt: Date(timeIntervalSince1970: 1_800_000_000))
+        try await WriteVaultStage(timeZone: Self.tokyo, services: services).run(&job, context: context)
+        let folder = URL(filePath: try #require(settings.outputFolder))
+        let note = try #require(FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }.first { $0.pathExtension == "md" && $0.lastPathComponent != "_index.md" })
+        try TranslationStore(paths: paths).saveSummary(sampleTranslation, .minutes, for: id)
+        return (paths, manifests, settings, services, note)
+    }
+
+    /// Review M3: a note the person deleted is not brought back by the translation (only the queue writes new notes).
+    @Test func aDeletedNoteIsNotRecreatedByTheTranslation() async throws {
+        let (paths, manifests, settings, services, note) = try await written()
+        try FileManager.default.removeItem(at: note)
+        #expect(await WriteVaultStage.rewriteForTranslation(Samples.manifest.id, paths: paths, settings: settings,
+                                                            manifests: manifests, services: services,
+                                                            timeZone: Self.tokyo) == .leftAlone)
+        let folder = URL(filePath: settings.outputFolder!)
+        let notes = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "md" && $0.lastPathComponent != "_index.md" } ?? []
+        #expect(notes.isEmpty)
+    }
+
+    /// Review L1: a rewrite that read older minutes than the note now holds (the queue or 保存 wrote newer ones in
+    /// between) leaves the note alone instead of writing the old minutes back.
+    @Test func aRewriteFromOlderMinutesThanTheNoteIsLeftAlone() async throws {
+        var newer = Samples.minutes
+        newer.decisions[0].text = "新しい決定"
+        let (paths, manifests, settings, services, note) = try await written(newer)
+        // The rewrite sees the older minutes (read before the newer ones were written).
+        try AutoNoteJSON.encoder().encode(Samples.minutes).write(to: paths.minutesFile(Samples.manifest.id))
+        #expect(await WriteVaultStage.rewriteForTranslation(Samples.manifest.id, paths: paths, settings: settings,
+                                                            manifests: manifests, services: services,
+                                                            timeZone: Self.tokyo) == .leftAlone)
+        #expect(try String(contentsOf: note, encoding: .utf8).contains("新しい決定"))
+    }
+
     @Test func noRewriteWhileTheQueueIsStillMakingTheNote() async throws {
         let paths = AppPaths(root: try TemporaryDirectory.make())
         let manifests = ManifestStore(paths: paths)

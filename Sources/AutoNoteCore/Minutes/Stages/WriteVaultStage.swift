@@ -113,16 +113,23 @@ public struct WriteVaultStage: QueueStage {
         do {
             let frontmatterText = try await store.read(.frontmatter).map { String(decoding: $0, as: UTF8.self) }
                 ?? FrontmatterTemplate.defaultText
+            let plain = MeetingDocument(manifest: manifest, transcript: final, minutes: minutes,
+                                        frontmatter: FrontmatterTemplate(text: frontmatterText),
+                                        appVersion: AutoNoteVersion.current, timeZone: timeZone)
             let document = MeetingDocument(manifest: manifest, transcript: final, minutes: minutes,
                                            frontmatter: FrontmatterTemplate(text: frontmatterText),
                                            appVersion: AutoNoteVersion.current, timeZone: timeZone,
                                            minutesTranslation: TranslationStore(paths: paths).loadSummary(id, .minutes))
-            switch try await writer.write(document, policy: .ifUnchanged) {
+            // Only an existing note, unchanged and made from these minutes (review M3, L1).
+            switch try await writer.rewriteExisting(document, basedOn: plain) {
             case .written:
                 logger.info("\(id.rawValue, privacy: .public): note rewritten with the minutes' translation")
                 return .rewritten
             case .conflict:
-                logger.notice("\(id.rawValue, privacy: .public): note edited, translation not written into it")
+                logger.notice("\(id.rawValue, privacy: .public): note edited or newer, translation not written into it")
+                return .leftAlone
+            case nil:
+                logger.notice("\(id.rawValue, privacy: .public): no note to rewrite (deleted), left as it is")
                 return .leftAlone
             }
         } catch {
