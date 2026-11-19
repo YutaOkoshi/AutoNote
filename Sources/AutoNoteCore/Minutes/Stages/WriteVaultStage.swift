@@ -57,7 +57,8 @@ public struct WriteVaultStage: QueueStage {
                 ?? FrontmatterTemplate.defaultText
             let document = MeetingDocument(manifest: manifest, transcript: final, minutes: minutes,
                                            frontmatter: FrontmatterTemplate(text: frontmatterText),
-                                           appVersion: AutoNoteVersion.current, timeZone: timeZone)
+                                           appVersion: AutoNoteVersion.current, timeZone: timeZone,
+                                           minutesTranslation: TranslationStore(paths: context.paths).loadSummary(id, .minutes))
             noteTitle = document.hasTitle ? document.title : nil
             outcome = try await writer.write(document, policy: job.overwriteApproved ? .force : .ifUnchanged)
         } catch is CancellationError {
@@ -85,6 +86,48 @@ public struct WriteVaultStage: QueueStage {
         case .conflict(let url):
             Self.logger.notice("\(id.rawValue, privacy: .public): note edited, awaiting confirmation")
             throw StageError.awaitingConfirmation(path: Self.relativePath(of: url, in: outputFolder))
+        }
+    }
+
+    public enum TranslationRewrite: Equatable, Sendable {
+        case rewritten
+        /// No note to rewrite yet (the queue writes it), no output folder, no minutes, an edited note, or an error.
+        case leftAlone
+    }
+
+    /// Writes the note again with the minutes' newest translation (spec 2026-11-19: 訳が完了した時点でノートを書き直す).
+    /// Only a note the queue finished with minutes (`minutes_generated`, a known path); a note edited outside is
+    /// left alone (`.ifUnchanged`), as the queue's own rewrite would ask first. Nothing else changes.
+    public static func rewriteForTranslation(_ id: MeetingID, paths: AppPaths, settings: Settings,
+                                             manifests: ManifestStore, services: SharedVaultServices = .standard,
+                                             timeZone: TimeZone = .current,
+                                             now: @escaping @Sendable () -> Date = Date.init) async -> TranslationRewrite {
+        guard let folderPath = settings.outputFolder,
+              let manifest = try? await manifests.load(id), manifest.status == .minutesGenerated, manifest.notePath != nil,
+              let minutes = usableMinutes(at: paths.minutesFile(id)),
+              let data = try? Data(contentsOf: paths.transcriptFile(id, .final)),
+              let final = try? AutoNoteJSON.decoder().decode(Transcript.self, from: data) else { return .leftAlone }
+        let outputFolder = URL(filePath: folderPath, directoryHint: .isDirectory)
+        let store = services.configStore(outputFolder: outputFolder, paths: paths)
+        let writer = services.vaultWriter(outputFolder: outputFolder, paths: paths, now: now)
+        do {
+            let frontmatterText = try await store.read(.frontmatter).map { String(decoding: $0, as: UTF8.self) }
+                ?? FrontmatterTemplate.defaultText
+            let document = MeetingDocument(manifest: manifest, transcript: final, minutes: minutes,
+                                           frontmatter: FrontmatterTemplate(text: frontmatterText),
+                                           appVersion: AutoNoteVersion.current, timeZone: timeZone,
+                                           minutesTranslation: TranslationStore(paths: paths).loadSummary(id, .minutes))
+            switch try await writer.write(document, policy: .ifUnchanged) {
+            case .written:
+                logger.info("\(id.rawValue, privacy: .public): note rewritten with the minutes' translation")
+                return .rewritten
+            case .conflict:
+                logger.notice("\(id.rawValue, privacy: .public): note edited, translation not written into it")
+                return .leftAlone
+            }
+        } catch {
+            logger.notice("\(id.rawValue, privacy: .public): note not rewritten (\(String(describing: type(of: error)), privacy: .public))")
+            return .leftAlone
         }
     }
 

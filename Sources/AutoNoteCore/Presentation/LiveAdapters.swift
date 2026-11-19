@@ -315,7 +315,8 @@ public struct MeetingsAdapter: MeetingsPort {
             let text = try await output.portable().read(.frontmatter).map { String(decoding: $0, as: UTF8.self) }
                 ?? FrontmatterTemplate.defaultText
             let document = MeetingDocument(manifest: updated, transcript: final, minutes: m,
-                                           frontmatter: FrontmatterTemplate(text: text), appVersion: appVersion, timeZone: timeZone)
+                                           frontmatter: FrontmatterTemplate(text: text), appVersion: appVersion, timeZone: timeZone,
+                                           minutesTranslation: TranslationStore(paths: paths).loadSummary(id, .minutes))
             outcome = try await vault.writer.write(document, policy: overwrite ? .force : .ifUnchanged, renameToMatchTitle: renameFile)
         } catch VaultError.outputFolderUnavailable {
             throw AppCommandError.outputFolderMissing

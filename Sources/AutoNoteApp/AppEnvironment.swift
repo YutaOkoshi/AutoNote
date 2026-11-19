@@ -213,7 +213,13 @@ final class AppEnvironment {
             runtime: TranslationRuntime(completer: onDevice ?? UnavailableTextCompleter()),
             runtimeAvailable: onDevice != nil,
             installedModel: { await translationModels.fileURL($0) },
-            profile: MachineProfile.current())
+            profile: MachineProfile.current(),
+            // Once the minutes' translation changed, the untouched note gets its translated section.
+            rewriteNote: { id in
+                _ = await WriteVaultStage.rewriteForTranslation(
+                    id, paths: paths, settings: (try? await settings.load()) ?? AutoNoteCore.Settings(),
+                    manifests: manifests)
+            })
         let translationBroadcaster = TranslationBroadcaster()
         let translation = TranslationService(translationDeps, broadcaster: translationBroadcaster)
         let liveTranslation = LiveTranslator(translationDeps, broadcaster: translationBroadcaster)
