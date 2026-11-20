@@ -9,6 +9,8 @@ import Synchronization
 /// with `speaker: .unknown` and times relative to the file (the caller assigns speaker and start offset).
 /// A segment over audio with less than `SilenceDetector`'s minimum speech is dropped (whisper hallucinates on silence).
 /// The file must be a 16 kHz mono 16-bit WAV (`TranscriptionError.invalidAudio` otherwise).
+/// With `.auto`, each window is split into runs of Japanese or English (`LanguageRunPlanner`) and each run is decoded
+/// on its own with its language fixed; a window in one language is a single run, the same call as a fixed language.
 public actor WhisperBatchTranscriber: BatchTranscriber {
     /// Writes to the unified log (subsystem `com.yutaokoshi.autonote`, category `WhisperBatchTranscriber`).
     public static let systemLog: @Sendable (String) -> Void = { message in
@@ -20,13 +22,16 @@ public actor WhisperBatchTranscriber: BatchTranscriber {
     private let core: any WhisperCore
     private let gate: BatchGate
     private let windows: BatchWindowPlanner.Config
+    private let languages: LanguageRunPlanner
     private let log: @Sendable (String) -> Void
 
     public init(core: any WhisperCore, gate: BatchGate, windows: BatchWindowPlanner.Config = .init(),
+                languages: LanguageRunPlanner.Config = .init(),
                 log: @escaping @Sendable (String) -> Void = WhisperBatchTranscriber.systemLog) {
         self.core = core
         self.gate = gate
         self.windows = windows
+        self.languages = LanguageRunPlanner(config: languages)
         self.log = log
     }
 
@@ -54,15 +59,27 @@ public actor WhisperBatchTranscriber: BatchTranscriber {
         for w in plan {
             try Task.checkCancellation()
             let pcm = try WAVFile.readSamples(file, in: w.read)
-            let samples = PCMAudio.floats(pcm)
-            let kept = try await decode(samples, language: language, prompt: prompt) { p in
-                guard count > 0 else { return }
-                report((Double(w.owned.lowerBound) + p * Double(w.owned.count)) / Double(count))
+            let runs = language == .auto
+                ? try await languageRuns(pcm)
+                : [LanguageRunPlanner.Run(samples: 0..<pcm.count, language: language)]
+            if language == .auto {
+                log("言語 窓 \(w.index + 1)/\(plan.count): " + runs.map {
+                    "\($0.language.rawValue) \(Self.seconds(w.read.lowerBound + $0.samples.lowerBound))–\(Self.seconds(w.read.lowerBound + $0.samples.upperBound)) 秒"
+                }.joined(separator: "、"))
             }
-            let shift = Double(w.read.lowerBound) / PCMAudio.sampleRate
-            for s in kept where detector.hasSpeech(in: pcm, from: s.start, to: s.end)
-                && w.owns(midpointSeconds: shift + (s.start + s.end) / 2) {
-                collected.append(WhisperSegment(start: s.start + shift, end: s.end + shift, text: s.text))
+            for run in runs {
+                let samples = PCMAudio.floats(Array(pcm[run.samples]))
+                let kept = try await decode(samples, language: run.language, prompt: prompt) { p in
+                    guard count > 0, !pcm.isEmpty else { return }
+                    let inWindow = (Double(run.samples.lowerBound) + p * Double(run.samples.count)) / Double(pcm.count)
+                    report((Double(w.owned.lowerBound) + inWindow * Double(w.owned.count)) / Double(count))
+                }
+                let inRun = Double(run.samples.lowerBound) / PCMAudio.sampleRate
+                let shift = Double(w.read.lowerBound) / PCMAudio.sampleRate + inRun
+                for s in kept where detector.hasSpeech(in: pcm, from: s.start + inRun, to: s.end + inRun)
+                    && w.owns(midpointSeconds: shift + (s.start + s.end) / 2) {
+                    collected.append(WhisperSegment(start: s.start + shift, end: s.end + shift, text: s.text))
+                }
             }
             log("文字起こし 窓 \(w.index + 1)/\(plan.count)（\(Self.minutes(w.owned.upperBound)) 分 / \(Self.minutes(count)) 分）")
         }
@@ -71,6 +88,21 @@ public actor WhisperBatchTranscriber: BatchTranscriber {
             Utterance(start: TimelineTime(seconds: $0.start), end: TimelineTime(seconds: $0.end),
                       speaker: .unknown, text: $0.text, isFinal: true)
         }
+    }
+
+    /// The window's runs of Japanese and English: whisper judges each block with enough speech (waiting on the gate
+    /// before each, like before every decode).
+    private func languageRuns(_ pcm: [Int16]) async throws -> [LanguageRunPlanner.Run] {
+        let blocks = languages.blocks(pcm)
+        var guesses: [LanguageGuess?] = []
+        for block in blocks {
+            guard languages.shouldJudge(pcm, block) else { guesses.append(nil); continue }
+            try Task.checkCancellation()
+            await gate.waitIfPaused()
+            try Task.checkCancellation()
+            guesses.append(try await core.detectLanguage(PCMAudio.floats(Array(pcm[block]))))
+        }
+        return languages.runs(blocks, guesses: guesses)
     }
 
     /// Runs whisper over one window, restarting after each pause from the end of the last completed segment.
@@ -112,6 +144,9 @@ public actor WhisperBatchTranscriber: BatchTranscriber {
         }
         return kept.withLock { $0 }
     }
+
+    /// Samples as whole seconds, rounded.
+    private static func seconds(_ samples: Int) -> Int { Int((Double(samples) / PCMAudio.sampleRate).rounded()) }
 
     /// Samples as whole minutes, rounded.
     private static func minutes(_ samples: Int) -> Int { Int((Double(samples) / PCMAudio.sampleRate / 60).rounded()) }
