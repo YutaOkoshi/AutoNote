@@ -9,6 +9,7 @@ import Synchronization
 /// the current window.
 /// `init(fixedText:)` is for live windows: one segment spanning the window and one token at its start.
 /// `init(failure:)` records each request and throws `failure`.
+/// `detectLanguage` answers with `guess` (Japanese by default) and records the samples it was asked about.
 public final class FakeWhisperCore: WhisperCore, @unchecked Sendable {
     private enum Script {
         case segments([WhisperSegment], delay: Duration)
@@ -19,12 +20,20 @@ public final class FakeWhisperCore: WhisperCore, @unchecked Sendable {
 
     private struct State {
         var requests: [WhisperRunRequest] = []
+        var detections: [[Float]] = []
         var emitted = 0
         var window = -1
     }
 
     private let script: Script
     private let state = Mutex(State())
+
+    /// The answer of `detectLanguage` for the samples asked about.
+    public var guess: @Sendable ([Float]) -> LanguageGuess {
+        get { guessBox.withLock { $0 } }
+        set { guessBox.withLock { $0 = newValue } }
+    }
+    private let guessBox = Mutex<@Sendable ([Float]) -> LanguageGuess>({ _ in LanguageGuess(ja: 0.9, en: 0.1) })
 
     public init(segments: [WhisperSegment], delay: Duration = .zero) {
         script = .segments(segments, delay: delay)
@@ -45,6 +54,14 @@ public final class FakeWhisperCore: WhisperCore, @unchecked Sendable {
     public var requests: [WhisperRunRequest] { state.withLock { $0.requests } }
     public var runCount: Int { state.withLock { $0.requests.count } }
     public var emittedCount: Int { state.withLock { $0.emitted } }
+    /// The samples of each `detectLanguage` call, in order.
+    public var detections: [[Float]] { state.withLock { $0.detections } }
+
+    public func detectLanguage(_ samples: [Float]) async throws -> LanguageGuess {
+        state.withLock { $0.detections.append(samples) }
+        if case let .failure(error) = script { throw error }
+        return guess(samples)
+    }
 
     public func run(
         _ r: WhisperRunRequest,

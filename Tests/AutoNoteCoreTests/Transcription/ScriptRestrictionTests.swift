@@ -7,7 +7,7 @@ import Testing
     @Test func restrictionFollowsLanguage() {
         #expect(ScriptRestriction(language: .ja) == .japanese)
         #expect(ScriptRestriction(language: .en) == .english)
-        #expect(ScriptRestriction(language: .auto) == .unrestricted)
+        #expect(ScriptRestriction(language: .auto) == .japanese)   // 自動は日本語か英語（ハングル・キリル文字は出さない）
     }
 
     @Test func japaneseKeepsKanaKanjiLatinDigitsAndSymbols() {
