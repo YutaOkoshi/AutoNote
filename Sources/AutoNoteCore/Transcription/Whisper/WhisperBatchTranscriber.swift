@@ -102,7 +102,8 @@ public actor WhisperBatchTranscriber: BatchTranscriber {
             try Task.checkCancellation()
             guesses.append(try await core.detectLanguage(PCMAudio.floats(Array(pcm[block]))))
         }
-        return languages.runs(blocks, guesses: guesses)
+        let runs = languages.runs(blocks, guesses: guesses)
+        return runs.isEmpty ? [LanguageRunPlanner.Run(samples: 0..<pcm.count, language: .ja)] : runs   // 空の窓も 1 回回す
     }
 
     /// Runs whisper over one window, restarting after each pause from the end of the last completed segment.

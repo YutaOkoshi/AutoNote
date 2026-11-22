@@ -345,3 +345,48 @@ extension WhisperBatchTranscriberTests {
         #expect(core.requests.allSatisfy { $0.scripts == .unrestricted })
     }
 }
+
+// MARK: - Auto (Japanese or English per run of a window)
+
+extension WhisperBatchTranscriberTests {
+    /// 単一言語なら窓全体が 1 区間になり、その言語を固定した 1 回の呼び出しになる（固定の言語と同じ）。
+    @Test func autoInOneLanguageDecodesTheWholeWindowOnce() async throws {
+        let core = FakeWhisperCore(windows: [[seg(0, 8, "一"), seg(9, 17, "二")]])
+        core.guess = { _ in LanguageGuess(ja: 0.1, en: 0.85) }
+        let pcm = tone(8) + silence(1) + tone(8)
+        let u = try await run(core, pcm, language: .auto)
+        #expect(core.detections.count == 2)
+        #expect(core.requests.map(\.language) == [.en])
+        #expect(core.requests.map(\.samples.count) == [pcm.count])
+        #expect(core.requests.allSatisfy { $0.offsetSeconds == 0 && $0.scripts == .unrestricted })
+        #expect(u.map(\.text) == ["一", "二"])
+    }
+
+    /// 言語が変わる所（無音の中）で区間を分け、それぞれの言語で起こす。時刻は区間の始まりの分ずらす。
+    /// （台本の windows は offset 0 の呼び出しごとに進むので、ここでは区間ごとの台本になる）
+    @Test func autoDecodesEachLanguageRunWithItsLanguage() async throws {
+        let core = FakeWhisperCore(windows: [[seg(0, 8, "Hello there")], [seg(0.5, 8.5, "こんにちは")]])
+        core.guess = { samples in samples.count < 9 * 16_000 ? LanguageGuess(ja: 0.01, en: 0.97) : LanguageGuess(ja: 0.9, en: 0.05) }
+        let lines = ProgressLog()
+        let u = try await run(core, tone(8) + silence(1) + tone(9), language: .auto, log: { lines.append($0) })
+        #expect(core.requests.map(\.language) == [.en, .ja])
+        #expect(core.requests.map(\.samples.count) == [Int(8.25 * 16_000), Int(9.75 * 16_000)])
+        #expect(u.map(\.text) == ["Hello there", "こんにちは"])
+        #expect(u.map(\.start.seconds) == [0, 8.75])
+        #expect(lines.values.first == "言語 窓 1/1: en 0–8 秒、ja 8–18 秒")
+    }
+
+    @Test func fixedLanguageNeverAsksForDetection() async throws {
+        let core = FakeWhisperCore(windows: [[seg(0, 8, "一")]])
+        _ = try await run(core, tone(8) + silence(1) + tone(8), language: .ja)
+        #expect(core.detections.isEmpty)
+    }
+
+    @Test func autoOnAnEmptyFileStillMakesOneEmptyRun() async throws {
+        let core = FakeWhisperCore(windows: [[seg(0, 1, "幻")]])
+        let u = try await run(core, [], language: .auto)
+        #expect(core.requests.map(\.samples.count) == [0])
+        #expect(core.requests.map(\.language) == [.ja])
+        #expect(u.isEmpty)
+    }
+}
