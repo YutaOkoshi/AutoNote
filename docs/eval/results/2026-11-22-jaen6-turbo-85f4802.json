@@ -1,0 +1,549 @@
+{
+  "label": "jaen6-turbo-85f4802",
+  "date": "2026-11-22",
+  "build": {
+    "autonote": "autonote",
+    "sha256": "5935d45dba853aa140260e5202c0062b28552c4f45284e4658408c332d6d6e98"
+  },
+  "model": "ggml-large-v3-turbo.bin",
+  "norm_version": "norm-1",
+  "scorer_version": "score-1",
+  "datasets": {
+    "mixed-synth": {
+      "title": "合成の日英混在（AMI TS3003c 後半と党首討論 後半の区間を交互につないだもの）",
+      "kind": "mixed",
+      "unit": "word",
+      "audio_seconds": 287.707,
+      "ref_window": "full",
+      "runs": {
+        "whisper/auto": {
+          "finals": 55,
+          "foreign": {
+            "utterances": 55,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.034,
+          "elapsed": 9.661,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 349,
+            "ref_len": 1086,
+            "hyp_len": 958,
+            "rate": 0.32136279926335176
+          },
+          "er": {
+            "errors": 240,
+            "ref_len": 969,
+            "hyp_len": 908,
+            "sub": 109,
+            "del": 96,
+            "ins": 35,
+            "max_del_run": 19,
+            "rate": 0.2476780185758514
+          },
+          "en_wer": {
+            "errors": 159,
+            "ref_len": 258,
+            "hyp_len": 104,
+            "sub": 5,
+            "del": 154,
+            "ins": 0,
+            "max_del_run": 57,
+            "rate": 0.6162790697674418
+          },
+          "en_retention": {
+            "kept": 102,
+            "ref": 258,
+            "rate": 0.3953488372093023
+          },
+          "ja_cer": {
+            "errors": 153,
+            "ref_len": 707,
+            "hyp_len": 799,
+            "sub": 25,
+            "del": 18,
+            "ins": 110,
+            "max_del_run": 10,
+            "rate": 0.2164073550212164
+          }
+        },
+        "whisper/ja": {
+          "finals": 36,
+          "foreign": {
+            "utterances": 36,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.023,
+          "elapsed": 6.742,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 560,
+            "ref_len": 1086,
+            "hyp_len": 898,
+            "rate": 0.5156537753222836
+          },
+          "er": {
+            "errors": 457,
+            "ref_len": 969,
+            "hyp_len": 862,
+            "sub": 184,
+            "del": 190,
+            "ins": 83,
+            "max_del_run": 41,
+            "rate": 0.4716202270381837
+          },
+          "en_wer": {
+            "errors": 258,
+            "ref_len": 258,
+            "hyp_len": 0,
+            "sub": 0,
+            "del": 258,
+            "ins": 0,
+            "max_del_run": 258,
+            "rate": 1.0
+          },
+          "en_retention": {
+            "kept": 0,
+            "ref": 258,
+            "rate": 0.0
+          },
+          "ja_cer": {
+            "errors": 299,
+            "ref_len": 707,
+            "hyp_len": 858,
+            "sub": 78,
+            "del": 35,
+            "ins": 186,
+            "max_del_run": 18,
+            "rate": 0.4229137199434229
+          }
+        }
+      }
+    },
+    "kantei-us": {
+      "title": "日米共同記者会見 2017-02-10（日英が交互。正解は冒頭の英語と安倍総理の冒頭発言）",
+      "kind": "govinfo",
+      "unit": "word",
+      "audio_seconds": 1200.0,
+      "ref_window": "full",
+      "runs": {
+        "whisper/auto": {
+          "finals": 230,
+          "foreign": {
+            "utterances": 230,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.027,
+          "elapsed": 32.626,
+          "audio_seconds": null,
+          "er": {
+            "errors": 5,
+            "ref_len": 396,
+            "hyp_len": 392,
+            "sub": 1,
+            "del": 4,
+            "ins": 0,
+            "max_del_run": 4,
+            "rate": 0.012626262626262626
+          },
+          "en_wer": {
+            "errors": 5,
+            "ref_len": 396,
+            "hyp_len": 392,
+            "sub": 1,
+            "del": 4,
+            "ins": 0,
+            "max_del_run": 4,
+            "rate": 0.012626262626262626
+          },
+          "en_retention": {
+            "kept": 391,
+            "ref": 396,
+            "rate": 0.9873737373737373
+          },
+          "ja_cer": {
+            "errors": 171,
+            "ref_len": 2270,
+            "hyp_len": 2305,
+            "sub": 70,
+            "del": 33,
+            "ins": 68,
+            "max_del_run": 20,
+            "rate": 0.07533039647577093
+          }
+        },
+        "whisper/ja": {
+          "finals": 191,
+          "foreign": {
+            "utterances": 191,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.019,
+          "elapsed": 23.276,
+          "audio_seconds": null,
+          "er": {
+            "errors": 90,
+            "ref_len": 396,
+            "hyp_len": 306,
+            "sub": 0,
+            "del": 90,
+            "ins": 0,
+            "max_del_run": 90,
+            "rate": 0.22727272727272727
+          },
+          "en_wer": {
+            "errors": 90,
+            "ref_len": 396,
+            "hyp_len": 306,
+            "sub": 0,
+            "del": 90,
+            "ins": 0,
+            "max_del_run": 90,
+            "rate": 0.22727272727272727
+          },
+          "en_retention": {
+            "kept": 306,
+            "ref": 396,
+            "rate": 0.7727272727272727
+          },
+          "ja_cer": {
+            "errors": 339,
+            "ref_len": 2270,
+            "hyp_len": 2056,
+            "sub": 43,
+            "del": 255,
+            "ins": 41,
+            "max_del_run": 231,
+            "rate": 0.14933920704845816
+          }
+        }
+      }
+    },
+    "ingcrowd-05": {
+      "title": "IngCrowd 雑談 05（人生・恋愛・人間関係。40 代女性 2 人、Zoom。逐語・時刻つき。非営利限定）",
+      "kind": "eaf",
+      "unit": "char",
+      "audio_seconds": 736.085,
+      "ref_window": "full",
+      "runs": {
+        "whisper/auto": {
+          "finals": 108,
+          "foreign": {
+            "utterances": 108,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 1,
+          "rtf": 0.027,
+          "elapsed": 20.167,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 2446,
+            "ref_len": 4949,
+            "hyp_len": 2855,
+            "rate": 0.49424126086077996
+          },
+          "er": {
+            "errors": 1842,
+            "ref_len": 4329,
+            "hyp_len": 2849,
+            "sub": 286,
+            "del": 1518,
+            "ins": 38,
+            "max_del_run": 81,
+            "rate": 0.4255024255024255
+          },
+          "tracks": {
+            "me": {
+              "er": {
+                "errors": 668,
+                "ref_len": 1884,
+                "hyp_len": 1510,
+                "sub": 194,
+                "del": 424,
+                "ins": 50,
+                "max_del_run": 61,
+                "rate": 0.35456475583864117
+              },
+              "finals": 68,
+              "repetition": 5,
+              "leak": {
+                "utterances": 1,
+                "chars": 5,
+                "hyp_chars": 1510
+              }
+            },
+            "other": {
+              "er": {
+                "errors": 535,
+                "ref_len": 2445,
+                "hyp_len": 2081,
+                "sub": 105,
+                "del": 397,
+                "ins": 33,
+                "max_del_run": 32,
+                "rate": 0.21881390593047034
+              },
+              "finals": 83,
+              "repetition": 11,
+              "leak": {
+                "utterances": 0,
+                "chars": 0,
+                "hyp_chars": 2081
+              }
+            },
+            "combined": {
+              "errors": 1203,
+              "ref_len": 4329,
+              "rate": 0.2778932778932779
+            }
+          }
+        },
+        "whisper/ja": {
+          "finals": 108,
+          "foreign": {
+            "utterances": 108,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 1,
+          "rtf": 0.024,
+          "elapsed": 17.981,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 2446,
+            "ref_len": 4949,
+            "hyp_len": 2855,
+            "rate": 0.49424126086077996
+          },
+          "er": {
+            "errors": 1842,
+            "ref_len": 4329,
+            "hyp_len": 2849,
+            "sub": 286,
+            "del": 1518,
+            "ins": 38,
+            "max_del_run": 81,
+            "rate": 0.4255024255024255
+          },
+          "tracks": {
+            "me": {
+              "er": {
+                "errors": 668,
+                "ref_len": 1884,
+                "hyp_len": 1510,
+                "sub": 194,
+                "del": 424,
+                "ins": 50,
+                "max_del_run": 61,
+                "rate": 0.35456475583864117
+              },
+              "finals": 68,
+              "repetition": 5,
+              "leak": {
+                "utterances": 1,
+                "chars": 5,
+                "hyp_chars": 1510
+              }
+            },
+            "other": {
+              "er": {
+                "errors": 535,
+                "ref_len": 2445,
+                "hyp_len": 2081,
+                "sub": 105,
+                "del": 397,
+                "ins": 33,
+                "max_del_run": 32,
+                "rate": 0.21881390593047034
+              },
+              "finals": 83,
+              "repetition": 11,
+              "leak": {
+                "utterances": 0,
+                "chars": 0,
+                "hyp_chars": 2081
+              }
+            },
+            "combined": {
+              "errors": 1203,
+              "ref_len": 4329,
+              "rate": 0.2778932778932779
+            }
+          }
+        }
+      }
+    },
+    "ingcrowd-09": {
+      "title": "IngCrowd 雑談 09（コンピューター技術。40 代女性と 30 代女性、Zoom。逐語・時刻つき。非営利限定）",
+      "kind": "eaf",
+      "unit": "char",
+      "audio_seconds": 706.24,
+      "ref_window": "full",
+      "runs": {
+        "whisper/auto": {
+          "finals": 102,
+          "foreign": {
+            "utterances": 102,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 1,
+          "rtf": 0.027,
+          "elapsed": 18.852,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 2465,
+            "ref_len": 5182,
+            "hyp_len": 3105,
+            "rate": 0.47568506368197605
+          },
+          "er": {
+            "errors": 1774,
+            "ref_len": 4491,
+            "hyp_len": 3094,
+            "sub": 305,
+            "del": 1433,
+            "ins": 36,
+            "max_del_run": 44,
+            "rate": 0.39501224671565355
+          },
+          "tracks": {
+            "me": {
+              "er": {
+                "errors": 795,
+                "ref_len": 2629,
+                "hyp_len": 2242,
+                "sub": 278,
+                "del": 452,
+                "ins": 65,
+                "max_del_run": 27,
+                "rate": 0.302396348421453
+              },
+              "finals": 92,
+              "repetition": 3,
+              "leak": {
+                "utterances": 1,
+                "chars": 2,
+                "hyp_chars": 2242
+              }
+            },
+            "other": {
+              "er": {
+                "errors": 634,
+                "ref_len": 1862,
+                "hyp_len": 1391,
+                "sub": 105,
+                "del": 500,
+                "ins": 29,
+                "max_del_run": 83,
+                "rate": 0.34049409237379163
+              },
+              "finals": 108,
+              "repetition": 5,
+              "leak": {
+                "utterances": 0,
+                "chars": 0,
+                "hyp_chars": 1391
+              }
+            },
+            "combined": {
+              "errors": 1429,
+              "ref_len": 4491,
+              "rate": 0.3181919394344244
+            }
+          }
+        },
+        "whisper/ja": {
+          "finals": 102,
+          "foreign": {
+            "utterances": 102,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 1,
+          "rtf": 0.018,
+          "elapsed": 12.719,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 2465,
+            "ref_len": 5182,
+            "hyp_len": 3105,
+            "rate": 0.47568506368197605
+          },
+          "er": {
+            "errors": 1774,
+            "ref_len": 4491,
+            "hyp_len": 3094,
+            "sub": 305,
+            "del": 1433,
+            "ins": 36,
+            "max_del_run": 44,
+            "rate": 0.39501224671565355
+          },
+          "tracks": {
+            "me": {
+              "er": {
+                "errors": 795,
+                "ref_len": 2629,
+                "hyp_len": 2242,
+                "sub": 278,
+                "del": 452,
+                "ins": 65,
+                "max_del_run": 27,
+                "rate": 0.302396348421453
+              },
+              "finals": 92,
+              "repetition": 3,
+              "leak": {
+                "utterances": 1,
+                "chars": 2,
+                "hyp_chars": 2242
+              }
+            },
+            "other": {
+              "er": {
+                "errors": 634,
+                "ref_len": 1862,
+                "hyp_len": 1391,
+                "sub": 105,
+                "del": 500,
+                "ins": 29,
+                "max_del_run": 83,
+                "rate": 0.34049409237379163
+              },
+              "finals": 108,
+              "repetition": 5,
+              "leak": {
+                "utterances": 0,
+                "chars": 0,
+                "hyp_chars": 1391
+              }
+            },
+            "combined": {
+              "errors": 1429,
+              "ref_len": 4491,
+              "rate": 0.3181919394344244
+            }
+          }
+        }
+      }
+    }
+  }
+}

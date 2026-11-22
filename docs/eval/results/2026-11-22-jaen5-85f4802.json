@@ -1,0 +1,133 @@
+{
+  "label": "jaen5-85f4802",
+  "date": "2026-11-22",
+  "build": {
+    "autonote": "autonote",
+    "sha256": "1bc14ff5584864d6b0d22326494e41693c51c0b45c454a3e305ca42eb0532d74"
+  },
+  "model": "ggml-large-v3-turbo-q5_0.bin",
+  "norm_version": "norm-1",
+  "scorer_version": "score-1",
+  "datasets": {
+    "kantei-us": {
+      "title": "日米共同記者会見 2017-02-10（日英が交互。正解は冒頭の英語と安倍総理の冒頭発言）",
+      "kind": "govinfo",
+      "unit": "word",
+      "audio_seconds": 1200.0,
+      "ref_window": "full",
+      "runs": {
+        "whisper/auto": {
+          "finals": 225,
+          "foreign": {
+            "utterances": 225,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.026,
+          "elapsed": 30.845,
+          "audio_seconds": null,
+          "er": {
+            "errors": 4,
+            "ref_len": 396,
+            "hyp_len": 392,
+            "sub": 0,
+            "del": 4,
+            "ins": 0,
+            "max_del_run": 4,
+            "rate": 0.010101010101010102
+          },
+          "en_wer": {
+            "errors": 4,
+            "ref_len": 396,
+            "hyp_len": 392,
+            "sub": 0,
+            "del": 4,
+            "ins": 0,
+            "max_del_run": 4,
+            "rate": 0.010101010101010102
+          },
+          "en_retention": {
+            "kept": 392,
+            "ref": 396,
+            "rate": 0.98989898989899
+          },
+          "ja_cer": {
+            "errors": 174,
+            "ref_len": 2270,
+            "hyp_len": 2305,
+            "sub": 71,
+            "del": 34,
+            "ins": 69,
+            "max_del_run": 20,
+            "rate": 0.07665198237885462
+          }
+        }
+      }
+    },
+    "mixed-synth": {
+      "title": "合成の日英混在（AMI TS3003c 後半と党首討論 後半の区間を交互につないだもの）",
+      "kind": "mixed",
+      "unit": "word",
+      "audio_seconds": 287.707,
+      "ref_window": "full",
+      "runs": {
+        "whisper/auto": {
+          "finals": 56,
+          "foreign": {
+            "utterances": 56,
+            "with_unexpected": 0,
+            "rate": 0.0,
+            "by_script": {}
+          },
+          "repetition": 0,
+          "rtf": 0.03,
+          "elapsed": 8.629,
+          "audio_seconds": null,
+          "er_raw": {
+            "errors": 473,
+            "ref_len": 1086,
+            "hyp_len": 904,
+            "rate": 0.43554327808471455
+          },
+          "er": {
+            "errors": 366,
+            "ref_len": 969,
+            "hyp_len": 821,
+            "sub": 164,
+            "del": 175,
+            "ins": 27,
+            "max_del_run": 43,
+            "rate": 0.37770897832817335
+          },
+          "en_wer": {
+            "errors": 184,
+            "ref_len": 258,
+            "hyp_len": 208,
+            "sub": 130,
+            "del": 52,
+            "ins": 2,
+            "max_del_run": 9,
+            "rate": 0.7131782945736435
+          },
+          "en_retention": {
+            "kept": 159,
+            "ref": 258,
+            "rate": 0.6162790697674418
+          },
+          "ja_cer": {
+            "errors": 283,
+            "ref_len": 707,
+            "hyp_len": 609,
+            "sub": 19,
+            "del": 181,
+            "ins": 83,
+            "max_del_run": 109,
+            "rate": 0.4002828854314003
+          }
+        }
+      }
+    }
+  }
+}
