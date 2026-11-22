@@ -9,31 +9,24 @@ import Testing
         #expect(LanguagePresentation.label(.en) == "英語")
         for machine in [MachineKind.appleSilicon, .intel] {
             let note = LanguagePresentation.autoNote(machine: machine)
-            #expect(note.hasPrefix("自動では、日本語と英語のどちらかを判定して文字起こしします（ほかの言語にはしません）。"))
-            #expect(note.hasSuffix("ライブのエンジンが Apple の音声認識（既定）のときは、録音中の文字起こしは日本語として扱い、録音後の文字起こしで日本語と英語を判定します。"))
+            #expect(note.contains("日本語か英語かを判定します（ほかの言語にはしません）。"))
+            #expect(note.hasSuffix(appleLive))
             #expect(!note.contains("うまく起き"))   // 「起きる」は文字起こしの意味で読みにくい
+            #expect(note.count <= 140, "設定の注記は短く（詳細はガイド）: \(note.count) 字")
         }
     }
 
-    /// 効く場面（交代で話す会議）と効かない場面（一文の中で混ざる言葉）を書く。
-    @Test func appleSiliconNoteSaysWhereAutoWorksAndWhereItDoesNot() {
-        let note = LanguagePresentation.autoNote(machine: .appleSilicon)
-        #expect(note.contains("ある程度まとまった発言ごとに判定し直す"))
-        #expect(note.contains("日本語と英語を交代で話す会議にも使えます"))
-        #expect(note.contains("一文の中で混ざる言葉（日本語の中の英単語など）や短い一言は、前後の言語で起こします"))
-        #expect(note.contains("判定が確かでない発言は、直前の言語のまま起こすことがあります"))
+    private let appleLive = "録音中のエンジンが Apple の音声認識（既定）のときは、録音中の表示・リアルタイム要約・録音中の翻訳は日本語の認識のままで、英語は停止後の文字起こしで出ます。"
+
+    /// Apple シリコンは発言ごと（AutoLanguageSplitting.perBlock）、Intel は約 10 分ごと（perWindow）。
+    @Test func theNoteSaysHowOftenTheFinalTranscriptionJudges() {
+        #expect(LanguagePresentation.autoNote(machine: .appleSilicon).hasPrefix("自動では、停止後の文字起こしで発言ごとに"))
+        #expect(LanguagePresentation.autoNote(machine: .intel).hasPrefix("自動では、停止後の文字起こしで約 10 分ごとに"))
     }
 
-    /// メニューバーと録音画面のピッカーのヘルプ: Apple のライブでは録音中は日本語のまま。
-    @Test func pickerHelpSaysAppleLiveStaysJapanese() {
-        #expect(LanguagePresentation.pickerHelp == "自動（日本語・英語）は、日本語と英語のどちらかを判定して文字起こしします。ライブのエンジンが Apple の音声認識（既定）のときは、録音中の文字起こしは日本語として扱い、録音後の文字起こしで日本語と英語を判定します。")
-    }
-
-    /// Intel は窓ごとに 1 回の判定だけ（AutoLanguageSplitting.perWindow）なので、交代で話す会議に効くとは書かない。
-    @Test func intelNoteSaysTheFinalTranscriptionJudgesOncePerTenMinutes() {
-        let note = LanguagePresentation.autoNote(machine: .intel)
-        #expect(note.contains("確定版は約 10 分ごとに、その始めの部分で判定した言語で起こします"))
-        #expect(note.contains("後から出てきた言語が正しく文字起こしされないことがあります"))
-        #expect(!note.contains("交代で話す会議にも使えます"))
+    /// 録音画面とメニューのピッカーのヘルプ: Apple のライブでの帰結と、英語だけの会議の対処。
+    @Test func pickerHelpSaysWhatAppleLiveDoesAndWhatToDo() {
+        #expect(LanguagePresentation.pickerHelp == "自動（日本語・英語）は、日本語と英語のどちらかを判定して文字起こしします。" + appleLive
+            + "英語だけの会議なら「英語」を選んでください。")
     }
 }
