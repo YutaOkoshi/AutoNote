@@ -2,8 +2,10 @@
 // 窓の後半の言語を外す（日米 2017 の会見で、英語の冒頭に引きずられて日本語の冒頭発言が en の指定で起きていた）。
 // 窓を無音で区切った塊（発話が一定量たまるまで次の無音で切らない）ごとに ja/en を判定し、同じ言語が続く塊をまとめた
 // 「言語の区間」ごとに、その言語を固定して起こす。区間の切れ目は必ず無音の中なので、語の途中で切れない。
-// 判定の揺れを抑えるため、言語を切り替えるのは反対の言語が `switchShare` 以上（ja と en の 2 つの中の割合）のときだけで、
-// 発話の少ない塊は判定せずに直前の言語を引き継ぐ。単一言語の会議では窓全体が 1 区間になり、固定の言語と同じ呼び出しになる。
+// 判定の揺れを抑えるため、言語を切り替えるのは反対の言語が ja と en の 2 つの中の割合で `switchShare` 以上、かつ whisper の
+// 99 言語の中の確率でも `switchProbability` 以上のときだけで、発話の少ない塊は判定せずに直前の言語を引き継ぐ。
+// 確率の条件は、相づち（「うん」）ばかりの塊が en に寄る（en 0.14〜0.76、ja はほぼ 0。IngCrowd の話者別トラック）のを
+// 切り替えに数えないため。実際の切り替えの塊は 0.78〜1.0（日米 2017 は 0.97 以上）だった（2026-11-22 の測定、IMPL-REPORT）。単一言語の会議では窓全体が 1 区間になり、固定の言語と同じ呼び出しになる。
 
 /// Splits one batch window into runs of one language each (Japanese or English) for `.auto` final transcription.
 /// Sample ranges are relative to the window's samples (16 kHz).
@@ -18,12 +20,16 @@ public struct LanguageRunPlanner: Sendable {
         public var judgeSpeech: Double
         /// The share (of Japanese, or of English) between the two the other language needs to take over.
         public var switchShare: Float
+        /// The probability among all of whisper's languages the other language also needs.
+        public var switchProbability: Float
 
-        public init(minSilence: Double = 0.5, blockSpeech: Double = 6, judgeSpeech: Double = 2, switchShare: Float = 0.8) {
+        public init(minSilence: Double = 0.5, blockSpeech: Double = 6, judgeSpeech: Double = 2, switchShare: Float = 0.8,
+                    switchProbability: Float = 0.8) {
             self.minSilence = minSilence
             self.blockSpeech = blockSpeech
             self.judgeSpeech = judgeSpeech
             self.switchShare = switchShare
+            self.switchProbability = switchProbability
         }
     }
 
@@ -44,6 +50,7 @@ public struct LanguageRunPlanner: Sendable {
     public init(config: Config = .init()) {
         precondition(config.minSilence > 0 && config.blockSpeech > 0 && config.judgeSpeech >= 0, "lengths must be positive")
         precondition((0.5...1).contains(config.switchShare), "switchShare must be in 0.5...1")
+        precondition((0...1).contains(config.switchProbability), "switchProbability must be in 0...1")
         self.config = config
     }
 
@@ -77,8 +84,9 @@ public struct LanguageRunPlanner: Sendable {
     }
 
     /// The runs for `blocks` (in order, covering the window) given whisper's guess for each (nil = not judged).
-    /// The first language is the first block whose guess reaches `switchShare` (else the first guess, else Japanese);
-    /// after that a block switches only when its guess reaches `switchShare` for the other language.
+    /// The first language is the first decisive guess (else the first guess, else Japanese); after that a block switches
+    /// only on a decisive guess for the other language. Decisive: the language reaches `switchShare` between the two and
+    /// `switchProbability` on its own.
     public func runs(_ blocks: [Range<Int>], guesses: [LanguageGuess?]) -> [Run] {
         precondition(blocks.count == guesses.count, "one guess per block")
         let decisive = guesses.compactMap { $0 }.first { isDecisive($0) }
@@ -96,7 +104,7 @@ public struct LanguageRunPlanner: Sendable {
     }
 
     private func isDecisive(_ guess: LanguageGuess) -> Bool {
-        let share = guess.japaneseShare
-        return share >= config.switchShare || 1 - share >= config.switchShare
+        let share = guess.language == .ja ? guess.japaneseShare : 1 - guess.japaneseShare
+        return share >= config.switchShare && max(guess.ja, guess.en) >= config.switchProbability
     }
 }

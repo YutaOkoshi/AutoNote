@@ -70,6 +70,13 @@ import Testing
         #expect(planner.runs(b, guesses: [ja, weakEn, ja, ja]) == [.init(samples: 0..<40, language: .ja)])
     }
 
+    /// 相づちばかりの塊は en に寄るが、whisper の確率は低い（0.14〜0.76）。割合だけ高くても切り替えない。
+    @Test func aGuessWithALowProbabilityKeepsThePreviousLanguage() {
+        let backchannel = LanguageGuess(ja: 0.02, en: 0.71)   // en の割合 0.97、確率 0.71 < 0.8
+        #expect(planner.runs(b, guesses: [ja, backchannel, backchannel, ja]) == [.init(samples: 0..<40, language: .ja)])
+        #expect(planner.runs(b, guesses: [backchannel, ja, ja, ja]) == [.init(samples: 0..<40, language: .ja)])   // 最初の言語にもしない
+    }
+
     @Test func unjudgedBlocksKeepThePreviousLanguage() {
         #expect(planner.runs(b, guesses: [en, nil, nil, ja]) == [
             .init(samples: 0..<30, language: .en), .init(samples: 30..<40, language: .ja),
