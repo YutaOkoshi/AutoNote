@@ -454,14 +454,25 @@ extension WhisperBatchTranscriberTests {
         #expect(u.map(\.text) == ["Hello", "こんにちは"])
     }
 
-    /// M2 は自動だけ: 固定の言語では区間 = 窓で、従来どおり（窓の末尾をはみ出すセグメントも残る）。
-    @Test func fixedLanguageKeepsASegmentStartingPastTheWindowAudio() async throws {
-        // 窓 1（0–17 秒）の「尾」は 15.5–19.5 秒。固定の言語でも自動でも始まりは窓の中なので残る
+    /// 窓の末尾をはみ出すセグメントは、固定の言語でも自動でも残る（始まりが窓の中なので）。
+    @Test func aSegmentStartingInsideTheWindowAndRunningPastItIsKept() async throws {
+        // 窓 1（0–17 秒）の「尾」は 15.5–19.5 秒
         for language in [Language.ja, .auto] {
             let core = FakeWhisperCore(windows: [[seg(0, 8, "一"), seg(15.5, 19.5, "尾")], [seg(0, 10, "三")]])
             let u = try await run(core, tone(16) + silence(2) + tone(22), language: language)
             #expect(u.map(\.text) == ["一", "尾", "三"], "\(language)")
         }
+    }
+
+    /// M2 は自動だけ: 区間の終わりより後で始まるセグメント（区間の音声の外に出た幻）は自動では落とし、
+    /// 同じ位置に音声がある固定の言語（区間 = 窓）では残す。
+    @Test func aSegmentStartingPastItsRunIsDroppedOnlyWithAuto() async throws {
+        let script = [[seg(0, 8, "一"), seg(9, 12, "後")], [seg(0.5, 8.5, "二")]]
+        let fixed = FakeWhisperCore(windows: script)
+        #expect(try await run(fixed, tone(8) + silence(1) + tone(9), language: .ja).map(\.text) == ["一", "後"])
+        let auto = FakeWhisperCore(windows: script)
+        auto.guess = { s in s.count < 9 * 16_000 ? enGuess : jaGuess }   // 区間 1（0–8.75 秒）は en、区間 2 は ja
+        #expect(try await run(auto, tone(8) + silence(1) + tone(9), language: .auto).map(\.text) == ["一", "二"])
     }
 
     /// R4: 2 つ目の区間の途中で一時停止 → 再開しても、時刻は元の時間軸。
@@ -494,17 +505,30 @@ extension WhisperBatchTranscriberTests {
         #expect(AutoLanguageSplitting.for(.intel) == .perWindow)
     }
 
-    @Test func perWindowSplittingPassesAutoToWhisperOncePerWindow() async throws {
+    @Test func perWindowSplittingJudgesOncePerWindowAndPassesTheLanguage() async throws {
         let core = FakeWhisperCore(windows: [[seg(0, 8, "一")], [seg(0, 9, "二")]])
         let u = try await WhisperBatchTranscriber(core: core, gate: BatchGate(), windows: small, splitting: .perWindow, log: { _ in })
             .transcribe(file: try wavFile(tone(8) + silence(1) + tone(7) + silence(2) + tone(22)), language: .auto,
                         hints: [], progress: { _ in })
-        #expect(core.detections.isEmpty)
-        #expect(core.requests.map(\.language) == [.auto, .auto])
+        #expect(core.detections.count == 2)
+        #expect(core.requests.map(\.language) == [.ja, .ja])
         #expect(u.map(\.text) == ["一", "二"])
     }
 
-    /// 判定の間も進捗が進み（窓の 1 割まで）、全体で単調に 1 まで届く。
+    /// 正しさ F6: 窓ごと（Intel）でも、窓の先頭の無音ではなく発話の始まりから判定する。無音の窓は直前の窓の言語。
+    @Test func perWindowSplittingJudgesFromWhereSpeechStarts() async throws {
+        let core = FakeWhisperCore(windows: [[seg(10, 16, "Hello")], []])
+        core.guess = { _ in enGuess }
+        let u = try await WhisperBatchTranscriber(core: core, gate: BatchGate(), windows: small, splitting: .perWindow, log: { _ in })
+            .transcribe(file: try wavFile(silence(10) + tone(6) + silence(24)), language: .auto, hints: [], progress: { _ in })
+        let first = try #require(core.detections.first)
+        #expect(core.detections.count == 1)   // 窓 2 は無音なので判定しない
+        #expect(abs(Double(first.count) / 16_000 - (Double(core.requests[0].samples.count) / 16_000 - 9.8)) < 0.05)
+        #expect(core.requests.map(\.language) == [.en, .en])
+        #expect(u.map(\.text) == ["Hello"])
+    }
+
+    /// 判定の間も進捗が進み（窓の judgingShare = 4 割まで）、全体で単調に 1 まで届く。
     @Test func progressMovesWhileJudgingAndStaysMonotonic() async throws {
         let core = FakeWhisperCore(windows: [[seg(0, 8, "Hello")], [seg(0.5, 8.5, "こんにちは")]])
         core.guess = { s in s.count < 9 * 16_000 ? enGuess : jaGuess }

@@ -30,7 +30,7 @@ public actor WhisperBatchTranscriber: BatchTranscriber {
     private let log: @Sendable (String) -> Void
 
     /// The share of a window's progress that the language judgements take with `.auto` per block (the rest is decoding).
-    /// Measured: the judgements are 0.32–0.45 of the auto time on single-language data (batch RTF auto vs fixed,
+    /// Measured: the judgements are 0.30–0.45 of the auto time on single-language data (batch RTF auto vs fixed,
     /// docs/eval/results/2026-11-22-jaen4-da19855.json), so the bar does not stall at the start of each window.
     public static let judgingShare = 0.4
 
@@ -81,6 +81,12 @@ public actor WhisperBatchTranscriber: BatchTranscriber {
                 let judged = try await languageRuns(pcm, previous: previous) { windowProgress(judging * $0) }
                 runs = judged.runs
                 if judged.judged { previous = runs.last?.language }
+            } else if language == .auto {
+                // 窓ごと（Intel）: 窓の先頭が無音でも発話の始まりから判定する（whisper 自身の判定は窓の先頭 30 秒）
+                var guess: LanguageGuess?
+                if let start = languages.speechStart(pcm) { guess = try await judge(Array(pcm[start...])) }
+                if let guess { previous = guess.language }
+                runs = [LanguageRunPlanner.Run(samples: 0..<pcm.count, language: guess?.language ?? previous ?? .ja)]
             } else {
                 runs = [LanguageRunPlanner.Run(samples: 0..<pcm.count, language: language)]
             }
@@ -208,3 +214,4 @@ private final class Locked<Value: Sendable>: Sendable {
     init(_ value: Value) { mutex = Mutex(value) }
     func withLock<R: Sendable>(_ body: (inout sending Value) throws -> sending R) rethrows -> R { try mutex.withLock(body) }
 }
+

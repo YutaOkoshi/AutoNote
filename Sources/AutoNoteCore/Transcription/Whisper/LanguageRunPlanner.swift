@@ -4,19 +4,22 @@
 // 「言語の区間」ごとに、その言語を固定して起こす。区間の切れ目は必ず無音の中なので、語の途中で切れない。
 // 判定の揺れを抑えるため、言語を切り替えるのは反対の言語が ja と en の 2 つの中の割合で `switchShare` 以上、かつ whisper の
 // 99 言語の中の確率でも `switchProbability` 以上のときだけで、発話の少ない塊は判定せずに直前の言語を引き継ぐ。
-// 確率の条件は、相づち（「うん」）の多い塊が en に寄る（en 0.14〜0.76、割合は 0.9 以上。IngCrowd の話者別トラック）のを
-// 切り替えに数えないため。本物の切り替えの塊は日米 2017 で 0.78〜1.0、合成の混在で 0.53〜1.0 と重なっていて、0.8 未満の
-// 切り替え（合成の混在で 13 か所中 3 か所）は直前の言語のまま起こす。単一言語の会議のトラックで誤って切り替える方が崩れ方が
-// 大きいので、この取りこぼしを受け入れた。測定と理由: docs/eval/results/2026-11-22-auto-language-probabilities.md
+// 確率の条件は、相づち（「うん」）の多い塊が en に寄る（en 0.14〜0.76、割合は 0.9 以上。IngCrowd の話者別トラック。
+// 既定の large-v3-turbo でも q5_0 でも同じ）のを切り替えに数えないため。本物の切り替えの塊は日米 2017 で 0.76〜1.0、
+// 合成の混在で 0.53〜1.0 と重なっていて、0.8 未満の切り替えは直前の言語のまま起こす（合成の混在で 4 区間、両方向）。
+// 単一言語の会議のトラックで誤って切り替える方が崩れ方が大きいので、この取りこぼしを受け入れた。
+// 測定と理由: docs/eval/results/2026-11-22-auto-language-probabilities.md
 // 窓の先頭は直前の窓の言語から始め、窓の途中と同じ規則で切り替える（窓の切れ目の位置で結果が変わらないように）。
 // 直前の窓が無いとき（最初の窓、まだ判定が返っていないとき）だけ、窓の中の最初の確かな判定を先読みする。単一言語の会議では窓全体が 1 区間になり、固定の言語と同じ呼び出しになる。
 
 /// How finely the final transcription judges the language with `.auto`.
 public enum AutoLanguageSplitting: Equatable, Sendable {
     /// Each block of a window (`LanguageRunPlanner`): one extra encoder pass per block, about 3–4 times the encoder work
-    /// of decoding alone. Measured on Apple Silicon (Metal): batch RTF 0.012–0.018 → 0.019–0.030 (about 1.3–1.8×).
+    /// of decoding alone. Measured on Apple Silicon (Metal): batch RTF 0.012–0.018 → 0.019–0.030 with q5_0; about 1.1–1.8× the time with a fixed language (large-v3-turbo
+    /// and q5_0, docs/eval/results/2026-11-22-auto-language-probabilities.md §4).
     case perBlock
-    /// Once per window, on its first 30 s (whisper's own place to judge): no extra work.
+    /// Once per window, on the 30 s from where its speech starts (`LanguageRunPlanner.speechStart`; whisper's own judging
+    /// looked at the window's first 30 s, silent or not): one judgement per window, as before.
     case perWindow
 
     /// Per block only with Metal. On Intel the encoder runs on the CPU and the large models' final transcription already
