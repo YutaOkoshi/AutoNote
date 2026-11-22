@@ -83,6 +83,20 @@ import Testing
         ])
     }
 
+    @Test func previousLanguageComesBeforeAnUndecidedGuessButAfterADecisiveOne() {
+        let weakEn = LanguageGuess(ja: 0.3, en: 0.6)
+        #expect(planner.runs(b, guesses: [nil, weakEn, nil, nil], previous: .ja) == [.init(samples: 0..<40, language: .ja)])
+        #expect(planner.runs(b, guesses: [nil, nil, nil, nil], previous: .en) == [.init(samples: 0..<40, language: .en)])
+        #expect(planner.runs(b, guesses: [nil, weakEn, ja, ja], previous: .en) == [.init(samples: 0..<40, language: .ja)])
+    }
+
+    @Test func speechStartIsJustBeforeTheFirstSpeech() {
+        #expect(planner.speechStart(silence(3) + tone(1)) == s(2.8))
+        #expect(planner.speechStart(tone(1)) == 0)
+        #expect(planner.speechStart(silence(5)) == nil)
+        #expect(planner.speechStart(silence(3) + tone(0.1)) == nil)   // 0.3 秒に足りない
+    }
+
     @Test func theFirstLanguageIsTheFirstDecisiveGuess() {
         let weakEn = LanguageGuess(ja: 0.3, en: 0.6)
         #expect(planner.runs(b, guesses: [nil, weakEn, ja, ja]) == [.init(samples: 0..<40, language: .ja)])

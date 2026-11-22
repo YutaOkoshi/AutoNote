@@ -7,6 +7,21 @@
 // 確率の条件は、相づち（「うん」）ばかりの塊が en に寄る（en 0.14〜0.76、ja はほぼ 0。IngCrowd の話者別トラック）のを
 // 切り替えに数えないため。実際の切り替えの塊は 0.78〜1.0（日米 2017 は 0.97 以上）だった（2026-11-22 の測定、IMPL-REPORT）。単一言語の会議では窓全体が 1 区間になり、固定の言語と同じ呼び出しになる。
 
+/// How finely the final transcription judges the language with `.auto`.
+public enum AutoLanguageSplitting: Equatable, Sendable {
+    /// Each block of a window (`LanguageRunPlanner`): one extra encoder pass per block, about 3–4 times the encoder work
+    /// of decoding alone. Measured on Apple Silicon (Metal): batch RTF 0.012–0.018 → 0.019–0.029.
+    case perBlock
+    /// Once per window, on its first 30 s (whisper's own place to judge): no extra work.
+    case perWindow
+
+    /// Per block only with Metal. On Intel the encoder runs on the CPU and the large models' final transcription already
+    /// takes about as long as the recording (`WhisperModelFit`), so the extra passes could make it several times longer.
+    public static func `for`(_ machine: MachineKind) -> AutoLanguageSplitting {
+        machine == .appleSilicon ? .perBlock : .perWindow
+    }
+}
+
 /// Splits one batch window into runs of one language each (Japanese or English) for `.auto` final transcription.
 /// Sample ranges are relative to the window's samples (16 kHz).
 public struct LanguageRunPlanner: Sendable {
@@ -83,14 +98,39 @@ public struct LanguageRunPlanner: Sendable {
             .hasSpeech(in: pcm, from: Double(block.lowerBound) / Self.sampleRate, to: Double(block.upperBound) / Self.sampleRate)
     }
 
+    /// Where speech starts in `pcm` (a little before the first 20 ms frame at or above `SilenceDetector`'s threshold),
+    /// or nil when `pcm` has less than `SilenceDetector`'s minimum speech. Used to judge a window none of whose blocks has
+    /// enough speech: whisper looks at the 30 s from here.
+    public func speechStart(_ pcm: [Int16]) -> Int? {
+        guard SilenceDetector().hasSpeech(in: pcm, from: 0, to: Double(pcm.count) / Self.sampleRate) else { return nil }
+        let frame = 320
+        var i = 0
+        while i < pcm.count {
+            if Self.isSpeech(pcm[i..<min(i + frame, pcm.count)]) { return max(0, i - Int(0.2 * Self.sampleRate)) }
+            i += frame
+        }
+        return nil
+    }
+
+    /// `SilenceDetector`'s speech frame: RMS (Int16 normalised to ±1) at or above 0.01.
+    private static func isSpeech(_ frame: ArraySlice<Int16>) -> Bool {
+        guard !frame.isEmpty else { return false }
+        var sum = 0.0
+        for sample in frame {
+            let v = Double(sample) / 32_768
+            sum += v * v
+        }
+        return (sum / Double(frame.count)).squareRoot() >= 0.01
+    }
+
     /// The runs for `blocks` (in order, covering the window) given whisper's guess for each (nil = not judged).
-    /// The first language is the first decisive guess (else the first guess, else Japanese); after that a block switches
-    /// only on a decisive guess for the other language. Decisive: the language reaches `switchShare` between the two and
-    /// `switchProbability` on its own.
-    public func runs(_ blocks: [Range<Int>], guesses: [LanguageGuess?]) -> [Run] {
+    /// The first language is the first decisive guess, else `previous` (the language the window before ended in), else
+    /// the first guess, else Japanese; after that a block switches only on a decisive guess for the other language.
+    /// Decisive: the language reaches `switchShare` between the two and `switchProbability` on its own.
+    public func runs(_ blocks: [Range<Int>], guesses: [LanguageGuess?], previous: Language? = nil) -> [Run] {
         precondition(blocks.count == guesses.count, "one guess per block")
         let decisive = guesses.compactMap { $0 }.first { isDecisive($0) }
-        var current = decisive?.language ?? guesses.compactMap { $0 }.first?.language ?? .ja
+        var current = decisive?.language ?? previous ?? guesses.compactMap { $0 }.first?.language ?? .ja
         var runs: [Run] = []
         for (block, guess) in zip(blocks, guesses) {
             if let guess, guess.language != current, isDecisive(guess) { current = guess.language }

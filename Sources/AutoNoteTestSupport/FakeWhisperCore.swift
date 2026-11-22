@@ -9,7 +9,8 @@ import Synchronization
 /// the current window.
 /// `init(fixedText:)` is for live windows: one segment spanning the window and one token at its start.
 /// `init(failure:)` records each request and throws `failure`.
-/// `detectLanguage` answers with `guess` (Japanese by default) and records the samples it was asked about.
+/// `detectLanguage` answers with `guess` (Japanese by default), or throws `detectionError` when set, and records the
+/// samples it was asked about.
 public final class FakeWhisperCore: WhisperCore, @unchecked Sendable {
     private enum Script {
         case segments([WhisperSegment], delay: Duration)
@@ -34,6 +35,13 @@ public final class FakeWhisperCore: WhisperCore, @unchecked Sendable {
         set { guessBox.withLock { $0 = newValue } }
     }
     private let guessBox = Mutex<@Sendable ([Float]) -> LanguageGuess>({ _ in LanguageGuess(ja: 0.9, en: 0.1) })
+
+    /// Thrown by `detectLanguage` when set (decoding still follows the script).
+    public var detectionError: (any Error)? {
+        get { errorBox.withLock { $0 } }
+        set { errorBox.withLock { $0 = newValue } }
+    }
+    private let errorBox = Mutex<(any Error)?>(nil)
 
     public init(segments: [WhisperSegment], delay: Duration = .zero) {
         script = .segments(segments, delay: delay)
@@ -60,6 +68,7 @@ public final class FakeWhisperCore: WhisperCore, @unchecked Sendable {
     public func detectLanguage(_ samples: [Float]) async throws -> LanguageGuess {
         state.withLock { $0.detections.append(samples) }
         if case let .failure(error) = script { throw error }
+        if let detectionError { throw detectionError }
         return guess(samples)
     }
 
