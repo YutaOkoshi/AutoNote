@@ -83,11 +83,26 @@ import Testing
         ])
     }
 
-    @Test func previousLanguageComesBeforeAnUndecidedGuessButAfterADecisiveOne() {
+    /// 窓の先頭は直前の窓の言語から始め、窓の途中と同じく確かな反対の判定でだけ切り替える（先読みしない）。
+    @Test func aWindowStartsInThePreviousLanguageAndSwitchesLikeAnywhereElse() {
         let weakEn = LanguageGuess(ja: 0.3, en: 0.6)
         #expect(planner.runs(b, guesses: [nil, weakEn, nil, nil], previous: .ja) == [.init(samples: 0..<40, language: .ja)])
         #expect(planner.runs(b, guesses: [nil, nil, nil, nil], previous: .en) == [.init(samples: 0..<40, language: .en)])
-        #expect(planner.runs(b, guesses: [nil, weakEn, ja, ja], previous: .en) == [.init(samples: 0..<40, language: .ja)])
+        #expect(planner.runs(b, guesses: [nil, weakEn, ja, ja], previous: .en) == [
+            .init(samples: 0..<20, language: .en), .init(samples: 20..<40, language: .ja),
+        ])
+        #expect(planner.runs(b, guesses: [ja, ja, en, en], previous: .en) == [
+            .init(samples: 0..<20, language: .ja), .init(samples: 20..<40, language: .en),
+        ])
+    }
+
+    /// 同じ並びなら、窓の先頭でも窓の途中でも同じ所で切り替わる（窓の切れ目の位置で結果が変わらない）。
+    @Test func theSameGuessesSwitchAtTheSamePlaceWhereverTheWindowStarts() {
+        let weakEn = LanguageGuess(ja: 0.3, en: 0.6)
+        let whole = planner.runs(b + [40..<50, 50..<60], guesses: [en, en, nil, weakEn, ja, ja])
+        let second = planner.runs([20..<30, 30..<40, 40..<50, 50..<60], guesses: [nil, weakEn, ja, ja], previous: .en)
+        #expect(whole == [.init(samples: 0..<40, language: .en), .init(samples: 40..<60, language: .ja)])
+        #expect(second == [.init(samples: 20..<40, language: .en), .init(samples: 40..<60, language: .ja)])
     }
 
     @Test func speechStartIsJustBeforeTheFirstSpeech() {

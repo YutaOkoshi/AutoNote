@@ -4,13 +4,17 @@
 // 「言語の区間」ごとに、その言語を固定して起こす。区間の切れ目は必ず無音の中なので、語の途中で切れない。
 // 判定の揺れを抑えるため、言語を切り替えるのは反対の言語が ja と en の 2 つの中の割合で `switchShare` 以上、かつ whisper の
 // 99 言語の中の確率でも `switchProbability` 以上のときだけで、発話の少ない塊は判定せずに直前の言語を引き継ぐ。
-// 確率の条件は、相づち（「うん」）ばかりの塊が en に寄る（en 0.14〜0.76、ja はほぼ 0。IngCrowd の話者別トラック）のを
-// 切り替えに数えないため。実際の切り替えの塊は 0.78〜1.0（日米 2017 は 0.97 以上）だった（2026-11-22 の測定、IMPL-REPORT）。単一言語の会議では窓全体が 1 区間になり、固定の言語と同じ呼び出しになる。
+// 確率の条件は、相づち（「うん」）の多い塊が en に寄る（en 0.14〜0.76、割合は 0.9 以上。IngCrowd の話者別トラック）のを
+// 切り替えに数えないため。本物の切り替えの塊は日米 2017 で 0.78〜1.0、合成の混在で 0.53〜1.0 と重なっていて、0.8 未満の
+// 切り替え（合成の混在で 13 か所中 3 か所）は直前の言語のまま起こす。単一言語の会議のトラックで誤って切り替える方が崩れ方が
+// 大きいので、この取りこぼしを受け入れた。測定と理由: docs/eval/results/2026-11-22-auto-language-probabilities.md
+// 窓の先頭は直前の窓の言語から始め、窓の途中と同じ規則で切り替える（窓の切れ目の位置で結果が変わらないように）。
+// 直前の窓が無いとき（最初の窓、まだ判定が返っていないとき）だけ、窓の中の最初の確かな判定を先読みする。単一言語の会議では窓全体が 1 区間になり、固定の言語と同じ呼び出しになる。
 
 /// How finely the final transcription judges the language with `.auto`.
 public enum AutoLanguageSplitting: Equatable, Sendable {
     /// Each block of a window (`LanguageRunPlanner`): one extra encoder pass per block, about 3–4 times the encoder work
-    /// of decoding alone. Measured on Apple Silicon (Metal): batch RTF 0.012–0.018 → 0.019–0.029.
+    /// of decoding alone. Measured on Apple Silicon (Metal): batch RTF 0.012–0.018 → 0.019–0.030 (about 1.3–1.8×).
     case perBlock
     /// Once per window, on its first 30 s (whisper's own place to judge): no extra work.
     case perWindow
@@ -124,13 +128,14 @@ public struct LanguageRunPlanner: Sendable {
     }
 
     /// The runs for `blocks` (in order, covering the window) given whisper's guess for each (nil = not judged).
-    /// The first language is the first decisive guess, else `previous` (the language the window before ended in), else
-    /// the first guess, else Japanese; after that a block switches only on a decisive guess for the other language.
-    /// Decisive: the language reaches `switchShare` between the two and `switchProbability` on its own.
+    /// The window starts in `previous` (the language the window before ended in); with none, in the first decisive guess
+    /// of this window, else its first guess, else Japanese. A block switches only on a decisive guess for the other
+    /// language, at the start of the window as anywhere else. Decisive: the language reaches `switchShare` between the
+    /// two and `switchProbability` on its own.
     public func runs(_ blocks: [Range<Int>], guesses: [LanguageGuess?], previous: Language? = nil) -> [Run] {
         precondition(blocks.count == guesses.count, "one guess per block")
         let decisive = guesses.compactMap { $0 }.first { isDecisive($0) }
-        var current = decisive?.language ?? previous ?? guesses.compactMap { $0 }.first?.language ?? .ja
+        var current = previous ?? decisive?.language ?? guesses.compactMap { $0 }.first?.language ?? .ja
         var runs: [Run] = []
         for (block, guess) in zip(blocks, guesses) {
             if let guess, guess.language != current, isDecisive(guess) { current = guess.language }
