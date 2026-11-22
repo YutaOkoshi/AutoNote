@@ -370,7 +370,8 @@ extension WhisperBatchTranscriberTests {
         let lines = ProgressLog()
         let u = try await run(core, tone(8) + silence(1) + tone(9), language: .auto, log: { lines.append($0) })
         #expect(core.requests.map(\.language) == [.en, .ja])
-        #expect(core.requests.map(\.samples.count) == [Int(8.25 * 16_000), Int(9.75 * 16_000)])
+        let expectedCounts: [Int] = [Int(8.25 * 16_000), Int(9.75 * 16_000)]
+        #expect(core.requests.map(\.samples.count) == expectedCounts)
         #expect(u.map(\.text) == ["Hello there", "こんにちは"])
         #expect(u.map(\.start.seconds) == [0, 8.75])
         #expect(lines.values.first == "言語 窓 1/1: en 0–8 秒、ja 8–18 秒")
@@ -468,11 +469,14 @@ extension WhisperBatchTranscriberTests {
     /// 同じ位置に音声がある固定の言語（区間 = 窓）では残す。
     @Test func aSegmentStartingPastItsRunIsDroppedOnlyWithAuto() async throws {
         let script = [[seg(0, 8, "一"), seg(9, 12, "後")], [seg(0.5, 8.5, "二")]]
+        let pcm: [Int16] = tone(8) + silence(1) + tone(9)
         let fixed = FakeWhisperCore(windows: script)
-        #expect(try await run(fixed, tone(8) + silence(1) + tone(9), language: .ja).map(\.text) == ["一", "後"])
+        let fixedTexts: [String] = try await run(fixed, pcm, language: .ja).map(\.text)
+        #expect(fixedTexts == ["一", "後"])
         let auto = FakeWhisperCore(windows: script)
         auto.guess = { s in s.count < 9 * 16_000 ? enGuess : jaGuess }   // 区間 1（0–8.75 秒）は en、区間 2 は ja
-        #expect(try await run(auto, tone(8) + silence(1) + tone(9), language: .auto).map(\.text) == ["一", "二"])
+        let autoTexts: [String] = try await run(auto, pcm, language: .auto).map(\.text)
+        #expect(autoTexts == ["一", "二"])
     }
 
     /// R4: 2 つ目の区間の途中で一時停止 → 再開しても、時刻は元の時間軸。
@@ -523,7 +527,10 @@ extension WhisperBatchTranscriberTests {
             .transcribe(file: try wavFile(silence(10) + tone(6) + silence(24)), language: .auto, hints: [], progress: { _ in })
         let first = try #require(core.detections.first)
         #expect(core.detections.count == 1)   // 窓 2 は無音なので判定しない
-        #expect(abs(Double(first.count) / 16_000 - (Double(core.requests[0].samples.count) / 16_000 - 9.8)) < 0.05)
+        let judged: Double = Double(first.count) / 16_000
+        let window: Double = Double(core.requests[0].samples.count) / 16_000
+        let fromSpeech: Double = window - 9.8   // 発話は 10 秒から、判定は 0.2 秒手前から
+        #expect(abs(judged - fromSpeech) < 0.05)
         #expect(core.requests.map(\.language) == [.en, .en])
         #expect(u.map(\.text) == ["Hello"])
     }
@@ -535,7 +542,8 @@ extension WhisperBatchTranscriberTests {
         let box = ProgressBox()
         _ = try await run(core, tone(8) + silence(1) + tone(9), language: .auto, progress: { box.append($0) })
         let values = box.values
-        #expect(values.contains { $0 > 0 && $0 <= WhisperBatchTranscriber.judgingShare + 1e-9 })
+        let judgingEnd: Double = WhisperBatchTranscriber.judgingShare + 1e-9
+        #expect(values.contains { $0 > 0 && $0 <= judgingEnd })
         #expect(zip(values, values.dropFirst()).allSatisfy { $0 <= $1 })
         #expect(values.last == 1.0)
     }
