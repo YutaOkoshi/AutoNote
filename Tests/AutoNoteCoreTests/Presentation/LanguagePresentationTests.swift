@@ -7,7 +7,25 @@ import Testing
         #expect(LanguagePresentation.label(.auto) == "自動（日本語・英語）")
         #expect(LanguagePresentation.label(.ja) == "日本語")
         #expect(LanguagePresentation.label(.en) == "英語")
-        #expect(LanguagePresentation.autoNote.contains("日本語と英語のどちらかを自動で判定"))
-        #expect(LanguagePresentation.autoNote.contains("Apple の音声認識のエンジンでは、自動は日本語として扱います"))
+        for machine in [MachineKind.appleSilicon, .intel] {
+            let note = LanguagePresentation.autoNote(machine: machine)
+            #expect(note.hasPrefix("自動では、日本語と英語のどちらかを判定して文字起こしします（ほかの言語にはしません）。"))
+            #expect(note.hasSuffix("Apple の音声認識のエンジンでは、自動は日本語として扱います。"))
+        }
+    }
+
+    /// 効く場面（交代で話す会議）と効かない場面（一文の中で混ざる言葉）を書く。
+    @Test func appleSiliconNoteSaysWhereAutoWorksAndWhereItDoesNot() {
+        let note = LanguagePresentation.autoNote(machine: .appleSilicon)
+        #expect(note.contains("ある程度まとまった発言ごとに判定し直す"))
+        #expect(note.contains("日本語と英語を交代で話す会議にも使えます"))
+        #expect(note.contains("一文の中で混ざる言葉（日本語の中の英単語など）や短い一言は、前後の言語で起こします"))
+    }
+
+    /// Intel は窓ごとに 1 回の判定だけ（AutoLanguageSplitting.perWindow）なので、交代で話す会議に効くとは書かない。
+    @Test func intelNoteSaysTheFinalTranscriptionJudgesOncePerTenMinutes() {
+        let note = LanguagePresentation.autoNote(machine: .intel)
+        #expect(note.contains("確定版は約 10 分ごとに、その始めの部分で判定した言語で起こします"))
+        #expect(!note.contains("交代で話す会議にも使えます"))
     }
 }

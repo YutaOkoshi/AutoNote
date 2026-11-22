@@ -34,7 +34,7 @@ struct TranscriptionTab: View {
                         Text(LanguagePresentation.label(.en)).tag(Language.en)
                     }
                     .onChange(of: language) { Task { await refreshEntries() } }
-                    Text(LanguagePresentation.autoNote)
+                    Text(LanguagePresentation.autoNote(machine: profile.kind))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("リアルタイム") {
