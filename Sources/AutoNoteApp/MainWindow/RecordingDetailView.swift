@@ -27,6 +27,7 @@ struct RecordingDetailView: View {
                     Text(LanguagePresentation.label(.ja)).tag(Language.ja)
                     Text(LanguagePresentation.label(.en)).tag(Language.en)
                 }
+                .help(LanguagePresentation.pickerHelp)
                 .fixedSize()
             }
             .disabled(!active)

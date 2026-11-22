@@ -102,6 +102,7 @@ struct MenuBarContent: View {
                 Text(LanguagePresentation.label(.ja)).tag(Language.ja)
                 Text(LanguagePresentation.label(.en)).tag(Language.en)
             }
+            .help(LanguagePresentation.pickerHelp)
         case .minutesMissing(let id, let label):
             Button(label) { run(model, .notice(.retry(id))) }
         case .automationFailed(let name, let meetingID):
