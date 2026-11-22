@@ -98,10 +98,11 @@ struct MenuBarContent: View {
             Button("取り消す") { run(model, .cancelCountdown) }
         case .language(let current):
             Picker("言語", selection: Binding(get: { current }, set: { run(model, .setLanguage($0)) })) {
-                Text("自動").tag(Language.auto)
-                Text("日本語").tag(Language.ja)
-                Text("英語").tag(Language.en)
+                Text(LanguagePresentation.label(.auto)).tag(Language.auto)
+                Text(LanguagePresentation.label(.ja)).tag(Language.ja)
+                Text(LanguagePresentation.label(.en)).tag(Language.en)
             }
+            .help(LanguagePresentation.pickerHelp)
         case .minutesMissing(let id, let label):
             Button(label) { run(model, .notice(.retry(id))) }
         case .automationFailed(let name, let meetingID):

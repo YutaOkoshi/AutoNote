@@ -77,8 +77,8 @@ import Testing
         #expect(finals.map(\.text) == ["テスト"])
     }
 
-    /// 言語を固定したら、その言語で出てよい文字種にデコーダの語彙を絞る（ja でキリル文字などが混ざるのを防ぐ）。
-    @Test(arguments: [(Language.ja, ScriptRestriction.japanese), (.en, .english), (.auto, .unrestricted)])
+    /// その言語で出てよい文字種にデコーダの語彙を絞る（ja でキリル文字などが混ざるのを防ぐ）。自動は日本語か英語なので日本語と同じ。
+    @Test(arguments: [(Language.ja, ScriptRestriction.japanese), (.en, .english), (.auto, .japanese)])
     func requestCarriesTheScriptRestrictionOfTheLanguage(language: Language, expected: ScriptRestriction) async throws {
         let core = FakeWhisperCore(fixedText: "テスト"); let t = WhisperLiveTranscriber(core: core)
         let s = try await t.start(language: language, hints: [])

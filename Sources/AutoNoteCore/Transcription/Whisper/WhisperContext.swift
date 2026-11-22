@@ -56,8 +56,32 @@ public final class WhisperContext: WhisperCore, @unchecked Sendable {
         }
     }
 
+    public func detectLanguage(_ samples: [Float]) async throws -> LanguageGuess {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<LanguageGuess, Error>) in
+            queue.async { [self] in
+                continuation.resume(with: Result { try detectSync(samples) })
+            }
+        }
+    }
+
+    /// Runs on `queue`. The same detection as whisper's `"auto"` (one encoder pass over the first 30 s, then the
+    /// language tokens after SOT), but only Japanese and English are read off it.
+    private func detectSync(_ samples: [Float]) throws -> LanguageGuess {
+        guard !samples.isEmpty else { return LanguageGuess(ja: 0, en: 0) }
+        let mel = samples.withUnsafeBufferPointer { samples in
+            whisper_pcm_to_mel_with_state(model.context, state, samples.baseAddress, Int32(samples.count), threads)
+        }
+        if mel != 0 { throw TranscriptionError.whisperFailed(mel) }
+        var probabilities = [Float](repeating: 0, count: Int(whisper_lang_max_id()) + 1)
+        let top = whisper_lang_auto_detect_with_state(model.context, state, 0, threads, &probabilities)
+        if top < 0 { throw TranscriptionError.whisperFailed(top) }
+        return LanguageGuess(ja: probabilities[Int(whisper_lang_id("ja"))], en: probabilities[Int(whisper_lang_id("en"))])
+    }
+
     /// Runs on `queue`.
     private func runSync(_ r: WhisperRunRequest, _ callbacks: RunCallbacks) throws -> WhisperRunOutcome {
+        // 「自動」は whisper の 99 言語の判定ではなく、日本語と英語の確率の大きい方で起こす
+        let language = r.language == .auto ? try detectSync(r.samples).language : r.language
         var params = whisper_full_default_params(r.mode == .batch ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY)
         params.n_threads = threads
         switch r.mode {
@@ -103,7 +127,7 @@ public final class WhisperContext: WhisperCore, @unchecked Sendable {
         }
 
         let code = withExtendedLifetime(callbacks) {
-            Self.languageCode(r.language).withCString { language in
+            Self.languageCode(language).withCString { language in
                 withOptionalCString(r.prompt) { prompt in
                     params.language = language
                     params.initial_prompt = prompt
@@ -118,11 +142,11 @@ public final class WhisperContext: WhisperCore, @unchecked Sendable {
         return .completed
     }
 
+    /// `.auto` never reaches whisper (`runSync` resolves it to ja or en first).
     static func languageCode(_ language: Language) -> String {
         switch language {
-        case .ja: "ja"
+        case .ja, .auto: "ja"
         case .en: "en"
-        case .auto: "auto"
         }
     }
 }

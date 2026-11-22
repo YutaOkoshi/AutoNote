@@ -54,7 +54,7 @@ public struct TranscriberFactory: Sendable {
                                     log: (@Sendable (String) -> Void)? = nil) throws -> any BatchTranscriber {
         WhisperBatchTranscriber(
             core: try WhisperContext(modelURL: modelURL, machine: machine, threads: threads), gate: gate,
-            log: log ?? WhisperBatchTranscriber.systemLog)
+            splitting: .for(machine), log: log ?? WhisperBatchTranscriber.systemLog)
     }
 
     private func modelURL(_ c: EngineChoice) async throws -> URL {

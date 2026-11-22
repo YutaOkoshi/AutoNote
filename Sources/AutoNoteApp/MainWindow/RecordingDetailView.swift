@@ -23,10 +23,11 @@ struct RecordingDetailView: View {
                 Button("ブックマーク", systemImage: "bookmark") { run(.bookmark(nil)) }
                 Spacer()
                 Picker("言語", selection: Binding(get: { r.language }, set: { run(.setLanguage($0)) })) {
-                    Text("自動").tag(Language.auto)
-                    Text("日本語").tag(Language.ja)
-                    Text("英語").tag(Language.en)
+                    Text(LanguagePresentation.label(.auto)).tag(Language.auto)
+                    Text(LanguagePresentation.label(.ja)).tag(Language.ja)
+                    Text(LanguagePresentation.label(.en)).tag(Language.en)
                 }
+                .help(LanguagePresentation.pickerHelp)
                 .fixedSize()
             }
             .disabled(!active)

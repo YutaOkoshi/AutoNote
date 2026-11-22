@@ -29,11 +29,13 @@ struct TranscriptionTab: View {
             Form {
                 Section("言語") {
                     Picker("既定の言語", selection: $language) {
-                        Text("自動").tag(Language.auto)
-                        Text("日本語").tag(Language.ja)
-                        Text("英語").tag(Language.en)
+                        Text(LanguagePresentation.label(.auto)).tag(Language.auto)
+                        Text(LanguagePresentation.label(.ja)).tag(Language.ja)
+                        Text(LanguagePresentation.label(.en)).tag(Language.en)
                     }
                     .onChange(of: language) { Task { await refreshEntries() } }
+                    Text(LanguagePresentation.autoNote(machine: profile.kind))
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("リアルタイム") {
                     EnginePicker(title: "エンジン", selection: $live, entries: liveEntries, fallback: liveDefault)

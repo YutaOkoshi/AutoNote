@@ -34,6 +34,8 @@ public struct WhisperRunRequest: Sendable {
     public var samples: [Float]
     /// Where decoding starts inside `samples` (whisper `offset_ms`).
     public var offsetSeconds: Double
+    /// `.auto` decodes in the more probable of Japanese and English for these samples (judged on their first 30 s,
+    /// like whisper's own detection); never any other language.
     public var language: Language
     public var prompt: String?
     public var mode: WhisperDecodeMode
@@ -46,6 +48,23 @@ public struct WhisperRunRequest: Sendable {
         self.samples = samples; self.offsetSeconds = offsetSeconds; self.language = language
         self.prompt = prompt; self.mode = mode; self.scripts = scripts
     }
+}
+
+/// whisper's language probabilities for Japanese and English (the softmax over all its languages, so the two need not
+/// add up to 1). AutoNote handles only these two, so `.auto` always picks one of them (要件: 「自動」は日本語と英語の判定).
+public struct LanguageGuess: Equatable, Sendable {
+    public var ja: Float
+    public var en: Float
+
+    public init(ja: Float, en: Float) {
+        self.ja = ja; self.en = en
+    }
+
+    /// The more probable of the two; a tie goes to Japanese.
+    public var language: Language { en > ja ? .en : .ja }
+
+    /// The share of Japanese between the two (0.5 when both are zero).
+    public var japaneseShare: Float { ja + en > 0 ? ja / (ja + en) : 0.5 }
 }
 
 public enum WhisperRunOutcome: Equatable, Sendable {
@@ -61,4 +80,7 @@ public protocol WhisperCore: Sendable {
         onProgress: @Sendable @escaping (Double) -> Void,
         shouldAbort: @Sendable @escaping () -> Bool
     ) async throws -> WhisperRunOutcome
+
+    /// Japanese and English probabilities of the speech in the first 30 s of `samples` (16 kHz mono).
+    func detectLanguage(_ samples: [Float]) async throws -> LanguageGuess
 }

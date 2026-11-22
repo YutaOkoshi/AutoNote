@@ -1,7 +1,8 @@
 // whisper の語彙は多言語なので、言語を ja に固定しても greedy のライブではキリル文字・ハングル・デーヴァナーガリーの
 // トークンが出ることがある（2026-11-19 の実データ。バッチの beam 5 では出ていない）。言語を固定したライブでは、その言語で
 // 出てよい文字種のトークンだけを選べるように、デコード時に他のトークンの logit を落とす（WhisperContext の logits_filter_callback）。
-// ja は日本語の会話に英単語が混ざるのでラテン文字も残す。auto は制限しない。
+// ja は日本語の会話に英単語が混ざるのでラテン文字も残す。auto は日本語か英語で起こす（WhisperContext）ので、日本語と同じ
+// 制限（かな・漢字・ラテン文字など）を掛ける（日本語に判定された窓でも英語の窓でも、ハングルやキリル文字は出さない）。
 // 確定版（バッチ）には掛けない: 禁止したトークンの確率（1 ステップあたり平均 0.06%）を付け替えるだけで beam と temperature
 // fallback の経路が変わり、10 分窓の中で文脈を引き継ぐので、英語の会議を ja 固定で回すと繰り返しに入って後半が消えた。
 // ライブは 8 秒以内の窓ごとに文脈なしでデコードするので、経路の違いが窓の外に広がらない。
@@ -9,16 +10,15 @@
 /// The scripts a decoder may emit for a language.
 public enum ScriptRestriction: Sendable, Hashable {
     case unrestricted
-    /// Kana, kanji, CJK punctuation, Latin, digits and symbols.
+    /// Kana, kanji, CJK punctuation, Latin, digits and symbols (also used for `.auto`, which is Japanese or English).
     case japanese
     /// Latin, digits and symbols.
     case english
 
     public init(language: Language) {
         switch language {
-        case .ja: self = .japanese
+        case .ja, .auto: self = .japanese
         case .en: self = .english
-        case .auto: self = .unrestricted
         }
     }
 
