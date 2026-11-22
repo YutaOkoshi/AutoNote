@@ -30,7 +30,9 @@ public actor WhisperBatchTranscriber: BatchTranscriber {
     private let log: @Sendable (String) -> Void
 
     /// The share of a window's progress that the language judgements take with `.auto` per block (the rest is decoding).
-    public static let judgingShare = 0.1
+    /// Measured: the judgements are 0.32–0.45 of the auto time on single-language data (batch RTF auto vs fixed,
+    /// docs/eval/results/2026-11-22-jaen4-da19855.json), so the bar does not stall at the start of each window.
+    public static let judgingShare = 0.4
 
     public init(core: any WhisperCore, gate: BatchGate, windows: BatchWindowPlanner.Config = .init(),
                 languages: LanguageRunPlanner.Config = .init(), splitting: AutoLanguageSplitting = .perBlock,
