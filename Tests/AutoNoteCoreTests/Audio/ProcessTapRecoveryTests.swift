@@ -230,7 +230,9 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
         await settle(src)
         let feeder = feedTap(hw, host: host) { 0.25 }
         await settle(src, fed: true)                             // callbacks flow before the clock moves
-        for _ in 0..<20 { host.advance(3); await settle(src, fed: true) }
+        // One second at a time: a look that falls between a jump of the clock and the next callback sees one second
+        // without callbacks, which is not a stall (a jump of three was one, on a loaded machine).
+        for _ in 0..<60 { host.advance(1); await settle(src, fed: true) }
         feeder.cancel(); await feeder.value
         await src.stop()
         #expect(creations(hw) == 1)
@@ -381,7 +383,10 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
         defer { zeros.cancel() }
         await settle(src, fed: true)
         hw.failOn = "createAggregate"
-        host.advance(5.1)                                        // a zero rebuild tears the tap down; bring-up fails
+        // One second at a time while the tap calls back (a bigger jump can pass for a stall, which is budgeted).
+        var seconds = 0
+        while creations(hw) < 2, seconds < 10 { host.advance(1); await settle(src, fed: true, or: { creations(hw) >= 2 }); seconds += 1 }
+        #expect(creations(hw) == 2 && seconds >= 5)              // a zero rebuild tears the tap down; bring-up fails
         for _ in 0..<40 { host.advance(3); await settle(src) }   // two minutes of failed attempts
         #expect(failure.message == nil)                          // far beyond two failures in a row: still no giving up
         #expect(told.all.count == 1 && (told.all.first ?? 0) >= 60)   // …but told once, like zeros that do not end
