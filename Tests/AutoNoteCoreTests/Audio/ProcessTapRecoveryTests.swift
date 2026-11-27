@@ -87,6 +87,32 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
         #expect(creations(hw) == destructions(hw))
     }
 
+    /// Zeros right after the default output changed (headphones plugged in, a display's speakers): the usual moment
+    /// for a tap to go deaf, so the wait is 2 s instead of 5.
+    @Test func rebuildsAfterTwoSecondsOfZerosWhenTheOutputDeviceChanged() async throws {
+        let host = FakeHostClock(); let hw = FakeTapHardware(); hw.othersPlaying = true; hw.outputRoute = "speakers"
+        let src = source(hw, host)
+        try await src.start { _ in }
+        await settle(src)
+        let feeder = feedTap(hw, host: host) { 0 }
+        await settle(src, fed: true)
+        defer { feeder.cancel() }
+        host.advance(1.0)
+        await settle(src, fed: true)
+        hw.outputRoute = "headphones"
+        await settle(src, fed: true)                             // the change is seen at 1.0 s
+        host.advance(1.5)
+        await settle(src, fed: true)
+        #expect(await src.finishedRebuilds == 0)                 // 1.5 s after the change: not yet
+        host.advance(0.6)
+        #expect(await rebuilt(src, 1))                           // 2.1 s after it, 3.1 s into the zeros
+        host.advance(4.0)
+        await settle(src, fed: true)
+        #expect(await src.finishedRebuilds == 1)                 // one early rebuild per change; then the usual waits
+        await src.stop()
+        #expect(creations(hw) == destructions(hw))
+    }
+
     /// Plain silence: nobody plays, so zeros (or no callbacks at all, as an idle tap delivers) are what is expected.
     @Test func doesNotRebuildWhileNobodyPlays() async throws {
         let host = FakeHostClock(); let hw = FakeTapHardware(); hw.othersPlaying = false

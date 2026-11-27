@@ -33,11 +33,15 @@ public protocol TapHardware: Sendable {
     /// Whether some process other than this one and other than `excludingBundleIDs` runs audio output right now
     /// (what the tap would pick up). nil when the system does not tell. Read-only; called a few times a second.
     func otherProcessIsPlayingAudio(excludingBundleIDs: [String]) -> Bool?
+    /// Something that changes when the default output device does (its UID); nil when unknown. Read-only; called a
+    /// few times a second.
+    func outputRouteToken() -> String?
 }
 
 extension TapHardware {
     public func routeDescription() -> String { "unavailable" }
     public func otherProcessIsPlayingAudio(excludingBundleIDs: [String]) -> Bool? { nil }
+    public func outputRouteToken() -> String? { nil }
 }
 
 /// Production glue: each method maps 1:1 to a Core Audio call. Not unit-tested (needs a device).
@@ -122,6 +126,8 @@ public struct CoreAudioTapHardware: TapHardware {
     }
 
     public func routeDescription() -> String { AudioRoute.describeDefaults() }
+
+    public func outputRouteToken() -> String? { try? defaultOutputDeviceUID() }
 
     /// The HAL's process objects (`kAudioHardwarePropertyProcessObjectList`) with `kAudioProcessPropertyIsRunningOutput`.
     /// Measured on macOS 27.2: true within 0.5 s of a process starting playback and false within 0.5 s of its end; a

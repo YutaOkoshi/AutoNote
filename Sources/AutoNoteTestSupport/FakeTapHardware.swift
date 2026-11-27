@@ -12,6 +12,7 @@ public final class FakeTapHardware: TapHardware, @unchecked Sendable {
     private var _startDelay: Duration = .zero
     private var _format: AudioStreamBasicDescription
     private var _othersPlaying: Bool?
+    private var _outputRoute: String?
     private var _lastExcludedBundleIDs: [String]?
     private var block: AudioDeviceIOBlock?
 
@@ -59,6 +60,14 @@ public final class FakeTapHardware: TapHardware, @unchecked Sendable {
     }
     /// The bundle IDs the last `otherProcessIsPlayingAudio` call left out; nil until it is called.
     public var lastExcludedBundleIDs: [String]? { lock.withLock { _lastExcludedBundleIDs } }
+
+    /// What `outputRouteToken` answers (not recorded in `calls`). Default nil: unknown.
+    public var outputRoute: String? {
+        get { lock.withLock { _outputRoute } }
+        set { lock.withLock { _outputRoute = newValue } }
+    }
+
+    public func outputRouteToken() -> String? { outputRoute }
 
     public func otherProcessIsPlayingAudio(excludingBundleIDs: [String]) -> Bool? {
         lock.withLock { _lastExcludedBundleIDs = excludingBundleIDs; return _othersPlaying }

@@ -33,6 +33,8 @@ public struct SystemTapRecoveryPolicy: Sendable, Equatable {
     public var zeroTimeout: Double
     /// …up to this, and goes back to `zeroTimeout` once a non-zero sample arrives.
     public var zeroRetryMax: Double
+    /// After the default output device changed, zeros for only this long are enough for one rebuild.
+    public var zeroTimeoutAfterRouteChange: Double
     /// Zeros for this long despite a rebuild: the owner is told once (`SourceHealth.setNotArrivingObserver`).
     public var notArrivingAfter: Double
     /// How long one look waits for the answer about other processes; no answer counts as "nobody plays".
@@ -40,11 +42,12 @@ public struct SystemTapRecoveryPolicy: Sendable, Equatable {
 
     public init(checkInterval: Duration = .milliseconds(250), stallTimeout: Double = 2, retryDelay: Double = 0.5,
                 maxConsecutiveFailures: Int = 5, maxRebuilds: Int = 30, rebuildBudgetReset: Double = 60,
-                zeroTimeout: Double = 5, zeroRetryMax: Double = 60, notArrivingAfter: Double = 60,
-                probeTimeout: Duration = .seconds(1)) {
+                zeroTimeout: Double = 5, zeroRetryMax: Double = 60, zeroTimeoutAfterRouteChange: Double = 2,
+                notArrivingAfter: Double = 60, probeTimeout: Duration = .seconds(1)) {
         self.checkInterval = checkInterval; self.stallTimeout = stallTimeout; self.retryDelay = retryDelay
         self.maxConsecutiveFailures = maxConsecutiveFailures; self.maxRebuilds = maxRebuilds
         self.rebuildBudgetReset = rebuildBudgetReset; self.zeroTimeout = zeroTimeout; self.zeroRetryMax = zeroRetryMax
+        self.zeroTimeoutAfterRouteChange = zeroTimeoutAfterRouteChange
         self.notArrivingAfter = notArrivingAfter; self.probeTimeout = probeTimeout
     }
 
@@ -70,7 +73,8 @@ private final class IOCounters: Sendable {
 /// and rebuilds — tear down, bring up, new ring and drain — only then:
 /// - no callback for `stallTimeout`: rebuild with back-off, and after `maxConsecutiveFailures` in a row (or
 ///   `maxRebuilds`) stop rebuilding and report through `health` (`MicrophoneRecoveryPolicy`'s budget);
-/// - only zeros for `zeroTimeout`: rebuild, wait twice as long before the next one (up to `zeroRetryMax`), never give up.
+/// - only zeros for `zeroTimeout` (`zeroTimeoutAfterRouteChange` right after the default output device changed):
+///   rebuild, wait twice as long before the next one (up to `zeroRetryMax`), never give up.
 /// Chunks keep their host-time stamps, so a rebuild's gap is silence on the track's timeline, not a shift.
 public actor ProcessTapSource: AudioSource {
     public static let aggregateUIDPrefix = "com.yutaokoshi.autonote.tap."
@@ -150,6 +154,9 @@ public actor ProcessTapSource: AudioSource {
     private var zeroWait = 0.0
     private var nextZeroRebuildAt = 0.0
     private var zeroRebuildsInStretch = 0
+    /// The default output device as last seen, and when it was seen to change (until a rebuild or a non-zero sample).
+    private var lastRoute: String?
+    private var routeChangedAt: Double?
     private var gaveUp = false
 
     public init(clock: MeetingClock, hardware: any TapHardware = CoreAudioTapHardware(),
@@ -275,6 +282,8 @@ public actor ProcessTapSource: AudioSource {
         zeroWait = policy.zeroTimeout
         nextZeroRebuildAt = now
         zeroRebuildsInStretch = 0
+        lastRoute = nil
+        routeChangedAt = nil
         gaveUp = false
     }
 
@@ -294,17 +303,27 @@ public actor ProcessTapSource: AudioSource {
     private func check() async {
         guard case .running = state, rebuildTask == nil else { return }
         let hardware = self.hardware, exclude = excludeBundleIDs
-        let answer: Bool?? = await probeQueue.runAwaiting(timeout: policy.probeTimeout, {
-            hardware.otherProcessIsPlayingAudio(excludingBundleIDs: exclude)
+        let answer: (playing: Bool?, route: String?)? = await probeQueue.runAwaiting(timeout: policy.probeTimeout, {
+            (hardware.otherProcessIsPlayingAudio(excludingBundleIDs: exclude), hardware.outputRouteToken())
         }, abandoned: { _ in })
         // `stop()` may have run while this look waited on the probe queue.
         guard case .running = state, rebuildTask == nil else { return }
         defer { looks += 1 }
         let now = clock.now().seconds
         // Unknown (no answer in time, or the system does not tell) counts as "nobody plays": never a reason to rebuild.
-        let playing = (answer ?? nil) == true
+        let playing = answer?.playing == true
         counts.recordOutputPoll(at: now, othersPlaying: playing)
         guard !gaveUp else { return }
+        if let route = answer?.route {
+            if let last = lastRoute, last != route {
+                // The usual moment for a tap to go deaf: zeros get a shorter wait once, and the back-off starts over.
+                Self.logger.notice("system tap: default output device changed \(self.hardware.routeDescription(), privacy: .public)")
+                routeChangedAt = now
+                zeroWait = policy.zeroTimeout
+                nextZeroRebuildAt = now
+            }
+            lastRoute = route
+        }
 
         let records = pipeline?.ring.recordsWritten ?? 0
         if records != lastRecords {
@@ -331,6 +350,7 @@ public actor ProcessTapSource: AudioSource {
             zeroRebuildsInStretch = 0
             zeroWait = policy.zeroTimeout
             nextZeroRebuildAt = now
+            routeChangedAt = nil        // the tap hears the new output
         }
 
         // A tap that could not be brought up again is down, whoever plays.
@@ -353,12 +373,14 @@ public actor ProcessTapSource: AudioSource {
         }
         // Zeros are judged only on a tap that calls back; one that does not is the stall's business above.
         let zeros = now - max(lastNonZeroAt, playingSince)
-        guard lastRecords > 0, zeros >= policy.zeroTimeout else { return }
+        let early = routeChangedAt.map { min(zeros, now - $0) >= policy.zeroTimeoutAfterRouteChange } ?? false
+        guard lastRecords > 0, zeros >= policy.zeroTimeout || early else { return }
         if zeroRebuildsInStretch > 0, zeros >= policy.notArrivingAfter {
             counts.reportNotArriving(seconds: Int(zeros))   // once per recording
         }
         guard now >= nextZeroRebuildAt else { return }
-        let reason = "only zero samples for \(Self.seconds(zeros)) s while another process plays audio"
+        routeChangedAt = nil
+        let reason = "only zero samples for \(Self.seconds(zeros)) s while another process plays audio\(early ? ", after the output device changed" : "")"
         rebuildTask = Task { await self.rebuild(reason: reason, stall: false) }
     }
 
