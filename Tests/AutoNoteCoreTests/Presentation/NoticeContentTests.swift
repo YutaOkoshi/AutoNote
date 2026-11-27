@@ -25,6 +25,14 @@ import AutoNoteCore
          [("上書きする", .resolveOverwrite(mid, overwrite: true)), ("残す", .resolveOverwrite(mid, overwrite: false))]),
         (.outputFolderMissing, "保存先が見つかりません", []),
         (.automationFailed(name: "weekly", mid), "Automation 失敗: weekly", [("開く", .openMeeting(mid))]),
+        (.recordingLoss(.system, reason: .notArriving),
+         "システム音声が 1 分以上録音に入っていません（ほかのアプリは音を出しています）。相手の声が録れていない可能性があります。録音は続けています", []),
+        (.recordingLoss(.system, reason: .sourceFailed),
+         "システム音声を録音できていません。この先の相手の声は録音に入りません。システム音声の録音許可を確認し、録音を止めて始め直してください",
+         [("システム設定を開く", .openPrivacySettings)]),
+        (.recordingLoss(.mic, reason: .sourceFailed),
+         "マイクを録音できていません。この先の自分の声は録音に入りません。マイクの許可と機材を確認し、録音を止めて始め直してください",
+         [("システム設定を開く", .openPrivacySettings)]),
     ]
 
     // The four device cases take body and buttons straight from DeviceNoticeCopy.
@@ -49,9 +57,9 @@ import AutoNoteCore
         }
     }
 
-    // All 14 cases (15 notices) round-trip each button through action(category:buttonID:userInfo:) to the table's action.
+    // All 15 cases (18 notices) round-trip each button through action(category:buttonID:userInfo:) to the table's action.
     @Test func buttonsMapBackToActions() {
-        #expect(Self.table.count == 15)  // 14 cases, silence in both tracks
+        #expect(Self.table.count == 18)  // 15 cases, silence in both tracks, recording loss in three forms
         for (n, _, buttons) in Self.table {
             let c = NoticeContent.make(n)
             #expect(Set(c.buttons.map(\.id)).count == c.buttons.count)
@@ -59,7 +67,7 @@ import AutoNoteCore
                 #expect(NoticeContent.action(category: c.category, buttonID: b.id, userInfo: c.userInfo) == expected.1)
             }
         }
-        #expect(Set(Self.table.map { NoticeContent.make($0.0).category }).count == 14)
+        #expect(Set(Self.table.map { NoticeContent.make($0.0).category }).count == 15)
     }
 
     // The content id is the UserNotice id so a re-post replaces and withdraw finds it.
@@ -82,6 +90,17 @@ import AutoNoteCore
         let b = Bookmark(at: TimelineTime(seconds: 1))
         let m = Manifest(id: Self.mid, title: nil, startedAt: Date(timeIntervalSince1970: 0), endedAt: nil, source: .live, device: nil, language: .ja, tracks: [], pauses: [], bookmarks: [], status: .recorded, silenceWarning: false, autonoteVersion: "test")
         #expect(NoticeRelay.notices(for: .bookmarked(b)).isEmpty && NoticeRelay.notices(for: .stopped(m, .manual)).isEmpty)
+    }
+
+    // A track that failed, or audio that keeps not arriving, is told while the recording still runs.
+    @Test func relayLostAudio() {
+        #expect(NoticeRelay.notices(for: .sourceFailed(.system, message: "gave up")) == [.recordingLoss(.system, reason: .sourceFailed)])
+        #expect(NoticeRelay.notices(for: .sourceFailed(.mic, message: "denied")) == [.recordingLoss(.mic, reason: .sourceFailed)])
+        #expect(NoticeRelay.notices(for: .audioNotArriving(.system, seconds: 61)) == [.recordingLoss(.system, reason: .notArriving)])
+        #expect(NoticeContent.needsAttention(category: NoticeContent.make(.recordingLoss(.system, reason: .notArriving)).category))
+        // The settings button opens the pane of the track.
+        #expect(NoticeContent.make(.recordingLoss(.system, reason: .sourceFailed)).userInfo["track"] == "system")
+        #expect(NoticeContent.make(.recordingLoss(.mic, reason: .sourceFailed)).userInfo["track"] == "mic")
     }
 
     static func item(_ id: String, failure: String? = nil, confirm: Bool = false, state: String = "running") -> QueueItemDTO {

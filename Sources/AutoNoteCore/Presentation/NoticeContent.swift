@@ -12,12 +12,29 @@ public enum PrivacyPane {
     public static let systemAudio = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture")!
 }
 
+/// The wording of `UserNotice.recordingLoss`. "May": an app that keeps its output open in silence looks the same as
+/// audio that does not arrive.
+public enum RecordingLossCopy {
+    public static func body(_ track: Track, _ reason: RecordingLossReason) -> String {
+        let name = AudioLossPresentation.trackName(track)
+        let voice = track == .mic ? "自分の声" : "相手の声"
+        switch reason {
+        case .notArriving:
+            let others = track == .system ? "（ほかのアプリは音を出しています）" : ""
+            return "\(name)が 1 分以上録音に入っていません\(others)。\(voice)が録れていない可能性があります。録音は続けています"
+        case .sourceFailed:
+            let check = track == .mic ? "マイクの許可と機材" : "システム音声の録音許可"
+            return "\(name)を録音できていません。この先の\(voice)は録音に入りません。\(check)を確認し、録音を止めて始め直してください"
+        }
+    }
+}
+
 /// What a `UserNotice` looks like as a system notification (and as the window band). Pure data; the App turns it into `UNNotification`s.
 public struct NoticeContent: Equatable, Sendable {
     public static let allCategories = [
         "deviceConnectedCountdown", "deviceSeenFirstTime", "deviceAlreadyConnected", "deviceGoneGrace", "silence", "diskLow",
         "recordingTooShort", "interruptedRecordingFound", "minutesGenerated", "transcriptOnly", "claudeNotLoggedIn",
-        "overwriteConfirmation", "outputFolderMissing", "automationFailed",
+        "overwriteConfirmation", "outputFolderMissing", "automationFailed", "recordingLoss",
     ]
 
     /// `UserNotice.id`.
@@ -36,7 +53,7 @@ public struct NoticeContent: Equatable, Sendable {
 
     /// Notices that need attention rather than a passing banner (the App gives them a time-sensitive interruption level).
     public static func needsAttention(category: String) -> Bool {
-        ["recordingTooShort", "interruptedRecordingFound", "overwriteConfirmation", "claudeNotLoggedIn"].contains(category)
+        ["recordingTooShort", "interruptedRecordingFound", "overwriteConfirmation", "claudeNotLoggedIn", "recordingLoss"].contains(category)
     }
 
     public static func make(_ n: UserNotice) -> NoticeContent {
@@ -71,6 +88,9 @@ public struct NoticeContent: Equatable, Sendable {
             return c("outputFolderMissing", "保存先が見つかりません")
         case .automationFailed(let name, let m):
             return c("automationFailed", "Automation 失敗: \(name)", [("open", "開く")], meeting(m).merging(["name": name]) { $1 })
+        case .recordingLoss(let t, let reason):
+            return c("recordingLoss", RecordingLossCopy.body(t, reason),
+                     reason == .sourceFailed ? [("openPrivacy", "システム設定を開く")] : [], ["track": t.rawValue])
         }
     }
 

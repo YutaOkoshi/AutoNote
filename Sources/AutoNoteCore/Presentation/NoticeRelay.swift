@@ -7,6 +7,8 @@ public enum NoticeRelay {
         switch e {
         case .silenceWarning(let w): [.silence(w.track)]
         case .diskSpaceLow(let bytes): [.diskLow(availableBytes: bytes)]
+        case .sourceFailed(let track, _): [.recordingLoss(track, reason: .sourceFailed)]
+        case .audioNotArriving(let track, _): [.recordingLoss(track, reason: .notArriving)]
         default: []
         }
     }

@@ -56,7 +56,7 @@ final class SystemUserNotifier: NSObject, UserNotifier, UNUserNotificationCenter
         return [.deviceConnectedCountdown(d, seconds: 0), .deviceSeenFirstTime(d), .deviceAlreadyConnected(d), .deviceGoneGrace(d, seconds: 0),
                 .silence(.mic), .diskLow(availableBytes: 0), .recordingTooShort(m), .interruptedRecordingFound(m),
                 .minutesGenerated(m, title: ""), .transcriptOnly(m), .claudeNotLoggedIn(m), .overwriteConfirmation(m),
-                .outputFolderMissing, .automationFailed(name: "", m)]
+                .outputFolderMissing, .automationFailed(name: "", m), .recordingLoss(.system, reason: .sourceFailed)]
     }
 
     /// Asks for alerts only (no sound, no badge). A denial is logged, not thrown: the window band is the fallback surface.

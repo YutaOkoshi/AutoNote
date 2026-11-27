@@ -97,6 +97,14 @@ private struct MeetingListRow: View {
             Text(row.state.displayText(progressLabel: row.progressLabel))
                 .font(.caption)
                 .foregroundStyle(row.state == .failed ? Color.red : Color.secondary)
+            // Its own line, apart from the silence mark above: which track is missing audio, and how much.
+            if let loss = row.audioLossLabel {
+                Label(loss, systemImage: "waveform.slash")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .lineLimit(2)
+                    .help("ほかのアプリが音を出していた間、録音に音が入っていませんでした。その間の発言は文字起こしと議事録に入っていません")
+            }
             ForEach(failures, id: \.self) { name in
                 Label("Automation 失敗: \(name)", systemImage: "exclamationmark.octagon")
                     .font(.caption)

@@ -106,10 +106,12 @@ public struct MeetingRow: Codable, Equatable, Sendable, Identifiable {
     public var filePath: String?
     public var silenceWarning: Bool
     public var summaryFirstLine: String?
+    /// 「録音の欠損: システム音声 約 12 分」 when the recording lost audio (`manifest.audio_loss`); nil otherwise.
+    public var audioLossLabel: String?
 
     public init(id: String = "", title: String = "", startedAt: Date = Date(timeIntervalSince1970: 0), durationMinutes: Int? = nil,
                 durationSeconds: Int? = nil, state: MeetingRowState = .recorded, progressLabel: String? = nil, filePath: String? = nil,
-                silenceWarning: Bool = false, summaryFirstLine: String? = nil) {
+                silenceWarning: Bool = false, summaryFirstLine: String? = nil, audioLossLabel: String? = nil) {
         self.id = id
         self.title = title
         self.startedAt = startedAt
@@ -120,6 +122,7 @@ public struct MeetingRow: Codable, Equatable, Sendable, Identifiable {
         self.filePath = filePath
         self.silenceWarning = silenceWarning
         self.summaryFirstLine = summaryFirstLine
+        self.audioLossLabel = audioLossLabel
     }
 }
 
