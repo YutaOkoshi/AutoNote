@@ -16,16 +16,17 @@ AutoNote の外に置く汎用の見本です。AutoNote 本体はこのフォ�
 
 | コマンド | すること |
 |---|---|
-| `share-meeting.sh <会議ファイル> [--kind internal\|customer] [--customer <相手先>] [--recording <録画のファイル名>]` | 1 件を載せる（載せ直しも同じ）。`--kind` の既定は `internal`。前に載せた会議は、指定しなかった項目を前の値から引き継ぐ |
+| `share-meeting.sh <会議ファイル> [--kind internal\|customer] [--customer <相手先>] [--recording <録画のファイル名>] [--recorded-by <録った人の呼び名>]` | 1 件を載せる（載せ直しも同じ）。`--kind` の既定は `internal`（顧客の会議は必ず `--kind customer` を付ける）。前に載せた会議は、指定しなかった項目を前の値から引き継ぐ |
 | `share-meeting.sh --unshare <autonote_id>` | 置き場から 2 本を消して push する（git の履歴には残る）。読む人向けの写しからも消える。`autonote_id` の調べ方は下 |
-| `share-meeting.sh --recording-deleted <autonote_id>` | その会議の録画を消したことを記録し、置き場の議事録を `source_recording_deleted: はい` にして push する。受け取り箱のフォルダを見回りに見せていない運用（`INBOX_DIR` なし）で使う |
+| `share-meeting.sh --recording-deleted <autonote_id>` | その会議の録画を消したことを記録し、置き場の議事録を `source_recording_deleted: はい` にして push する。受け取り箱のフォルダを見回りに見せていない運用（`INBOX_DIR` なし）では、これが `はい` にする唯一の入口。`INBOX_DIR` がある運用でも、見回りを待たずに `はい` にしたいときに使える |
+| `share-meeting.sh --recording-deleted <autonote_id> --undo` | 間違って `はい` になったものを `まだ` に戻して push する |
 | `share-meeting.sh --retry-pending` | push できなかった分を送り直す |
 | `share-meeting.sh --rebuild-index` | `INDEX.md` を作り直す |
 | `share-meeting.sh --rebuild-mirror` | 読む人向けの写しを全部作り直す |
 | `share-meeting.sh --print-template <雛形の名前>` | `templates/` の雛形に設定の値（録画を消すまでの日数・録画の形式）を差し込んで標準出力に出す。名前は `README.md`・`CLAUDE.md`・`mirror-readme.md` |
 | `daily-patrol.sh` | 毎日の見回り（下の「見回り」） |
 
-`autonote_id` は会議 1 件ごとの番号です。置き場の議事録の先頭（frontmatter）の `autonote_id:` の行に書いてあります。`autonote list --json` の `id` と、`state/shared.tsv` の 1 列目も同じ値です（`INDEX.md` と「会議の一覧」には出ません）。
+`autonote_id` は会議 1 件ごとの番号です。置き場の議事録の先頭（frontmatter）の `autonote_id:` の行に書いてあります。`autonote list --json` の `id` と、`state/shared.tsv` の 1 列目も同じ値です（`INDEX.md` と「会議の一覧」には出ません）。共有したときの出力「共有しました: <ファイル>（autonote_id: …）」にも出ます。載せた会議の番号とファイルの一覧は、`cut -f1,2 "$HOME/Library/Application Support/AutoNoteShare/state/shared.tsv"` で見られます。
 
 置き場の形:
 
@@ -44,6 +45,7 @@ AutoNote の外に置く汎用の見本です。AutoNote 本体はこのフォ�
 - 置き場のファイル名は、AutoNote の会議ファイルと同じ名前（Unicode の形は NFC にそろえる。Mac のディスク上では濁点が分かれた形になっていても、git と一覧のリンクは同じ形になる）
 - 議事録の中の発言リンク `[[#^t00-07-08|07:09]]` は `（→ 00:07:08）` という時刻の文字に置き換える。文字起こしの `[00:07:08]` の行に当たる
 - frontmatter には AutoNote の項目に加えて `kind`・`customer`・`recorded_by`・`transcript_file`・`source_recording_deleted` が入る
+- `recorded_by`（録った人）は、`customer` の会議には設定の `DEFAULT_RECORDED_BY`、`internal` の会議には `OWNER_NAME` が入る。合わない会議（録画した人が録った社内の会議、持ち主が自分で録った顧客の会議）は `--recorded-by <呼び名>` で渡す。一度渡した呼び名は、その会議の載せ直しでも引き継ぐ
 
 ## 前提
 
@@ -85,7 +87,7 @@ chmod 600 "$HOME/Library/Application Support/AutoNoteShare/config.env"
 
 この `cp -R` は最初の 1 回だけです。2 回目からは下の「更新するとき」の手順を使います。
 
-`config.env` を開いて値を埋めます。項目の説明は `config.env.example` にあります。よく変えるもの:
+`config.env` を開いて値を埋めます。項目の説明は `config.env.example` にあります。`config.env` が見つからないとき、スクリプトは「警告: 設定ファイルがありません: <探した場所>」と 1 行出して既定値で動きます（置き場所や `SHARE_CONFIG` の間違いに気づけるように）。日数などの数字の項目に数字でないものを書くと、どの項目かを示して終了コード 2 で終わります。よく変えるもの:
 
 - `VAULT_ROOT` — AutoNote の出力フォルダ（既定 `~/Documents/AutoNote`）
 - `SHARE_BRANCH` — 置き場のブランチ名（既定 `main`）。置き場の既定のブランチが `master` などのときは合わせる（`git -C "$HOME/Library/Application Support/AutoNoteShare/repo" branch --show-current` で分かる）。違っていると、共有は「置き場にブランチ … がありません」と出して止まる
@@ -93,7 +95,7 @@ chmod 600 "$HOME/Library/Application Support/AutoNoteShare/config.env"
 - `RECORDING_KEEP_DAYS` — 録画を消すまでの日数（既定 7）。知らせの期日と、雛形の案内文の日数に入る
 - `NOTIFY_MODE` — 知らせ（「議事録が並びました」「録画を消してください」など）の出し方。**誰に届くかが変わります**
   - `macos`（既定）— この Mac の通知と `state/notices.md` に出る。見られるのは持ち主だけで、録画した人・読む人には届かない。この設定のまま使うなら、「議事録が並んだこと」と「録画を消す期日」は持ち主が自分で伝える
-  - `slack` — Incoming Webhook の先のチャンネルに出る。録画した人・読む人に届けるなら、その人たちをチャンネルに入れておく
+  - `slack` — Incoming Webhook の先のチャンネルに出る。録画した人・読む人に届けるなら、その人たちをチャンネルに入れておく。宛先を分ける設定は無いので、持ち主あての知らせと見回りの失敗の知らせも同じチャンネルに出る。知らせに入るのは会議の題・日時・録画のファイル名で（発言の中身は入らない）、失敗の知らせには Mac のフォルダのパスやファイル名が入ることがある。題に顧客名を入れている会議では、顧客名がチャンネルに出る
   - `dry-run` — 送らずに `state/outbox-dry/` に書くだけ（試すとき用）
   - 手を打つ必要があること（置き場の直しとぶつかった・長く残っている録画がある・clone に人が触った跡がある、など）は、どの設定でも `state/todo.md` にも書く。`todo.md` は要対応だけ、`notices.md` はただのお知らせ、と分かれている
 - Slack の Webhook の URL は秘密です。`config.env` に直接書かず、1Password に置いて `SLACK_WEBHOOK_OP_REF="op://<保管庫>/<項目>/<欄>"` で指します。スクリプトは 1 回の実行につき 1 度だけ `op read` で取り出し、メモリにだけ持ちます（ログや状態ファイルには書かない）
@@ -138,7 +140,10 @@ SHARE_HOME="$HOME/Library/Application Support/AutoNoteShare"
 ```
 
 - 会議ファイルの場所は `autonote list --json` の `file_path` か、`autonote latest` で分かる
-- `--recording` は、受け取り箱に置かれた録画の**ファイル名だけ**を渡す（`日付_時刻_相手先_用件.mp4`）。Finder からドラッグしてフルパスが入っても、スクリプトは最後のファイル名だけを使う。渡すと、相手先を名前から読み、知らせに録画を消す期日（最初に共有した日から `RECORDING_KEEP_DAYS` 日後。既定 7）が入る
+- **顧客の会議は必ず `--kind customer` を付ける。** `--recording` や `--customer` を渡しても種類は変わらず、省くと `internal`（社内）として載り、ブックマークの節（付けたメモ）も置き場に出る。`--recording` か `--customer` を付けて `--kind` を省くと、スクリプトは警告を 1 行出す（共有は続く）。間違えたら `--kind customer` を付けて載せ直す（ブックマークの節は置き場の今の版からは消えるが、git の履歴には残る）
+- `--recording` は、受け取り箱に置かれた録画の**ファイル名だけ**を渡す（`日付_時刻_相手先_用件.mp4`）。Finder からドラッグしてフルパスが入っても、スクリプトは最後のファイル名だけを使う。渡すと、相手先を名前から読み、知らせに録画を消す期日（最初に共有した日から `RECORDING_KEEP_DAYS` 日後。既定 7）が入る。最初の共有で付け忘れて、後から `--recording` を付けて載せ直したときも、その回の知らせ（「更新しました」）に期日が入る
+- 1 本の録画は 1 つの会議に付ける。同じ録画の名前を 2 つの会議に渡す使い方は想定していない（見回りが「消した」にするのは片方だけになる）
+- `--recording` の名前を前と違うものに変えて載せ直すと、録画についての印（「消した」・見回りが出した確認の知らせ）は新しい録画のものとして付け直しになり、置き場の議事録は `source_recording_deleted: まだ` に戻る
 - `INBOX_DIR`（受け取り箱のフォルダ）を設定していて、その名前の録画が受け取り箱に無いときは、警告を出して共有は続ける。名前の打ち間違いなら `--recording` を直して載せ直す。同期が遅れているだけなら、そのままでよい
 - 「警告: 録画の名前の日時（…）と会議の日時（…）が違います」と出ても、共有は続く。置き場と一覧に載るのは、録画の名前ではなく AutoNote の会議の日時。録画を `autonote import`（CLI）で取り込むと、会議の日時は録画ファイルの作成日時になるので、同期フォルダを通ったファイルでは実際の会議の日時とずれることがある。取り込むときに AutoNote の画面で日時を録画の名前に合わせておくと、ずれない
 - 終了コード: 0 成功、1 失敗（push できない・ぶつかった・ファイルが無い）、2 使い方の誤り
@@ -157,8 +162,11 @@ launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$LABEL.plist"
 launchctl kickstart "gui/$(id -u)/$LABEL"     # 1 回すぐに走らせて確かめる
 ```
 
-走らせた後に見るもの:
+見回りが走る時刻は毎日 9:00 です（雛形の `StartCalendarInterval` の `Hour` と `Minute`）。変えるときは、`~/Library/LaunchAgents/$LABEL.plist` のその 2 つの数字を直し、下の「外すとき」の `launchctl bootout` と、上の `launchctl bootstrap` を打ち直します。その時刻に Mac が眠っていたら、launchd は起きた後に 1 回走らせます（眠っている間に何日か過ぎても 1 回にまとまる。`man launchd.plist` の `StartCalendarInterval` の説明による）。電源が切れていた・ログインしていなかった時刻の分がどうなるかは、この見本では確かめていません。録画の知らせは日数で数えるので、走らなかった日があっても、次に走った見回りで出ます。
 
+走らせた後に見るもの（`kickstart` は見回りが終わるのを待たずに戻るので、終わってから見る）:
+
+- **見回りが終わったこと** — `logs/patrol-YYYY-MM.log` の最後に、いまの時刻の `done` と `rc=0` の行が付く（タブ区切り。`rc=1` なら失敗があったので、下を見る）。この行が付く前に下を見ると、何も出ていないので「問題なし」に見えてしまう
 - `state/todo.md` に新しい行が無いこと（特に「会議ファイルのフォルダ（VAULT_ROOT）を読めません」）
 - `logs/launchd-patrol.out.log` に「…読めません」「…できませんでした」「…止まりました」の行が新しく出ていないこと、`logs/launchd-patrol.err.log` に新しい行が無いこと（載せ直しがあった日は、out.log に「共有しました: …」が出る。これは失敗ではない）
 - Slack を使うなら、`logs/notify-YYYY-MM.log` に `kept-in-outbox` が無いこと
@@ -175,6 +183,14 @@ mv "$HOME/Library/LaunchAgents/$LABEL.plist" ~/.Trash/
 
 `todo.md` に「会議ファイルのフォルダ（VAULT_ROOT）を読めません」の行があれば、macOS が launchd の下のプログラムに、そのフォルダを読ませていません。
 
+**先に正直に書くと、AutoNote の既定の設定（出力フォルダが書類フォルダの中）で、見回りの載せ直しが最後まで動くことを確かめた形は、この見本にはまだありません。** 下のアは「許可を求める画面が出る所」まで、イとウは手順だけで、どれも最後までは確かめていません。勧める順は次のとおりです。
+
+1. まず **ア**（アプリ経由）。許可の画面が出る所までは確かめてある。許可した後に見回りが走ることは、入れた人が上の「走らせた後に見るもの」で確かめる
+2. アで動かなければ **イ**（AutoNote の出力フォルダを書類フォルダの外へ）
+3. どちらも採れなければ **ウ**（載せ直しを手で打つ）。見回りのほかの手順（送り直し・録画の知らせ・写し）は、会議ファイルを読めなくても動く
+
+エ（フルディスクアクセス）は許す範囲が広いので、この順には入れていません。
+
 macOS 27.2 で、`VAULT_ROOT` が書類フォルダ（`~/Documents`）の中にある設定で試して分かったこと:
 
 - 上の手順の形（launchd がシェルを直接呼ぶ）では、許可を求める画面は出ない。フォルダの読み取りが `Operation not permitted` で拒まれるだけなので、ログを見ないと気づけない
@@ -183,13 +199,12 @@ macOS 27.2 で、`VAULT_ROOT` が書類フォルダ（`~/Documents`）の中に�
 
 このとき見回りは止まりません。`todo.md` に上の 1 行を書き（同じ文は重ねて書かない）、知らせを 1 通出し、会議ファイルを読む手順（下の「見回り」の 2 の載せ直しと、1 のうち会議を作り直す分）を飛ばして、ほかの手順（clone に残っていた commit の push・録画の知らせ・写しの作り直し）を続け、終了コード 1 で終わります。読めない間は、見回りのたび（毎朝）に同じ知らせが出ます。
 
-直し方は次のどれかです。
-
 **ア. 見回りを小さなアプリ経由で呼ぶ**（許可を求める画面が出る形）。macOS はフォルダの許可をアプリごとに決めるので、見回りを呼ぶだけのアプリを作り、LaunchAgent からはそのアプリを開きます。
 
 ```sh
 SHARE_HOME="$HOME/Library/Application Support/AutoNoteShare"
 LABEL="local.share-to-repo.daily-patrol"
+mkdir -p "$HOME/Library/LaunchAgents"
 "$SHARE_HOME/bin/launchd/make-patrol-app.sh" "$SHARE_HOME"      # SharePatrol.app を作る（osacompile。中身は daily-patrol.sh を呼ぶだけ）
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null               # 前の形を入れていたら外す
 sed -e "s|__LABEL__|$LABEL|g" -e "s|__SHARE_HOME__|$SHARE_HOME|g" \
@@ -198,17 +213,18 @@ launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$LABEL.plist"
 launchctl kickstart "gui/$(id -u)/$LABEL"
 ```
 
+- 直前の `bootout` の後すぐの `bootstrap` が失敗することがあるかどうかは確かめていません。失敗したら、数秒おいて `bootstrap` の行だけ打ち直します
 - この形で確かめたこと: `kickstart` の直後に macOS の確認のウィンドウが 1 つ現れ、見回りは会議ファイルのフォルダを開く所で、答えを待って止まった（シェルを直接呼ぶ形では、同じ所がすぐ `Operation not permitted` になった）
 - 確かめていないこと: そのウィンドウの文面と、「許可」を押した後に見回りが最後まで走ること、次の日からは聞かれずに走ること。許可を押すのは Mac の持ち主で、押した後は上の「走らせた後に見るもの」で確かめます
 - 答えるまで見回りは待ち続けます（launchd は前の実行が終わるまで次を始めないので、その間は次の日の見回りも始まらない）。答えを後から変える場所は、macOS の設定の プライバシーとセキュリティ › ファイルとフォルダ のはずですが、SharePatrol の行ができることは確かめていません
-- 見回りの終了コードは launchd には伝わりません（launchd が見るのは `open` の終了コード）。代わりに、見回りが終わるたびに `logs/launchd-patrol.out.log` に `patrol exit <終了コード>` の行が付きます
+- 見回りの終了コードは launchd には伝わりません（launchd が見るのは `open` の終了コード）。代わりに、見回りが終わるたびに `logs/launchd-patrol.out.log` に `patrol exit <終了コード>` の行が付きます（`logs/patrol-YYYY-MM.log` の `done` の行も、直接呼ぶ形と同じく付く）
 - アプリは `SharePatrol.app` の置き場所から `config.env`・`bin/`・`logs/` を探すので、AutoNoteShare の直下から動かしません。作り直すと、許可をもう一度聞かれることがあります
 
 **イ. AutoNote の出力フォルダを書類フォルダの外（例 `~/AutoNote`）に変え、`VAULT_ROOT` もそこに向ける。** この見本では試していません。
 
-**ウ. フルディスクアクセスを与える**（システム設定 › プライバシーとセキュリティ › フルディスクアクセス）。LaunchAgent が呼ぶのは `/bin/sh` で、そこから `python3` が動きますが、どの実行ファイルに与えれば足りるかは確かめていません。許す範囲が広いので、選ぶ前によく考えます。
+**ウ. 見回りの載せ直しは当てにしない。** AutoNote の側で議事録を直した後は、手で `share-meeting.sh` を打って載せ直します。この場合、毎朝の「読めません」の知らせは出続け、見回りの終了コードも 1 のままです（止める設定はありません）。ほかの失敗の知らせ（「見回りで失敗がありました」）とは別の文なので、見分けは付きます。
 
-**エ. 見回りの載せ直しは当てにしない。** AutoNote の側で議事録を直した後は、手で `share-meeting.sh` を打って載せ直します。この場合、毎朝の「読めません」の知らせは出続けます（止める設定はありません）。
+**エ. フルディスクアクセスを与える**（システム設定 › プライバシーとセキュリティ › フルディスクアクセス）。LaunchAgent が呼ぶのは `/bin/sh` で、そこから `python3` が動きますが、どの実行ファイルに与えれば足りるかは確かめていません。許す範囲が広いので、選ぶ前によく考えます。
 
 直した後は、もう一度 `launchctl kickstart "gui/$(id -u)/$LABEL"` を打ち、上の「走らせた後に見るもの」を確かめます。
 
@@ -233,7 +249,7 @@ rsync -a --exclude templates/ --exclude __pycache__/ examples/automations/share-
 1 日 1 回、次を順に行います。議事録と文字起こしを期限で消す処理はありません。1 つの手順が失敗しても残りの手順は走り、どれかが失敗していれば終了コード 1 で終わります（写しを作れない・`autonote list` を読めない、も 1）。
 
 1. 送れなかった知らせと、push できなかった分（`state/pending.tsv`）を送り直す
-2. 載せた会議の AutoNote 側のファイルが変わっていれば載せ直す（AutoNote の側で議事録を直したり、訳文が後から付いたりしても、もう一度手で打たなくて済むように）。題が変わってファイル名が変わっても、`autonote_id` で探す
+2. 載せた会議の AutoNote 側のファイルが変わっていれば載せ直す（AutoNote の側で議事録を直したり、訳文が後から付いたりしても、もう一度手で打たなくて済むように）。題が変わってファイル名が変わっても、Obsidian で別のフォルダに整理しても、`VAULT_ROOT` の下なら `autonote_id` で探す（AutoNote と同じく、`_autonote` と、名前が `.` で始まるフォルダは見ない）。どこにも見つからない会議は、持ち主あてに「共有した会議の、AutoNote 側の会議ファイルが見つかりません」を 1 回出して `todo.md` に書く（置き場の記録は消さない）
 3. 録画の知らせ（日数は `RECORDING_KEEP_DAYS`＝既定 7、`RECORDING_OWNER_DAYS`＝既定 21。その日数がたった後の最初の見回りで 1 回出す。文には実際にたった日数が入るので、Mac の電源が切れていた日があると 7 より大きい数になる）
    - `INBOX_DIR`（受け取り箱の同期フォルダ）があるとき:
      - **共有した会議の録画**は、最初に共有した日から数える。7 日たったら「受け取り箱の録画を消してください」を 1 回、21 日たったら持ち主あての知らせを 1 回出して `state/todo.md` にも書く
@@ -241,15 +257,16 @@ rsync -a --exclude templates/ --exclude __pycache__/ examples/automations/share-
      - 録画として数えるのは、受け取り箱の直下にある mp4・m4a・mp3・wav・mov だけ。ほかのファイルとサブフォルダは見ない。置いてもらう形式は AutoNote が取り込める mp4・m4a・mp3・wav（雛形の案内文もこの 4 つ）で、mov は「置かれてしまったもの」にも知らせを出すために数えている
      - 受け取り箱で一度でも見えた録画（見回りが見た、または共有のときに受け取り箱にあった）が、後の見回りで無くなっていたら「消した」とみなし、その会議の置き場の議事録を `source_recording_deleted: はい` に直して push する。知らせを見てすぐ消しても、こう扱われる
      - `--recording` で渡した名前の録画が、受け取り箱で一度も見えていないときは「消した」にはせず、「受け取り箱に見当たらない録画があります」を 1 回だけ知らせる（名前の打ち間違いか、同期の遅れ）
-     - 受け取り箱に録画が 1 つも無い日は、「消した」「見当たらない」の判定をしない（同期が止まってフォルダが空に見えるだけの日に、全部を「消した」にしないため）。そのため、受け取り箱の最後の 1 つを消した日には `はい` にならず、次に別の録画が置かれた後の見回りで `はい` になる
-   - `INBOX_DIR` が無いとき: `--recording` を渡して共有した会議ごとに、共有から 7 日たった後の最初の見回りで「録画は消しましたか」を 1 回だけ出す。**この設定では、見回りは録画が消えたことを知る手段が無いので、`source_recording_deleted` は自動では `はい` になりません。** 消したら `share-meeting.sh --recording-deleted <autonote_id>` を打ちます（取り消す入口はありません）
-   - 「消した」の印（`state/shared.tsv` の `recording_deleted`）が付いているのに置き場の議事録が `はい` になっていない会議があれば、見回りのたびに書き直して push する（push できなかった・衝突で捨てられた分も、ここで追いつく）
+     - 受け取り箱に録画が 1 つも無い日は、「消した」「見当たらない」の判定をしない（同期が止まってフォルダが空に見えるだけの日に、全部を「消した」にしないため）。そのため、受け取り箱の最後の 1 つを消した日には `はい` にならず、次に別の録画が置かれた後の見回りで `はい` になる。待たずに `はい` にしたいときは `share-meeting.sh --recording-deleted <autonote_id>`
+     - 録画した人が受け取り箱でファイル名を変えただけでも、古い名前の録画は「見えていて、無くなった」ので `はい` になる。`--recording <新しい名前>` を付けて載せ直すと `まだ` に戻る。名前を変えずに戻すなら `--recording-deleted <autonote_id> --undo`
+   - `INBOX_DIR` が無いとき: `--recording` を渡して共有した会議ごとに、共有から 7 日たった後の最初の見回りで「録画は消しましたか」を 1 回だけ出す。**この設定では、見回りは録画が消えたことを知る手段が無いので、`source_recording_deleted` は自動では `はい` になりません。** 消したら `share-meeting.sh --recording-deleted <autonote_id>` を打ちます（知らせの文には、その会議の番号が入った形で出るので、そのまま写せる。間違えて打ったら、後ろに `--undo` を付けて打ち直す）
+   - 置き場の議事録の `source_recording_deleted` は、「消した」の印（`state/shared.tsv` の `recording_deleted`）に合わせる。印があるのに `はい` でない会議・印が無いのに `はい` の会議があれば、見回りのたびに書き直して push する（push できなかった・衝突で捨てられた分も、ここで追いつく）
 4. `AUTONOTE_CLI` があれば、AutoNote から消えた共有の会議を知らせる（自動では消さない。取り下げるなら `--unshare`）
 5. 読む人向けの写しのうち、足りないもの・古いものを作り直す
 
 見回りは無人で走るので、失敗は次の形で持ち主に届きます。**ときどき `state/todo.md` を見てください。**
 
-- 見回りで起きた失敗（置き場に送れない・写しを作れない・受け取り箱を読めない・clone に人の直しかけがある、など）は、`state/todo.md` に 1 行ずつ書く。同じ文は、前の行が残っている間は重ねて書かない
+- 見回りで起きた失敗は、`state/todo.md` に 1 行ずつ書く。同じ文は、前の行が残っている間は重ねて書かない。書くのは、置き場に送れない・git のコマンドが失敗した・ロックを取れない・写しを作れない・受け取り箱を読めない・`VAULT_ROOT` のフォルダが無い・clone に人の直しかけがある・送り直しを待っている会議の会議ファイルが見つからない・`autonote list` を読めない・手順が途中で止まった、のどれか
 - 失敗があった日は、持ち主あての知らせ「見回りで失敗がありました（N 件）。state/todo.md を見てください」を 1 日 1 通まで出す（失敗が続けば、次の日も 1 通）
 
 ## 失敗したとき
@@ -260,9 +277,11 @@ rsync -a --exclude templates/ --exclude __pycache__/ examples/automations/share-
 | 置き場が空・ブランチ名が違う | 「置き場が空です（…手順 3 を先に行う）」「置き場にブランチ … がありません（あるのは …）。SHARE_BRANCH を…」と出して、上と同じく `pending.tsv` に入れる。**これは送り直しても通りません。** 文のとおりに直してから `--retry-pending` |
 | 置き場のファイルが GitHub の画面などで直されていた | **多くの場合、知らせなしで上書きされます。** 置き場は AutoNote の中身の写しで、直す場所は AutoNote です。直しが clone に取り込まれた後（別の会議の共有や見回りのたびに取り込む）にその会議が載せ直されると、スクリプトは AutoNote の中身でファイルを書き直し、出るのは「更新しました」だけです。直しは置き場の git の履歴には残ります |
 | 上のうち、直しがまだ clone に入っておらず、同じ行を AutoNote 側でも変えていた（ぶつかった） | まだ push していない commit をすべて捨て、clone を置き場と同じ中身に戻して、1 で終わる。`state/todo.md` と知らせに「GitHub 側で直されています: <ファイル>」と出す（同じ衝突の知らせは、1 回の実行で 1 通だけ）。ぶつかった会議は `state/pending.tsv` に入り、次の送り直しが AutoNote の中身から作り直して載せるので、この場合も GitHub 側の直しは上書きされる。push できずに残っていた commit の送り直しでぶつかったときは、同じ実行のうちに載せ直すところまで進む。残したい直しは、置き場の git の履歴から拾って AutoNote の会議ファイルに反映する。ほかの会議の共有は止まらない |
-| ほかの実行がロックを持っている（写しの作り直しが長引いている、など） | 共有と取り下げは 120 秒待ち、取れなければ 1 で終わって `state/pending.tsv` に入れる。次の `--retry-pending` か見回りが送り直す |
+| ほかの実行がロックを持っている（写しの作り直しが長引いている、など） | 共有と取り下げは 120 秒待ち、取れなければ 1 で終わって `state/pending.tsv` に入れる。次の `--retry-pending` か見回りが送り直す。落ちた実行が残したロックは、書いてあるプロセスがもう居なければ次の実行が外す。そのプロセス番号を別のプロセスが使っている間は外れないので、何日も「ロックを … 取れません」が続くときは、ほかに実行が無いこと（`pgrep -fl daily_patrol.py` と `pgrep -fl share_meeting.py` が何も出さない）を確かめてから `state/lock` のフォルダをゴミ箱に移す |
 | clone に git の名前かメールが無い | 設定のコマンドを示して 1 で終わり、`todo.md` に書いて `state/pending.tsv` に入れる。設定してから `--retry-pending` |
-| git のコマンドが途中で失敗した | その回に clone に書いたものを元に戻し、1 で終わって `state/pending.tsv` に入れる |
+| git のコマンドが途中で失敗した | その回に clone に書いたものを元に戻し、1 で終わって `state/pending.tsv` に入れる。見回りで起きたときは `todo.md` に git の言い分の 1 行目を書く |
+| 送り直しを待っている会議（`pending.tsv`）の会議ファイルが、AutoNote 側で消されたか `VAULT_ROOT` の外に動かされた | その会議の commit がもう置き場に届いていれば、clone の議事録から `shared.tsv` の行を作って待ちから外し、「議事録が並びました」を出して、持ち主あてに「会議ファイルが見つかりません（置き場には載っています）」と `todo.md` に書く（録画の知らせなどは、ふつうに共有した会議と同じに続く）。届いていなければ、待ちに残したまま 1 で終わり、`todo.md` に書く。ファイルを戻すか、`--unshare <autonote_id>` で待ちから外す |
+| `VAULT_ROOT` のフォルダ自体が無い（外付けのディスクがつながっていない、など） | 会議ファイルを読む手順を飛ばして 1 で終わり、`todo.md` に 1 行書く（会議ごとの「見つかりません」は出さない） |
 | 前の実行が途中で落ちて、書きかけが clone に残った | 次の実行の始めに、スクリプトが書く場所（`INDEX.md` と年のフォルダ）を最後の commit の状態に戻してから進む |
 | clone に、スクリプトが書かないファイルの直しかけ（未コミットの変更）がある | 何もせず 1 で終わり、原因のファイル名を出して `todo.md` に書く（導入の手順 3 で `README.md` を直して commit し忘れた、など）。commit するか元に戻す。git が追跡していないファイル（Finder が作る `.DS_Store`、clone の直下に置いたメモ）は気にせず進み、commit もしない。ただし `INDEX.md` と年のフォルダ（`2026/` など）の中はスクリプトのものなので、そこに置いたファイルは書きかけとして消される |
 | 同じ名前で別の会議 | AutoNote と同じく `-2` `-3` を付ける |
@@ -271,7 +290,7 @@ rsync -a --exclude templates/ --exclude __pycache__/ examples/automations/share-
 | 文字起こしの章が無い | 議事録だけを置き、`transcript_file: なし` |
 | 見回りが会議ファイルのフォルダを読めない | `todo.md` と知らせに出し、載せ直しだけ飛ばして続ける（上の「launchd から会議ファイルのフォルダを読めないとき」） |
 
-状態はすべて `state/` にあります。`shared.tsv`（載せた会議 1 件に 1 行。見出しの列名は変えない）、`pending.tsv`、`inbox-seen.tsv`（見回りが受け取り箱で見た録画）、`mirror-files.tsv`（写したファイル）、`todo.md`（要対応）、`notices.md`（`NOTIFY_MODE=macos` のときのお知らせ）、`outbox/`、`problem-notice-day`（見回りの失敗の知らせを最後に出した日）。書き込みは `state/lock`（mkdir で取るロック。最長 120 秒待つ）を通すので、同時に 2 本走っても状態は壊れません。待っても取れなかった共有は、上の表のとおり後で送り直されます。ログは `logs/share-YYYY-MM.log` などに 1 行ずつ（会議の中身は書かない）。
+状態はすべて `state/` にあります。`shared.tsv`（載せた会議 1 件に 1 行。見出しの列名は変えない）、`pending.tsv`、`inbox-seen.tsv`（見回りが受け取り箱で見た録画）、`mirror-files.tsv`（写したファイル）、`todo.md`（要対応）、`notices.md`（`NOTIFY_MODE=macos` のときのお知らせ）、`outbox/`、`problem-notice-day`（見回りの失敗の知らせを最後に出した日）。共有・取り下げ・見回りの各手順は、`state/lock`（mkdir で取るロック。最長 120 秒待つ）を取ってから clone と `shared.tsv` に書くので、同時に 2 本走っても置き場と台帳は壊れません。待っても取れなかった共有は、上の表のとおり後で送り直されます。ロックを取れなかったときの `pending.tsv` への追記と `todo.md` への追記はロックの外で行うので、ちょうど同時に 2 本が書くと、片方の 1 行が残らないことがあります（ファイル自体は壊れない）。ログは `logs/share-YYYY-MM.log` などに 1 行ずつ（会議の中身は書かない）。
 
 ## 読む人が git を使わない場合（読む人向けの写し）
 
@@ -289,6 +308,7 @@ rsync -a --exclude templates/ --exclude __pycache__/ examples/automations/share-
 - 「はじめに」は `bin/templates/mirror-readme.md` から作ります。読む人に配る前に、自分の運用に合わせて直してください（導入の手順 3）
 - 形式は `MIRROR_FORMAT` で `docx`（既定）・`md`・`docx,md`。docx は macOS 標準の `/usr/bin/textutil` で作ります（`DOCX_CMD` で別のコマンドに差し替えられる。引数は `<入力の HTML> <出力の docx>`）
 - textutil の docx は表を持てないため、表は 1 行ずつ「見出し: 値 ／ 見出し: 値」の段落にして書きます。箇条書きも字下げした段落になります
+- 議事録の構成図（Mermaid）は図にならず、`flowchart LR` のような元の文字のまま出ます。Obsidian の形のリンク（`[[別のノート]]` など）も、記号ごとそのまま出ます（発言リンクだけは「（→ 00:07:08）」に置き換わる）。読む人に配る前に知っておいてください
 - 写しは state の下の作業フォルダで作ってから置き換えるので、同期フォルダに書きかけのファイルは置きません。写したファイルは `state/mirror-files.tsv` に記録し、消すのはそこにあるものだけです（読む人が置いたファイルは残る）
 - `--unshare` で取り下げた会議は、写しからも消えます
 - 写しのファイルを読む人が直してしまっても、スクリプトは気づきません（作り直すのは、元の議事録が変わったときと、ファイルが無くなったとき）。直された版は、その会議が次に載せ直されるまで残ります。すぐ戻すには `share-meeting.sh --rebuild-mirror` を打ちます
@@ -296,6 +316,12 @@ rsync -a --exclude templates/ --exclude __pycache__/ examples/automations/share-
 - 知らせのリンクは `MIRROR_WEB_URL`（写しのフォルダの URL）があればそれを使い、読む人に GitHub の URL を見せません
 
 読む人には「はじめに」を読んでもらい、その人の Claude には同期フォルダをつないで「はじめに を読んでから、会議の一覧 → 議事録 → 文字起こし の順に読んで」と頼んでもらいます。
+
+## 分かっている制約
+
+- 一覧の「一行の要約」は、議事録の `## 要約` の節から取ります。この節が `## 3行要約` だった頃の AutoNote で作った古い会議は、`INDEX.md` と「会議の一覧」の要約の欄が「—」になります（議事録の本文は欠けずに載る）
+- 1 本の録画を 2 つの会議に付ける使い方は想定していません（導入の手順 4）
+- launchd の下で書類フォルダの中の会議ファイルを読む形は、最後までは確かめていません（「launchd から会議ファイルのフォルダを読めないとき」）
 
 ## テスト
 
