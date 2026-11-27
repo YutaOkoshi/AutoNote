@@ -40,19 +40,38 @@ public struct EngineCatalog: Sendable {
         return out
     }
 
-    public func resolve(role: EngineRole, language: Language, override: EngineChoice?) async -> EngineChoice? {
+    /// The engine that runs as `role`: `override` (the settings' choice) when it can run, else the machine's default
+    /// for the role, else the first usable candidate; nil when nothing can run. An `override` that cannot run (an
+    /// Apple engine as the final engine, a model that is not downloaded or not a whisper model, an engine without
+    /// this language) is reported to `diagnostics` with the reason and what runs instead.
+    public func resolve(role: EngineRole, language: Language, override: EngineChoice?,
+                        diagnostics: SettingsDiagnostics = .shared) async -> EngineChoice? {
         let list = await entries(role: role, language: language)
         func usable(_ c: EngineChoice) -> Bool { list.first { $0.choice == c }?.available == true }
 
-        let d = Self.defaults(for: machine)
         if let override, usable(override) { return override }
+        let d = Self.defaults(for: machine)
         let roleDefault = role == .live ? d.live : d.batch
-        if usable(roleDefault) { return roleDefault }
-
-        var candidates: [EngineChoice] = []
+        var candidates = [roleDefault]
         if role == .live { candidates += [.dictation, .speech, .whisper(d.whisperLiveModel)] }
         candidates += Self.batchModelPreference.map { .whisper($0) }
-        return candidates.first(where: usable)
+        let resolved = candidates.first(where: usable)
+        if let override {
+            diagnostics.report(SettingsDiagnostics.unusableEngine(
+                key: EngineChoice.settingsKey(role), kind: override.kind.rawValue, model: override.model,
+                why: Self.whyUnusable(override, role: role, entry: list.first { $0.choice == override }),
+                using: resolved?.displayName ?? "no engine (none can run)"))
+        }
+        return resolved
+    }
+
+    /// Why `choice` cannot run as `role`: its entry's reason, or why it has no entry.
+    private static func whyUnusable(_ choice: EngineChoice, role: EngineRole, entry: EngineEntry?) -> String {
+        if let reason = entry?.reason { return reason }
+        if !EngineChoice.kinds(for: role).contains(choice.kind) {
+            return "only \(EngineChoice.kinds(for: role).map(\.rawValue).joined(separator: ", ")) can be the \(role == .live ? "live" : "final") engine"
+        }
+        return choice.kind == .whisper ? "not a whisper model AutoNote knows" : "not available"
     }
 
     private func dictationEntry(_ language: Language) async -> EngineEntry {

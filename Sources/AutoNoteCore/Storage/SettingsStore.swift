@@ -4,23 +4,32 @@ public actor SettingsStore {
     private let paths: AppPaths
     private let timeZone: TimeZone
     public private(set) var lastSetAside: URL?
+    private let diagnostics: SettingsDiagnostics
 
-    public init(paths: AppPaths, timeZone: TimeZone = .current) {
+    public init(paths: AppPaths, timeZone: TimeZone = .current, diagnostics: SettingsDiagnostics = .shared) {
         self.paths = paths
         self.timeZone = timeZone
+        self.diagnostics = diagnostics
     }
 
+    /// The file's settings, or the defaults when there is no file. A file that does not decode (not JSON, a wrong
+    /// type, an unknown `default_language`) is moved aside as `settings.json.corrupt-<time>` and the defaults are
+    /// returned; `diagnostics` gets where it failed and the new name. Values AutoNote ignored while decoding are
+    /// reported there too (`Settings.init(from:)`).
     public func load() throws -> Settings {
         let file = paths.settingsFile
         guard FileManager.default.fileExists(atPath: file.path) else { return Settings() }
         let data = try Data(contentsOf: file)
         do {
-            return try AutoNoteJSON.decoder().decode(Settings.self, from: data)
+            let decoder = AutoNoteJSON.decoder()
+            decoder.userInfo[SettingsDiagnostics.userInfoKey] = diagnostics
+            return try decoder.decode(Settings.self, from: data)
         } catch {
             let aside = file.deletingLastPathComponent()
                 .appending(path: "settings.json.corrupt-\(timestamp(Date()))")
             try FileManager.default.moveItem(at: file, to: aside)
             lastSetAside = aside
+            diagnostics.report(SettingsDiagnostics.fileSetAside(error, aside: aside.lastPathComponent))
             return Settings()
         }
     }

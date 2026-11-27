@@ -122,7 +122,8 @@ public actor LiveTranscriptionWiring: LiveTranscriptPort {
             logger.error("\(id.rawValue, privacy: .public): live transcript unavailable (\(String(describing: error), privacy: .public))")
             return
         }
-        logger.notice("\(id.rawValue, privacy: .public): live transcript started (on recording started)")
+        // The engine that actually runs: an unknown or unavailable `live_engine` has fallen back by now.
+        logger.notice("\(id.rawValue, privacy: .public): live transcript started (on recording started, engine: \(start.feed.engineName, privacy: .public))")
         let feed = start.feed
         // Register before the forward task can publish, so no subscriber misses the first list.
         for continuation in feedSubscribers.values { continuation.yield(confirmedFeed(for: id)) }

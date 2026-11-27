@@ -119,13 +119,31 @@ public struct Settings: Codable, Equatable, Sendable {
         clamp(v, MachineProfile.batchThreadRange.lowerBound, MachineProfile.batchThreadRange.upperBound)
     }
 
+    /// The value under `key`, or `fallback` when the key is missing or null. An unknown value (a newer or hand-edited
+    /// file) also falls back instead of failing the whole file, and is reported under `name` (the JSON key).
+    private static func known<T: RawRepresentable & CaseIterable, Key: CodingKey>(
+        _ c: KeyedDecodingContainer<Key>, _ key: Key, _ name: String, default fallback: T,
+        _ diagnostics: SettingsDiagnostics
+    ) -> T where T.RawValue == String {
+        guard c.contains(key), (try? c.decodeNil(forKey: key)) == false else { return fallback }
+        let raw = try? c.decode(String.self, forKey: key)
+        if let raw, let value = T(rawValue: raw) { return value }
+        diagnostics.report(SettingsDiagnostics.ignoredValue(key: name, value: raw ?? "(not a string)",
+                                                            known: T.allCases.map(\.rawValue), using: fallback.rawValue))
+        return fallback
+    }
+
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        let diagnostics = decoder.userInfo[SettingsDiagnostics.userInfoKey] as? SettingsDiagnostics ?? .shared
         outputFolder = try c.decodeIfPresent(String.self, forKey: .outputFolder)
         claudePath = try c.decodeIfPresent(String.self, forKey: .claudePath)
         claudeArgs = try c.decodeIfPresent([String].self, forKey: .claudeArgs) ?? []
-        claudeEnv = (try c.decodeIfPresent([String: String].self, forKey: .claudeEnv) ?? [:])
-            .filter { Self.isValidEnvironmentName($0.key) }
+        let env = try c.decodeIfPresent([String: String].self, forKey: .claudeEnv) ?? [:]
+        claudeEnv = env.filter { Self.isValidEnvironmentName($0.key) }
+        if claudeEnv.count < env.count {
+            diagnostics.report(SettingsDiagnostics.droppedEnvironmentNames(env.count - claudeEnv.count))
+        }
         claudeModel = try c.decodeIfPresent(String.self, forKey: .claudeModel)
         summarizerKind = try c.decodeIfPresent(SummarizerKind.self, forKey: .summarizerKind) ?? summarizerKind
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? launchAtLogin
@@ -148,9 +166,8 @@ public struct Settings: Codable, Equatable, Sendable {
             Self.liveSummaryIntervalRange.lowerBound, Self.liveSummaryIntervalRange.upperBound)
         let model = (try c.decodeIfPresent(String.self, forKey: .liveSummaryModel) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         liveSummaryModel = model.isEmpty ? Self.defaultLiveSummaryModel : model
-        // An unknown value (a newer or hand-edited file) falls back to the default instead of failing the whole file.
-        translationMode = (try? c.decodeIfPresent(TranslationMode.self, forKey: .translationMode)) ?? nil ?? .off
-        translationTarget = (try? c.decodeIfPresent(TranslationTarget.self, forKey: .translationTarget)) ?? nil ?? .auto
+        translationMode = Self.known(c, .translationMode, "translation_mode", default: .off, diagnostics)
+        translationTarget = Self.known(c, .translationTarget, "translation_target", default: .auto, diagnostics)
         translationModel = try c.decodeIfPresent(String.self, forKey: .translationModel)
         translationLicenseVersion = try c.decodeIfPresent(String.self, forKey: .translationLicenseVersion)
         translationShown = try c.decodeIfPresent(Bool.self, forKey: .translationShown) ?? translationShown
