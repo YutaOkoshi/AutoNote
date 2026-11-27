@@ -18,21 +18,24 @@ public struct TrackLoss: Codable, Equatable, Hashable, Sendable {
 public enum AudioLossRule {
     /// A track is lossy from this many missing seconds…
     public static let minimumLostSeconds = 30
-    /// …or from this share of the recording, whichever is larger.
+    /// …or from this share of the recording, whichever is larger…
     public static let lostFraction = 0.10
+    /// …but never from more than this: three minutes of a long meeting are worth telling.
+    public static let maximumThresholdSeconds = 180
 
     public static func threshold(recordedSeconds: Double) -> Int {
-        max(minimumLostSeconds, Int((max(0, recordedSeconds) * lostFraction).rounded(.up)))
+        min(maximumThresholdSeconds, max(minimumLostSeconds, Int((max(0, recordedSeconds) * lostFraction).rounded(.up))))
     }
 
     /// Seconds of the track that should have held audio and did not.
-    /// - microphone: seconds without callbacks, outside the recording's pauses. An open input always calls back, so
-    ///   none means the input was gone. All-zero seconds do not count: a headset's mute button delivers exact zeros.
+    /// - microphone: seconds without callbacks, outside the recording's pauses and not after the microphone was
+    ///   detached for good. An open input always calls back, so none means the input was gone. All-zero seconds do
+    ///   not count: a headset's mute button delivers exact zeros (they stay on record as `zero_seconds`).
     /// - system audio: seconds in which another process was playing audio and nothing but zeros (or no callback)
     ///   arrived. With nobody playing, an idle tap delivers zeros or no callbacks at all, and that is not a loss.
     public static func lostSeconds(_ health: TrackHealth) -> Int {
         switch health.track {
-        case .mic: max(0, health.noCallbackSeconds - (health.pausedNoCallbackSeconds ?? 0))
+        case .mic: max(0, health.noCallbackSeconds - (health.excludedNoCallbackSeconds ?? 0))
         case .system: (health.suspectZeroSeconds ?? 0) + (health.suspectNoCallbackSeconds ?? 0)
         }
     }
@@ -79,7 +82,7 @@ extension TrackHealth {
                                restarts: mine.reduce(0) { $0 + $1.restarts }, callbacks: mine.reduce(0) { $0 + $1.callbacks },
                                droppedFrames: sum(mine, \.droppedFrames), suspectZeroSeconds: sum(mine, \.suspectZeroSeconds),
                                suspectNoCallbackSeconds: sum(mine, \.suspectNoCallbackSeconds),
-                               pausedNoCallbackSeconds: sum(mine, \.pausedNoCallbackSeconds))
+                               excludedNoCallbackSeconds: sum(mine, \.excludedNoCallbackSeconds))
         }
         return result.isEmpty ? nil : result
     }

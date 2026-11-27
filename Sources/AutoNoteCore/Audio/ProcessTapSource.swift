@@ -35,6 +35,9 @@ public struct SystemTapRecoveryPolicy: Sendable, Equatable {
     public var zeroRetryMax: Double
     /// After the default output device changed, zeros for only this long are enough for one rebuild.
     public var zeroTimeoutAfterRouteChange: Double
+    /// How long after the change the shorter wait applies. Sound that goes on arriving keeps the zeros short, so
+    /// nothing is rebuilt; the window only ends the special case.
+    public var routeChangeWindow: Double
     /// Zeros for this long despite a rebuild: the owner is told once (`SourceHealth.setNotArrivingObserver`).
     public var notArrivingAfter: Double
     /// How long one look waits for the answer about other processes; no answer counts as "nobody plays".
@@ -43,11 +46,11 @@ public struct SystemTapRecoveryPolicy: Sendable, Equatable {
     public init(checkInterval: Duration = .milliseconds(250), stallTimeout: Double = 2, retryDelay: Double = 0.5,
                 maxConsecutiveFailures: Int = 5, maxRebuilds: Int = 30, rebuildBudgetReset: Double = 60,
                 zeroTimeout: Double = 5, zeroRetryMax: Double = 60, zeroTimeoutAfterRouteChange: Double = 2,
-                notArrivingAfter: Double = 60, probeTimeout: Duration = .seconds(1)) {
+                routeChangeWindow: Double = 10, notArrivingAfter: Double = 60, probeTimeout: Duration = .seconds(1)) {
         self.checkInterval = checkInterval; self.stallTimeout = stallTimeout; self.retryDelay = retryDelay
         self.maxConsecutiveFailures = maxConsecutiveFailures; self.maxRebuilds = maxRebuilds
         self.rebuildBudgetReset = rebuildBudgetReset; self.zeroTimeout = zeroTimeout; self.zeroRetryMax = zeroRetryMax
-        self.zeroTimeoutAfterRouteChange = zeroTimeoutAfterRouteChange
+        self.zeroTimeoutAfterRouteChange = zeroTimeoutAfterRouteChange; self.routeChangeWindow = routeChangeWindow
         self.notArrivingAfter = notArrivingAfter; self.probeTimeout = probeTimeout
     }
 
@@ -315,13 +318,15 @@ public actor ProcessTapSource: AudioSource {
         let playing = answer?.playing == true
         counts.recordOutputPoll(at: now, othersPlaying: playing)
         guard !gaveUp else { return }
+        if let at = routeChangedAt, now - at > policy.routeChangeWindow { routeChangedAt = nil }
         if let route = answer?.route {
             if let last = lastRoute, last != route {
                 // The usual moment for a tap to go deaf: zeros get a shorter wait once, and the back-off starts over.
+                // Zeros that were already going on wait the shorter time too, so the new output can settle.
                 Self.logger.notice("system tap: default output device changed \(self.hardware.routeDescription(), privacy: .public)")
                 routeChangedAt = now
                 zeroWait = policy.zeroTimeout
-                nextZeroRebuildAt = now
+                nextZeroRebuildAt = now + policy.zeroTimeoutAfterRouteChange
             }
             lastRoute = route
         }
@@ -351,7 +356,9 @@ public actor ProcessTapSource: AudioSource {
             zeroRebuildsInStretch = 0
             zeroWait = policy.zeroTimeout
             nextZeroRebuildAt = now
-            routeChangedAt = nil        // the tap hears the new output
+            // `routeChangedAt` stays: the sample may be from just before the change (the look that sees the change
+            // usually sees it too). It ends with the first rebuild or after `routeChangeWindow`.
+            counts.reportArrivingAgain()
         }
 
         // A tap that could not be brought up again is down, whoever plays.
@@ -379,7 +386,7 @@ public actor ProcessTapSource: AudioSource {
         let early = routeChangedAt.map { min(zeros, now - $0) >= policy.zeroTimeoutAfterRouteChange } ?? false
         guard lastRecords > 0, zeros >= policy.zeroTimeout || early else { return }
         if zeroRebuildsInStretch > 0, zeros >= policy.notArrivingAfter {
-            counts.reportNotArriving(seconds: Int(zeros))   // once per recording
+            counts.reportNotArriving(seconds: Int(zeros))   // once per stretch of zeros
         }
         guard now >= nextZeroRebuildAt else { return }
         routeChangedAt = nil

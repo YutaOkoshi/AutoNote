@@ -47,6 +47,10 @@ public actor RecordingSession {
     var writers = TrackWriters()
     var monitor: SilenceMonitor?
     private var silenceWarning = false
+    /// Tracks `audioNotArriving` was sent for and `audioArrivingAgain` not yet.
+    private var toldNotArriving: Set<Track> = []
+    /// Since when the microphone is detached (`detachMicrophone`) without having come back.
+    private var micDetachedAt: TimelineTime?
     /// Tracks whose source or writer failed during this meeting (`.sourceFailed`): lossy whatever their counters say.
     private var failedTracks: Set<Track> = []
     private var lastDiskCheck: TimelineTime?
@@ -192,6 +196,7 @@ public actor RecordingSession {
             guard let mic = micSource else { return }
             let at = elapsed()
             micSource = nil
+            micDetachedAt = at
             await mic.stop()
             broadcaster.yield(.microphoneDetached(at))
         }
@@ -209,6 +214,7 @@ public actor RecordingSession {
             let mic = sources.makeMicrophoneSource(deviceUID: deviceUID, clock: clock)
             try await mic.start(onBuffer: queue.onBuffer(for: .mic))
             micSource = mic
+            micDetachedAt = nil
             if let id = meetingID { watchHealth(of: mic, track: .mic, meeting: id) }
             broadcaster.yield(.microphoneAttached(elapsed(), device: sources.inputDevice(uid: deviceUID)))
         }
@@ -297,6 +303,7 @@ public actor RecordingSession {
         meetingID = id; self.clock = clock; self.startedAt = startedAt
         saver = ManifestSaver(store: manifests, initial: initial)
         monitor = SilenceMonitor(start: .zero); silenceWarning = false; failedTracks = []
+        toldNotArriving = []; micDetachedAt = nil
         lastDiskCheck = nil; diskLowReported = false; diskStopRequested = false
         stats = [.mic: TrackStatistics(), .system: TrackStatistics()]
         recentPeaks = [.mic: RecentPeakWindow(), .system: RecentPeakWindow()]
@@ -374,7 +381,8 @@ public actor RecordingSession {
         Self.logger.notice("\(id.rawValue, privacy: .public): recording stopping (reason: \(reason.rawValue, privacy: .public), recorded \(String(format: "%.1f", end.seconds), privacy: .public) s)")
         let running = [micSource, systemSource].compactMap { $0 }
         micSource = nil; systemSource = nil
-        await withTaskGroup(of: Void.self) { group in   // each source returns within its own stop timeout
+        // Each source returns within its own stop timeout (one caught in the middle of a rebuild: within two).
+        await withTaskGroup(of: Void.self) { group in
             for source in running { group.addTask { await source.stop() } }
         }
         ticker?.cancel()   // not awaited: a tick in flight re-checks the meeting after its awaits (see `tick()`)
@@ -388,7 +396,8 @@ public actor RecordingSession {
         // and of the length the threshold is taken from.
         let pauses = saver.latest.pauses
         let pausedSeconds = pauses.reduce(0.0) { $0 + max(0, ($1.end ?? end).seconds - $1.start.seconds) }
-        let health = trackHealth(until: end, pauses: pauses, meeting: id)
+        // Neither is the time after the microphone was detached for good (the grace time before an automatic stop).
+        let health = trackHealth(until: end, pauses: pauses, micAwaySince: micDetachedAt, meeting: id)
         let loss = AudioLossRule.evaluate(health: health, failedTracks: failedTracks,
                                           recordedSeconds: max(0, end.seconds - pausedSeconds))
         if let loss {
@@ -434,6 +443,7 @@ public actor RecordingSession {
         for list in healthSources.values { for h in list { h.setFailureObserver(nil); h.setNotArrivingObserver(nil) } }
         healthSources = [:]
         failedTracks = []
+        toldNotArriving = []; micDetachedAt = nil
     }
 
     // MARK: - Source health (diagnostics)
@@ -447,7 +457,7 @@ public actor RecordingSession {
             Task { await self?.sourceStoppedDelivering(track, message: message, meeting: id) }
         }
         health.setNotArrivingObserver { [weak self] seconds in
-            Task { await self?.audioNotArriving(track, seconds: seconds, meeting: id) }
+            Task { await self?.audioNotArriving(track, seconds: seconds, from: health, meeting: id) }
         }
     }
 
@@ -457,10 +467,30 @@ public actor RecordingSession {
     }
 
     /// The source keeps running and keeps trying; the listener (a notification) tells the user while it still helps.
-    private func audioNotArriving(_ track: Track, seconds: Int, meeting id: MeetingID) {
-        guard meetingID == id, case .recording = state, !failedTracks.contains(track) else { return }
+    /// `seconds` nil: audio is heard again, so what was told is taken back.
+    private func audioNotArriving(_ track: Track, seconds: Int?, from health: SourceHealth, meeting id: MeetingID) async {
+        guard meetingID == id, state != .idle else { return }
+        guard let seconds else {
+            guard toldNotArriving.remove(track) != nil else { return }
+            Self.logger.notice("\(id.rawValue, privacy: .public): \(track.rawValue, privacy: .public) audio is arriving again")
+            broadcaster.yield(.audioArrivingAgain(track))
+            return
+        }
+        guard !failedTracks.contains(track) else { return }
+        guard case .recording = state else {
+            health.forgetNotArriving()   // paused meanwhile: not told, so the source may say it again after the resume
+            return
+        }
         Self.logger.notice("\(id.rawValue, privacy: .public): \(track.rawValue, privacy: .public) audio is not arriving (\(seconds, privacy: .public) s)")
+        toldNotArriving.insert(track)
         broadcaster.yield(.audioNotArriving(track, seconds: seconds))
+        guard track == .system else { return }
+        // One notice about system audio: the general silence warning would say the same in vaguer words. The
+        // manifest's flag is set as that warning would have set it.
+        monitor?.systemAudioWasToldAbout()
+        guard !silenceWarning else { return }
+        silenceWarning = true
+        do { try await persist { $0.silenceWarning = true } } catch { Self.log("silence flag save", error) }
     }
 
     private func sourceStoppedDelivering(_ track: Track, message: String, meeting id: MeetingID) async {
@@ -470,10 +500,12 @@ public actor RecordingSession {
 
     /// Per track with counters: seconds without callbacks, seconds of all-zero samples, rebuilds, dropped frames and
     /// (system audio) the seconds of both kinds in which another process was playing. Also logged.
-    private func trackHealth(until end: TimelineTime, pauses: [PauseInterval], meeting id: MeetingID) -> [TrackHealth]? {
+    private func trackHealth(until end: TimelineTime, pauses: [PauseInterval], micAwaySince: TimelineTime?,
+                             meeting id: MeetingID) -> [TrackHealth]? {
         let result = [Track.mic, .system].compactMap { track -> TrackHealth? in
             guard let list = healthSources[track], !list.isEmpty else { return nil }
-            return SourceHealth.summary(track: track, sources: list, endSeconds: end.seconds, pauses: pauses)
+            let away = track == .mic ? micAwaySince.map { [PauseInterval(start: $0)] } ?? [] : []
+            return SourceHealth.summary(track: track, sources: list, endSeconds: end.seconds, pauses: pauses + away)
         }
         for h in result {
             let suspect = h.suspectZeroSeconds.map { ", while another process played: all zero \($0) s, no callbacks \(h.suspectNoCallbackSeconds ?? 0) s" } ?? ""

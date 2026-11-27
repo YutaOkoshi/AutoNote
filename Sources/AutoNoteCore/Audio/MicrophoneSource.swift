@@ -31,8 +31,9 @@ public struct MicrophoneRecoveryPolicy: Sendable, Equatable {
     public var zeroTimeout: Duration?
     /// …up to this, and goes back to `zeroTimeout` once a non-zero sample arrives.
     public var zeroRetryMax: Duration
-    /// Rebuilds for one stretch of zeros (5, 10, 20 s into it); after that the input is taken to be muted and is
-    /// left alone until a non-zero sample arrives.
+    /// Rebuilds for one stretch of zeros (waits of 5, 10 and 20 s: 5, 15 and 35 s into it); after that the input is
+    /// taken to be muted and is left alone until a non-zero sample arrives. Nobody is told and it is not counted as
+    /// lost audio: a muted headset does this every day. The seconds stay on record as `audio_health.zero_seconds`.
     public var maxZeroRebuilds: Int
 
     public init(checkInterval: Duration = .milliseconds(250), settleDelay: Duration = .milliseconds(300),
@@ -123,6 +124,9 @@ public actor MicrophoneSource: AudioSource {
     private var zeroWait = Duration.zero
     private var nextZeroRebuildAt = ContinuousClock.now
     private var zeroRebuildsInStretch = 0
+    /// Test hooks: when each rebuild for zeros began, and the wait before the next one.
+    private(set) var zeroRebuildStarts: [ContinuousClock.Instant] = []
+    var currentZeroWait: Duration { zeroWait }
     /// Whether `inputHold` holds a Bluetooth input for this recording.
     private var holdingInput = false
 
@@ -368,6 +372,7 @@ public actor MicrophoneSource: AudioSource {
         var backoff = policy.retryDelay
         if forZeros {
             zeroRebuildsInStretch += 1
+            zeroRebuildStarts.append(.now)
         } else {
             rebuildsInBudget += 1
             healthySince = nil

@@ -31,8 +31,10 @@ public enum RecordingEvent: Sendable, Equatable {
     case diskSpaceLow(availableBytes: Int64)
     case sourceFailed(Track, message: String)
     /// Audio that should be arriving on `track` has not for `seconds` although the source was rebuilt (system audio:
-    /// another app plays, yet only zeros arrive). Sent once per recording; the recording goes on.
+    /// another app plays, yet only zeros arrive). Sent once per such stretch; the recording goes on.
     case audioNotArriving(Track, seconds: Int)
+    /// Audio is heard again on a track that `audioNotArriving` was sent for.
+    case audioArrivingAgain(Track)
     case microphoneDetached(TimelineTime)
     case microphoneAttached(TimelineTime, device: DeviceRef?)
     case stopped(Manifest, StopReason)

@@ -36,6 +36,26 @@ private struct TapSession {
     }
 }
 
+/// What a recording said about system audio so far, in order.
+private final class SystemAudioLog: Sendable {
+    private let said = Mutex<[String]>([])
+    var all: [String] { said.withLock { $0 } }
+    func collect(_ events: AsyncStream<RecordingEvent>) -> Task<Void, Never> {
+        Task {
+            for await event in events {
+                let word: String? = switch event {
+                case .audioNotArriving(.system, _): "notArriving"
+                case .audioArrivingAgain(.system): "again"
+                case .silenceWarning(let w) where w.track == .system: "silence"
+                default: nil
+                }
+                if let word { said.withLock { $0.append(word) } }
+                if case .stopped = event { break }
+            }
+        }
+    }
+}
+
 private func notArriving(_ events: [RecordingEvent]) -> [Int] {
     events.compactMap { if case .audioNotArriving(.system, let seconds) = $0 { seconds } else { nil } }
 }
@@ -145,6 +165,37 @@ private func failed(_ events: [RecordingEvent], _ track: Track) -> Bool {
         #expect(system.restarts == 0)
         #expect(m.audioLoss == nil)
         #expect(notArriving(await eventsUntilStopped(events)).isEmpty)
+    }
+
+    /// One notice about system audio at a time: once "not arriving" is told, the general silence warning (60 s
+    /// without a non-zero sample) stays away; the manifest still carries the silence flag. When sound is heard again
+    /// the listeners learn it, and a later minute of zeros is told again.
+    @Test func notArrivingStandsInForTheSilenceWarningAndIsTakenBackWhenAudioReturns() async throws {
+        let t = try TapSession(); t.factory.hardware.othersPlaying = true
+        let level = Mutex<Float>(0)
+        let log = SystemAudioLog()
+        let collector = log.collect(await t.session.events())
+        _ = try await t.session.start(.init(language: .ja))
+        let tap = try #require(t.factory.tap)
+        await settle(tap)
+        let feeder = feedTap(t.factory.hardware, host: t.host) { level.withLock { $0 } }
+        await settle(tap, fed: true)
+        for _ in 0..<70 { t.host.advance(1); await settle(tap, fed: true) }      // 70 s of zeros
+        #expect(await eventuallyTrue(.seconds(30)) { log.all == ["notArriving"] })
+        await t.session.tick()                                                   // 70 s without a non-zero sample
+        level.withLock { $0 = 0.25 }
+        #expect(await eventuallyTrue(.seconds(30)) { log.all == ["notArriving", "again"] })
+        level.withLock { $0 = 0 }
+        let fired = await tap.statistics().callbacks
+        #expect(await eventuallyTrue(.seconds(10)) { (tap.health?.callbacks ?? 0) >= fired + 2 })
+        await settle(tap)
+        for _ in 0..<70 { t.host.advance(1); await settle(tap, fed: true) }      // and another 70 s
+        #expect(await eventuallyTrue(.seconds(30)) { log.all.count == 3 })
+        feeder.cancel(); await feeder.value
+        let m = try await t.session.stop()
+        await collector.value
+        #expect(log.all == ["notArriving", "again", "notArriving"])
+        #expect(m.silenceWarning)
     }
 
     /// Another app plays and the tap does not call back at all; rebuilding does not help.

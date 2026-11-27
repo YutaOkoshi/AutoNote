@@ -22,18 +22,18 @@ public struct TrackHealth: Codable, Equatable, Hashable, Sendable {
     /// System track: whole seconds in which another process was playing audio while no callback arrived. (With nobody
     /// playing, an idle tap delivers no callbacks at all, so `noCallbackSeconds` alone says nothing.) nil as above.
     public var suspectNoCallbackSeconds: Int?
-    /// Of `noCallbackSeconds`, those that lay inside a pause of the recording (nothing was being recorded then).
-    /// nil when there were none.
-    public var pausedNoCallbackSeconds: Int?
+    /// Of `noCallbackSeconds`, those in which nothing was to be recorded: inside a pause of the recording, or after
+    /// the microphone was detached and did not come back before the stop. nil when there were none.
+    public var excludedNoCallbackSeconds: Int?
 
     public init(track: Track, noCallbackSeconds: Int, zeroSeconds: Int, restarts: Int, callbacks: Int,
                 droppedFrames: Int? = nil, suspectZeroSeconds: Int? = nil, suspectNoCallbackSeconds: Int? = nil,
-                pausedNoCallbackSeconds: Int? = nil) {
+                excludedNoCallbackSeconds: Int? = nil) {
         self.track = track; self.noCallbackSeconds = noCallbackSeconds; self.zeroSeconds = zeroSeconds
         self.restarts = restarts; self.callbacks = callbacks
         self.droppedFrames = droppedFrames; self.suspectZeroSeconds = suspectZeroSeconds
         self.suspectNoCallbackSeconds = suspectNoCallbackSeconds
-        self.pausedNoCallbackSeconds = pausedNoCallbackSeconds
+        self.excludedNoCallbackSeconds = excludedNoCallbackSeconds
     }
 }
 
@@ -62,7 +62,7 @@ public final class SourceHealth: Sendable {
         var windowNonZero = false
         var failureObserver: (@Sendable (String) -> Void)?
         var failure: String?
-        var notArrivingObserver: (@Sendable (Int) -> Void)?
+        var notArrivingObserver: (@Sendable (Int?) -> Void)?
         var notArriving: Int?
     }
 
@@ -152,21 +152,36 @@ public final class SourceHealth: Sendable {
         observer?(message)
     }
 
-    /// Called once with the seconds so far when the source keeps running but, for a long stretch, received nothing
-    /// while another process was playing audio (and rebuilding did not help). Not a failure: the source goes on.
-    public func setNotArrivingObserver(_ observer: (@Sendable (Int) -> Void)?) {
+    /// Called with the seconds so far when the source keeps running but, for a long stretch, received nothing while
+    /// another process was playing audio (and rebuilding did not help), and with nil once audio is heard again.
+    /// Once per such stretch. Not a failure: the source goes on.
+    public func setNotArrivingObserver(_ observer: (@Sendable (Int?) -> Void)?) {
         let pending = state.withLock { s -> Int? in s.notArrivingObserver = observer; return s.notArriving }
         if let pending, let observer { observer(pending) }
     }
 
+    /// Nothing is said about a paused recording.
     func reportNotArriving(seconds: Int) {
-        let observer = state.withLock { s -> (@Sendable (Int) -> Void)? in
-            guard s.notArriving == nil else { return nil }
+        let observer = state.withLock { s -> (@Sendable (Int?) -> Void)? in
+            guard s.notArriving == nil, !s.paused else { return nil }
             s.notArriving = seconds
             return s.notArrivingObserver
         }
         observer?(seconds)
     }
+
+    /// A non-zero sample arrived: takes back what `reportNotArriving` said, if it said anything.
+    func reportArrivingAgain() {
+        let observer = state.withLock { s -> (@Sendable (Int?) -> Void)? in
+            guard s.notArriving != nil else { return nil }
+            s.notArriving = nil
+            return s.notArrivingObserver
+        }
+        observer?(nil)
+    }
+
+    /// The owner could not pass the report on (the recording was paused by the time it arrived): it may be made again.
+    public func forgetNotArriving() { state.withLock { $0.notArriving = nil } }
 
     /// The per-second marks, for merging several sources of one track (a microphone re-attached mid-meeting).
     fileprivate var marks: [UInt8] { state.withLock { $0.seconds } }
@@ -190,7 +205,7 @@ public final class SourceHealth: Sendable {
         let audio = delivered | nonZero
         let noCallback = merged.lazy.filter { $0 & delivered == 0 }.count
         let zero = merged.lazy.filter { $0 & audio == delivered }.count
-        // Seconds wholly inside a pause (an open pause runs to the end): nothing was being recorded then.
+        // Seconds wholly inside an interval of `pauses` (an open one runs to the end): nothing was to be recorded then.
         var paused = [Bool](repeating: false, count: total)
         for pause in pauses {
             let from = max(0, Int(pause.start.seconds.rounded(.up)))
@@ -204,6 +219,6 @@ public final class SourceHealth: Sendable {
                            droppedFrames: dropped,
                            suspectZeroSeconds: polled ? suspect.filter { merged[$0] & audio == delivered }.count : nil,
                            suspectNoCallbackSeconds: polled ? suspect.filter { merged[$0] & delivered == 0 }.count : nil,
-                           pausedNoCallbackSeconds: pausedNoCallback > 0 ? pausedNoCallback : nil)
+                           excludedNoCallbackSeconds: pausedNoCallback > 0 ? pausedNoCallback : nil)
     }
 }

@@ -42,7 +42,7 @@ private func zeroPolicy(_ tweak: (inout MicrophoneRecoveryPolicy) -> Void = { _ 
         let src = makeRecoveringMicSource(engine, .fake(host), policy: zeroPolicy())
         try await src.start { _ in }
         let feeder = feed(engine, host: host, level: Level())
-        #expect(await eventuallyTrue { engine.startCount >= 2 && engine.isRunning })
+        #expect(await eventuallyTrue(.seconds(60)) { engine.startCount >= 2 && engine.isRunning })
         #expect((src.health?.restarts ?? 0) >= 1)
         feeder.cancel(); await feeder.value
         await src.stop()
@@ -73,7 +73,7 @@ private func zeroPolicy(_ tweak: (inout MicrophoneRecoveryPolicy) -> Void = { _ 
         src.health?.setFailureObserver { failure.set($0) }
         try await src.start { _ in }
         let feeder = feed(engine, host: host, level: Level())
-        #expect(await eventuallyTrue(.seconds(5)) { engine.startCount == 4 })   // three rebuilds, past both stall budgets
+        #expect(await eventuallyTrue(.seconds(60)) { engine.startCount == 4 })  // three rebuilds, past both stall budgets
         try await Task.sleep(for: .milliseconds(900))                           // six more waits' worth of zeros
         #expect(engine.startCount == 4)
         #expect(src.health?.restarts == 3)
@@ -92,7 +92,7 @@ private func zeroPolicy(_ tweak: (inout MicrophoneRecoveryPolicy) -> Void = { _ 
         try await Task.sleep(for: .milliseconds(700))
         #expect(engine.startCount == 1)
         src.health?.setPaused(false)                                            // the zeros count from the resume
-        #expect(await eventuallyTrue { engine.startCount == 2 })
+        #expect(await eventuallyTrue(.seconds(60)) { engine.startCount == 2 })
         feeder.cancel(); await feeder.value
         await src.stop()
     }
@@ -102,9 +102,14 @@ private func zeroPolicy(_ tweak: (inout MicrophoneRecoveryPolicy) -> Void = { _ 
         let src = makeRecoveringMicSource(engine, .fake(host), policy: zeroPolicy())
         try await src.start { _ in }
         let feeder = feed(engine, host: host, level: Level())
-        try await Task.sleep(for: .milliseconds(1500))   // rebuilds at about 0.15, 0.45 and 1.05 s; every 0.15 s would be 9
-        let restarts = src.health?.restarts ?? 0
-        #expect(restarts >= 1 && restarts <= 4)
+        // Rebuilds at about 0.15, 0.45 and 1.05 s into the zeros. The times are the source's own clock readings, and a
+        // wait is never shorter than asked, however loaded the machine is.
+        #expect(await eventuallyTrue(.seconds(60)) { await src.zeroRebuildStarts.count == 3 })
+        let starts = await src.zeroRebuildStarts
+        try #require(starts.count == 3)
+        #expect(starts[1] - starts[0] >= .milliseconds(300))
+        #expect(starts[2] - starts[1] >= .milliseconds(600))
+        #expect(await eventuallyTrue(.seconds(60)) { await src.currentZeroWait == .milliseconds(1200) })   // once the third is done
         feeder.cancel(); await feeder.value
         await src.stop()
     }
@@ -115,14 +120,14 @@ private func zeroPolicy(_ tweak: (inout MicrophoneRecoveryPolicy) -> Void = { _ 
         let src = makeRecoveringMicSource(engine, .fake(host), policy: zeroPolicy())
         try await src.start { _ in }
         let feeder = feed(engine, host: host, level: level)
-        #expect(await eventuallyTrue(.seconds(5)) { (src.health?.restarts ?? 0) == 3 })   // and no more for this stretch
+        #expect(await eventuallyTrue(.seconds(60)) { await src.zeroRebuildStarts.count == 3 })   // and no more for this stretch
+        #expect(await eventuallyTrue(.seconds(60)) { await src.currentZeroWait == .milliseconds(1200) })
         level.set(0.25)
-        let heard = src.health?.nonZeroCallbacks ?? 0
-        #expect(await eventuallyTrue { (src.health?.nonZeroCallbacks ?? 0) > heard })
-        try await Task.sleep(for: .milliseconds(100))    // a few looks of the watchdog see it
-        let before = src.health?.restarts ?? 0
+        #expect(await eventuallyTrue(.seconds(60)) { await src.currentZeroWait == .milliseconds(150) })   // heard: the first wait again
         level.set(0)
-        #expect(await eventuallyTrue(.milliseconds(1200)) { (src.health?.restarts ?? 0) > before })   // a new stretch: 0.15 s, three more
+        #expect(await eventuallyTrue(.seconds(60)) { await src.zeroRebuildStarts.count == 4 })   // a new stretch: three more
+        let starts = await src.zeroRebuildStarts
+        #expect(starts.count >= 4 && starts[3] - starts[2] >= .milliseconds(150))
         feeder.cancel(); await feeder.value
         await src.stop()
     }

@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Synchronization
 @testable import AutoNoteCore
 import AutoNoteTestSupport
 
@@ -35,14 +36,14 @@ import AutoNoteTestSupport
             if second < 8 { h.recordCallback(start: Double(second), duration: 1, nonZero: false) }   // 8, 9: no callback
         }
         let whole = SourceHealth.summary(track: .system, sources: [h], endSeconds: 10)
-        #expect(whole.suspectZeroSeconds == 8 && whole.suspectNoCallbackSeconds == 2 && whole.pausedNoCallbackSeconds == nil)
+        #expect(whole.suspectZeroSeconds == 8 && whole.suspectNoCallbackSeconds == 2 && whole.excludedNoCallbackSeconds == nil)
         // Paused from 2.5 s to 6 s, and again from 8 s with no resume: seconds 3, 4, 5 and 8, 9 are wholly inside.
         let pauses = [PauseInterval(start: .init(seconds: 2.5), end: .init(seconds: 6)), PauseInterval(start: .init(seconds: 8))]
         let s = SourceHealth.summary(track: .system, sources: [h], endSeconds: 10, pauses: pauses)
         #expect(s.zeroSeconds == 8 && s.noCallbackSeconds == 2)      // unchanged counting
         #expect(s.suspectZeroSeconds == 5)                           // 0, 1, 2, 6, 7
         #expect(s.suspectNoCallbackSeconds == 0)
-        #expect(s.pausedNoCallbackSeconds == 2)                      // 8, 9
+        #expect(s.excludedNoCallbackSeconds == 2)                      // 8, 9
     }
 
     @Test func aSourceThatNeverPolledReportsNoSuspectSeconds() {
@@ -70,13 +71,33 @@ import AutoNoteTestSupport
         #expect(h.nonZeroCallbacks == 2)
     }
 
-    @Test func reportsNotArrivingOnce() {
+    @Test func reportsNotArrivingOncePerStretch() {
         let h = SourceHealth()
-        let got = FailureMessage()
+        let got = Mutex<[Int?]>([])
         h.reportNotArriving(seconds: 61)
         h.reportNotArriving(seconds: 200)
-        h.setNotArrivingObserver { got.set(String($0)) }
-        #expect(got.message == "61")
+        h.setNotArrivingObserver { s in got.withLock { $0.append(s) } }     // a late observer still hears the first
+        #expect(got.withLock { $0 } == [61])
+        h.reportArrivingAgain()
+        h.reportArrivingAgain()
+        #expect(got.withLock { $0 } == [61, nil])
+        h.reportNotArriving(seconds: 70)
+        #expect(got.withLock { $0 } == [61, nil, 70])
+    }
+
+    /// Nothing is said about a paused recording, and a report its owner could not pass on can be made again.
+    @Test func saysNothingWhilePausedAndRepeatsAReportTheOwnerDropped() {
+        let h = SourceHealth()
+        let got = Mutex<[Int?]>([])
+        h.setNotArrivingObserver { s in got.withLock { $0.append(s) } }
+        h.setPaused(true)
+        h.reportNotArriving(seconds: 90)
+        #expect(got.withLock { $0 }.isEmpty)
+        h.setPaused(false)
+        h.reportNotArriving(seconds: 61)
+        h.forgetNotArriving()
+        h.reportNotArriving(seconds: 62)
+        #expect(got.withLock { $0 } == [61, 62])
     }
 
     /// The 10 s windows of the drain log: a line at notice level only when the track's state changes.
@@ -107,9 +128,9 @@ import AutoNoteTestSupport
         #expect(try AutoNoteJSON.decoder().decode(TrackHealth.self, from: Data(oldJSON.utf8)) == old)
 
         var new = old
-        new.droppedFrames = 12; new.suspectZeroSeconds = 5; new.suspectNoCallbackSeconds = 6; new.pausedNoCallbackSeconds = 2
+        new.droppedFrames = 12; new.suspectZeroSeconds = 5; new.suspectNoCallbackSeconds = 6; new.excludedNoCallbackSeconds = 2
         let newJSON = String(decoding: try AutoNoteJSON.encoder().encode(new), as: UTF8.self)
-        for key in ["dropped_frames", "suspect_zero_seconds", "suspect_no_callback_seconds", "paused_no_callback_seconds"] { #expect(newJSON.contains("\"\(key)\"")) }
+        for key in ["dropped_frames", "suspect_zero_seconds", "suspect_no_callback_seconds", "excluded_no_callback_seconds"] { #expect(newJSON.contains("\"\(key)\"")) }
         #expect(try AutoNoteJSON.decoder().decode(TrackHealth.self, from: Data(newJSON.utf8)) == new)
     }
 }
@@ -121,10 +142,21 @@ import AutoNoteTestSupport
                     droppedFrames: 0, suspectZeroSeconds: suspectZero, suspectNoCallbackSeconds: suspectNoCallback)
     }
 
-    @Test func theThresholdIsThirtySecondsOrATenthOfTheRecording() {
+    /// A tenth of the recording, but never under 30 s (a short meeting) nor over 3 minutes (a long one).
+    @Test func theThresholdIsATenthOfTheRecordingBetweenThirtySecondsAndThreeMinutes() {
         #expect(AudioLossRule.threshold(recordedSeconds: 100) == 30)
         #expect(AudioLossRule.threshold(recordedSeconds: 300) == 30)
-        #expect(AudioLossRule.threshold(recordedSeconds: 3600) == 360)
+        #expect(AudioLossRule.threshold(recordedSeconds: 900) == 90)
+        #expect(AudioLossRule.threshold(recordedSeconds: 1800) == 180)
+        #expect(AudioLossRule.threshold(recordedSeconds: 3600) == 180)
+        #expect(AudioLossRule.threshold(recordedSeconds: 7200) == 180)
+    }
+
+    /// Five minutes of the other side missing in an hour-long meeting is told.
+    @Test func fiveMinutesMissingInAnHourIsALoss() {
+        let h = [Self.health(.system, zero: 400, suspectZero: 300)]
+        #expect(AudioLossRule.evaluate(health: h, failedTracks: [], recordedSeconds: 3600)
+                == [TrackLoss(track: .system, seconds: 300, sourceFailed: false)])
     }
 
     /// An in-person meeting recorded with the microphone: nobody plays audio, so the tap delivers nothing at all.
@@ -134,11 +166,11 @@ import AutoNoteTestSupport
     }
 
     @Test func suspectSecondsOfTheSystemTrackAtTheThresholdAreALoss() {
-        let below = [Self.health(.system, zero: 400, suspectZero: 200, suspectNoCallback: 159)]
-        #expect(AudioLossRule.evaluate(health: below, failedTracks: [], recordedSeconds: 3600) == nil)
-        let at = [Self.health(.system, zero: 400, suspectZero: 200, suspectNoCallback: 160)]
-        #expect(AudioLossRule.evaluate(health: at, failedTracks: [], recordedSeconds: 3600)
-                == [TrackLoss(track: .system, seconds: 360, sourceFailed: false)])
+        let below = [Self.health(.system, zero: 400, suspectZero: 100, suspectNoCallback: 59)]
+        #expect(AudioLossRule.evaluate(health: below, failedTracks: [], recordedSeconds: 1600) == nil)
+        let at = [Self.health(.system, zero: 400, suspectZero: 100, suspectNoCallback: 60)]
+        #expect(AudioLossRule.evaluate(health: at, failedTracks: [], recordedSeconds: 1600)
+                == [TrackLoss(track: .system, seconds: 160, sourceFailed: false)])
         let short = [Self.health(.system, suspectZero: 30)]
         #expect(AudioLossRule.evaluate(health: short, failedTracks: [], recordedSeconds: 90)
                 == [TrackLoss(track: .system, seconds: 30, sourceFailed: false)])
@@ -156,7 +188,7 @@ import AutoNoteTestSupport
     /// A microphone that was gone only while the recording was paused lost nothing.
     @Test func theMicrophonesSecondsInsideAPauseAreNotLost() {
         var h = Self.health(.mic, noCallback: 400)
-        h.pausedNoCallbackSeconds = 390
+        h.excludedNoCallbackSeconds = 390
         #expect(AudioLossRule.lostSeconds(h) == 10)
         #expect(AudioLossRule.evaluate(health: [h], failedTracks: [], recordedSeconds: 600) == nil)
     }
@@ -195,19 +227,45 @@ import AutoNoteTestSupport
 }
 
 @Suite struct AudioLossPresentationTests {
+    static let system12 = TrackLoss(track: .system, seconds: 720, sourceFailed: false)
+    static let mic45 = TrackLoss(track: .mic, seconds: 45, sourceFailed: false)
+
     @Test func namesTheTrackAndHowLong() {
-        #expect(AudioLossPresentation.detail([TrackLoss(track: .system, seconds: 720, sourceFailed: false)]) == "システム音声 約 12 分")
-        #expect(AudioLossPresentation.detail([TrackLoss(track: .mic, seconds: 45, sourceFailed: false),
-                                              TrackLoss(track: .system, seconds: 95, sourceFailed: true)])
-                == "マイク 45 秒、システム音声 約 2 分")
-        #expect(AudioLossPresentation.detail([TrackLoss(track: .system, seconds: 0, sourceFailed: true)]) == "システム音声（録音できませんでした）")
+        #expect(AudioLossPresentation.detail([Self.system12]) == "システム音声 約 12 分")
+        #expect(AudioLossPresentation.detail([Self.mic45, Self.system12]) == "マイク 45 秒、システム音声 約 12 分")
         #expect(AudioLossPresentation.detail([]) == nil && AudioLossPresentation.detail(nil) == nil)
     }
 
-    @Test func theRowLabelAndTheNoteLineCarryTheDetail() {
-        let loss = [TrackLoss(track: .system, seconds: 720, sourceFailed: false)]
-        #expect(AudioLossPresentation.rowLabel(loss) == "録音の欠損: システム音声 約 12 分")
-        #expect(AudioLossPresentation.noteLine(loss)?.contains("システム音声 約 12 分") == true)
-        #expect(AudioLossPresentation.rowLabel(nil) == nil && AudioLossPresentation.noteLine(nil) == nil)
+    /// A failed track lost everything after the failure, which its counted seconds do not show: the failure is
+    /// said, whatever the seconds.
+    @Test func aFailedTrackSaysTheFailureNotItsSeconds() {
+        for seconds in [0, 2, 95] {
+            #expect(AudioLossPresentation.detail([TrackLoss(track: .mic, seconds: seconds, sourceFailed: true)]) == "マイク（録音に失敗）")
+        }
+        #expect(AudioLossPresentation.detail([TrackLoss(track: .system, seconds: 3, sourceFailed: true)]) == "システム音声（録音に失敗）")
+    }
+
+    /// Suspect seconds of system audio are a possibility (an app playing digital silence looks the same); a
+    /// microphone without callbacks and a failed track are facts.
+    @Test func theRowSaysPossiblyOnlyWhenNothingIsCertain() {
+        #expect(AudioLossPresentation.rowLabel([Self.system12]) == "録音の欠損の可能性: システム音声 約 12 分")
+        #expect(AudioLossPresentation.rowLabel([Self.mic45]) == "録音の欠損: マイク 45 秒")
+        #expect(AudioLossPresentation.rowLabel([Self.mic45, Self.system12]) == "録音の欠損: マイク 45 秒、システム音声 約 12 分")
+        #expect(AudioLossPresentation.rowLabel([TrackLoss(track: .system, seconds: 0, sourceFailed: true)]) == "録音の欠損: システム音声（録音に失敗）")
+        #expect(AudioLossPresentation.rowLabel(nil) == nil && AudioLossPresentation.rowLabel([]) == nil)
+    }
+
+    /// One sentence pair per track: whose voice, how sure, and what is missing from the note.
+    @Test func theNoteAndTheRowsHelpSayWhoseVoiceIsMissing() {
+        let system = "システム音声（相手の声）が約 12 分、録音に入っていない可能性があります。その間に相手が話していた場合、その発言は文字起こしと議事録に入っていません。"
+        let mic = "マイク（自分の声）が 45 秒、録音されていません。その間の自分の発言は文字起こしと議事録に入っていません。"
+        let systemFailed = "システム音声（相手の声）の録音に失敗しました。失敗した後の相手の発言は文字起こしと議事録に入っていません。"
+        let micFailed = "マイク（自分の声）の録音に失敗しました。失敗した後の自分の発言は文字起こしと議事録に入っていません。"
+        #expect(AudioLossPresentation.noteLine([Self.system12]) == "> \(system)")
+        #expect(AudioLossPresentation.noteLine([Self.mic45, Self.system12]) == "> \(mic)\n> \(system)")
+        #expect(AudioLossPresentation.noteLine([TrackLoss(track: .system, seconds: 0, sourceFailed: true)]) == "> \(systemFailed)")
+        #expect(AudioLossPresentation.noteLine([TrackLoss(track: .mic, seconds: 2, sourceFailed: true)]) == "> \(micFailed)")
+        #expect(AudioLossPresentation.help([Self.mic45, Self.system12]) == mic + system)
+        #expect(AudioLossPresentation.noteLine(nil) == nil && AudioLossPresentation.help(nil) == nil)
     }
 }

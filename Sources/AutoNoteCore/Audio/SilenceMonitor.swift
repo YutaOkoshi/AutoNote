@@ -39,6 +39,10 @@ public struct SilenceMonitor: Sendable {
         }
     }
 
+    /// The user was already told about system audio in more specific words (`RecordingEvent.audioNotArriving`): the
+    /// general warning stays away for the rest of the recording.
+    public mutating func systemAudioWasToldAbout() { systemWarned = true }
+
     public mutating func tick(now: TimelineTime, paused: Bool) -> [SilenceWarning] {
         let delta = max(0, now.seconds - lastTick.seconds)
         lastTick = now
