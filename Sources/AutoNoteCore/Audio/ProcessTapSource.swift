@@ -382,6 +382,9 @@ public actor ProcessTapSource: AudioSource {
             if downAfterZeroRebuild {
                 // It was delivering until a rebuild for zeros took it down, and those zeros may have been plain
                 // silence: bring it up again at the next zero wait, outside the budget and without ever giving up.
+                // Meanwhile nothing of the track is recorded, which is told like zeros that do not end.
+                let silent = now - max(lastNonZeroAt, othersPlayingSince ?? now)
+                if playing, !counts.isPaused, silent >= policy.notArrivingAfter { counts.reportNotArriving(seconds: Int(silent)) }
                 guard now >= nextZeroRebuildAt else { return }
                 rebuildTask = Task { await self.rebuild(reason: "tap is down after a rebuild for zeros", stall: false) }
                 return

@@ -369,8 +369,9 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
     @Test func aRebuildForZerosThatLeavesTheTapDownNeverGivesUp() async throws {
         let host = FakeHostClock(); let hw = FakeTapHardware(); hw.othersPlaying = true
         let src = source(hw, host) { $0.maxConsecutiveFailures = 2 }
-        let failure = FailureMessage()
+        let failure = FailureMessage(), told = Seconds()
         src.health?.setFailureObserver { failure.set($0) }
+        src.health?.setNotArrivingObserver { told.add($0 ?? -1) }
         try await src.start { _ in }
         await settle(src)
         let feeder = feedTap(hw, host: host) { 0.25 }
@@ -383,6 +384,7 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
         host.advance(5.1)                                        // a zero rebuild tears the tap down; bring-up fails
         for _ in 0..<40 { host.advance(3); await settle(src) }   // two minutes of failed attempts
         #expect(failure.message == nil)                          // far beyond two failures in a row: still no giving up
+        #expect(told.all.count == 1 && (told.all.first ?? 0) >= 60)   // …but told once, like zeros that do not end
         let attempts = creations(hw)
         #expect(attempts >= 4)                                   // …and it kept trying (5 s, then 10, 20, 40, 60 s apart)
         #expect(hw.calls.filter { $0 == "start" }.count == 1)
