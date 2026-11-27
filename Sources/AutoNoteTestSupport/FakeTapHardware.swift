@@ -11,6 +11,8 @@ public final class FakeTapHardware: TapHardware, @unchecked Sendable {
     private var _teardownDelay: Duration = .zero
     private var _startDelay: Duration = .zero
     private var _format: AudioStreamBasicDescription
+    private var _othersPlaying: Bool?
+    private var _lastExcludedBundleIDs: [String]?
     private var block: AudioDeviceIOBlock?
 
     public static let tapID: AudioObjectID = 101
@@ -48,6 +50,18 @@ public final class FakeTapHardware: TapHardware, @unchecked Sendable {
     public var format: AudioStreamBasicDescription {
         get { lock.withLock { _format } }
         set { lock.withLock { _format = newValue } }
+    }
+
+    /// What `otherProcessIsPlayingAudio` answers (not recorded in `calls`). Default nil: unknown.
+    public var othersPlaying: Bool? {
+        get { lock.withLock { _othersPlaying } }
+        set { lock.withLock { _othersPlaying = newValue } }
+    }
+    /// The bundle IDs the last `otherProcessIsPlayingAudio` call left out; nil until it is called.
+    public var lastExcludedBundleIDs: [String]? { lock.withLock { _lastExcludedBundleIDs } }
+
+    public func otherProcessIsPlayingAudio(excludingBundleIDs: [String]) -> Bool? {
+        lock.withLock { _lastExcludedBundleIDs = excludingBundleIDs; return _othersPlaying }
     }
 
     private func record(_ name: String, teardown: Bool = false) throws {

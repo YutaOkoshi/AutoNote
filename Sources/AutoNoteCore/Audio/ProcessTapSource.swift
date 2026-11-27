@@ -13,6 +13,44 @@ public struct SourceStatistics: Sendable, Equatable {
     }
 }
 
+/// When `ProcessTapSource` rebuilds its tap while recording. `checkInterval` is wall time; every other time is seconds
+/// on the meeting timeline (`MeetingClock`), so tests move a fake clock instead of waiting.
+public struct SystemTapRecoveryPolicy: Sendable, Equatable {
+    /// How often the source looks at the callback count, the samples and the other processes.
+    public var checkInterval: Duration
+    /// Another process plays audio but no callback arrived for this long (also right after a rebuild): stalled.
+    public var stallTimeout: Double
+    /// Wait before the first retry of a stall rebuild that brought no callback; doubled per further failure.
+    public var retryDelay: Double
+    /// Stall rebuilds in a row that bring no callback before the source gives up (reported as a source failure).
+    public var maxConsecutiveFailures: Int
+    /// Stall rebuilds per recording before the source gives up…
+    public var maxRebuilds: Int
+    /// …unless callbacks flowed this long without another rebuild, which gives the budget back.
+    public var rebuildBudgetReset: Double
+    /// Another process plays audio but every sample was exactly zero for this long: rebuild. These rebuilds never
+    /// end the source (the zeros may be an app playing digital silence); the wait doubles per rebuild…
+    public var zeroTimeout: Double
+    /// …up to this, and goes back to `zeroTimeout` once a non-zero sample arrives.
+    public var zeroRetryMax: Double
+    /// Zeros for this long despite a rebuild: the owner is told once (`SourceHealth.setNotArrivingObserver`).
+    public var notArrivingAfter: Double
+    /// How long one look waits for the answer about other processes; no answer counts as "nobody plays".
+    public var probeTimeout: Duration
+
+    public init(checkInterval: Duration = .milliseconds(250), stallTimeout: Double = 2, retryDelay: Double = 0.5,
+                maxConsecutiveFailures: Int = 5, maxRebuilds: Int = 30, rebuildBudgetReset: Double = 60,
+                zeroTimeout: Double = 5, zeroRetryMax: Double = 60, notArrivingAfter: Double = 60,
+                probeTimeout: Duration = .seconds(1)) {
+        self.checkInterval = checkInterval; self.stallTimeout = stallTimeout; self.retryDelay = retryDelay
+        self.maxConsecutiveFailures = maxConsecutiveFailures; self.maxRebuilds = maxRebuilds
+        self.rebuildBudgetReset = rebuildBudgetReset; self.zeroTimeout = zeroTimeout; self.zeroRetryMax = zeroRetryMax
+        self.notArrivingAfter = notArrivingAfter; self.probeTimeout = probeTimeout
+    }
+
+    public static let standard = SystemTapRecoveryPolicy()
+}
+
 /// IOProc counters; written only from the audio callback, read from anywhere.
 private final class IOCounters: Sendable {
     let callbacks = Atomic<Int>(0)
@@ -24,12 +62,24 @@ private final class IOCounters: Sendable {
 /// Every hardware call runs on a dedicated serial queue so neither the actor's executor nor the main thread blocks
 /// (`AudioDeviceStart` can wait ~90 s on the permission dialog; teardown can block for minutes). Both waits are bounded:
 /// `start` throws `.timedOut(call: "AudioDeviceStart")` after `startTimeout`, `stop` gives up after `stopTimeout`.
+///
+/// Recovery: a tap can keep calling back with nothing but zeros, or stop calling back, while other apps play audio
+/// (seen on a real Mac: a whole meeting of exact zeros, and the app said nothing). Zeros alone prove nothing, though:
+/// with nobody playing, a tap delivers zeros, or no callbacks at all before the first sound. So while running the
+/// source asks a few times a second whether another process plays audio (`TapHardware.otherProcessIsPlayingAudio`)
+/// and rebuilds — tear down, bring up, new ring and drain — only then:
+/// - no callback for `stallTimeout`: rebuild with back-off, and after `maxConsecutiveFailures` in a row (or
+///   `maxRebuilds`) stop rebuilding and report through `health` (`MicrophoneRecoveryPolicy`'s budget);
+/// - only zeros for `zeroTimeout`: rebuild, wait twice as long before the next one (up to `zeroRetryMax`), never give up.
+/// Chunks keep their host-time stamps, so a rebuild's gap is silence on the track's timeline, not a shift.
 public actor ProcessTapSource: AudioSource {
     public static let aggregateUIDPrefix = "com.yutaokoshi.autonote.tap."
 
     public nonisolated let track: Track = .system
-    /// Counted by the drain only (diagnostics): tells "callbacks stopped" from "zeros kept arriving".
-    public nonisolated let health: SourceHealth? = SourceHealth()
+    /// Counted by the drain and the watchdog: tells "callbacks stopped" from "zeros kept arriving", and both from
+    /// plain silence (nobody was playing).
+    public nonisolated var health: SourceHealth? { counts }
+    private nonisolated let counts = SourceHealth()
 
     private struct Objects: @unchecked Sendable {   // AudioDeviceIOProcID is a C function pointer
         var tap: AudioObjectID
@@ -46,7 +96,15 @@ public actor ProcessTapSource: AudioSource {
     private enum State {
         case idle
         case starting
-        case running(objects: Objects, ring: AudioRingBuffer, drain: Task<Void, Never>)
+        case running
+    }
+
+    /// Everything one bring-up made; replaced by a rebuild.
+    private struct Pipeline {
+        var objects: Objects
+        var ring: AudioRingBuffer
+        var drain: Task<Void, Never>
+        var format: AudioStreamBasicDescription
     }
 
     private static let logger = Logger(subsystem: "com.yutaokoshi.autonote", category: "ProcessTapSource")
@@ -57,30 +115,67 @@ public actor ProcessTapSource: AudioSource {
     private let layout: AggregateLayout
     private let stopTimeout: Duration
     private let startTimeout: Duration
+    private let policy: SystemTapRecoveryPolicy
     private let controlQueue = DispatchQueue(label: "com.yutaokoshi.autonote.tap.control", qos: .userInitiated)
     private let ioQueue = DispatchQueue(label: "com.yutaokoshi.autonote.tap.io", qos: .userInteractive)
+    /// The "does another process play audio" reads; apart from `controlQueue`, which a teardown can block for long.
+    private let probeQueue = DispatchQueue(label: "com.yutaokoshi.autonote.tap.probe", qos: .utility)
 
     private var state: State = .idle
     private var stopRequestedWhileStarting = false
     private var counters = IOCounters()
-    private var droppedAtStop = 0
+    /// Dropped frames of the rings already let go (rebuilds, the stop).
+    private var retiredDropped = 0
+
+    // While running. Times are seconds on the meeting timeline.
+    private var pipeline: Pipeline?
+    private var onBuffer: (@Sendable (AudioChunk) -> Void)?
+    private var watchdog: Task<Void, Never>?
+    private var rebuildTask: Task<Void, Never>?
+    private var lastRecords = 0
+    private var lastCallbackAt = 0.0
+    private var lastNonZeroCallbacks = 0
+    private var lastNonZeroAt = 0.0
+    /// Since when another process has been playing without a break; nil while nobody plays.
+    private var othersPlayingSince: Double?
+    /// When the current pipeline came up: nothing is expected from it before.
+    private var pipelineSince = 0.0
+    private var rebuilds = 0
+    private var consecutiveFailures = 0
+    /// Stall rebuilds counted against `maxRebuilds`; back to 0 after `rebuildBudgetReset` of flowing callbacks.
+    private var rebuildsInBudget = 0
+    private var healthySince: Double?
+    private var nextStallRebuildAt = 0.0
+    /// The wait before the next zero rebuild, and how many the current stretch of zeros has had.
+    private var zeroWait = 0.0
+    private var nextZeroRebuildAt = 0.0
+    private var zeroRebuildsInStretch = 0
+    private var gaveUp = false
 
     public init(clock: MeetingClock, hardware: any TapHardware = CoreAudioTapHardware(),
                 excludeBundleIDs: [String] = [Bundle.main.bundleIdentifier].compactMap { $0 },
                 layout: AggregateLayout = .tapOnly, stopTimeout: Duration = .seconds(5),
-                startTimeout: Duration = .seconds(10)) {
+                startTimeout: Duration = .seconds(10), policy: SystemTapRecoveryPolicy = .standard) {
         self.clock = clock; self.hardware = hardware; self.excludeBundleIDs = excludeBundleIDs
         self.layout = layout; self.stopTimeout = stopTimeout; self.startTimeout = startTimeout
+        self.policy = policy
     }
 
     /// Safety net when the owner drops a running source without `stop()`: no waiting, teardown runs in the background.
     deinit {
-        if case .running(let objects, _, let drain) = state {
-            drain.cancel()
-            let hardware = self.hardware
+        watchdog?.cancel()
+        if let pipeline {
+            pipeline.drain.cancel()
+            let hardware = self.hardware, objects = pipeline.objects
             controlQueue.async { Self.tearDown(hardware, objects) }
         }
     }
+
+    /// Test hooks: rebuilds finished so far in this recording (nil while one is under way), and how many times the
+    /// watchdog has looked.
+    var finishedRebuilds: Int? { rebuildTask == nil ? rebuilds : nil }
+    var watchdogLooks: Int { looks }
+    private var looks = 0
 
     public static func aggregateDescription(tapUUID: String, layout: AggregateLayout, outputUID: String?) -> [String: any Sendable] {
         var d: [String: any Sendable] = [
@@ -99,30 +194,21 @@ public actor ProcessTapSource: AudioSource {
     }
 
     public func statistics() -> SourceStatistics {
-        let dropped: Int
-        if case .running(_, let ring, _) = state { dropped = ring.droppedFrames } else { dropped = droppedAtStop }
-        return SourceStatistics(callbacks: counters.callbacks.load(ordering: .relaxed),
-                                frames: counters.frames.load(ordering: .relaxed), droppedFrames: dropped)
+        SourceStatistics(callbacks: counters.callbacks.load(ordering: .relaxed),
+                         frames: counters.frames.load(ordering: .relaxed),
+                         droppedFrames: retiredDropped + (pipeline?.ring.droppedFrames ?? 0))
     }
 
     public func start(onBuffer: @Sendable @escaping (AudioChunk) -> Void) async throws {
         guard case .idle = state else { throw AudioSourceError.alreadyStarted }
         state = .starting
         stopRequestedWhileStarting = false
-        let counters = IOCounters()
-        self.counters = counters
-        droppedAtStop = 0
+        counters = IOCounters()
+        retiredDropped = 0
 
-        let hardware = self.hardware, layout = self.layout, ioQueue = self.ioQueue
-        let spec = TapSpec(excludeBundleIDs: excludeBundleIDs)
         // Bounded wait: `AudioDeviceStart` can block ~90 s while the permission dialog is unanswered. A bring-up that
         // finishes after the timeout is torn down on `controlQueue` at once; its objects are never used.
-        let finished: Result<BringUp, any Error>? = await controlQueue.runAwaiting(timeout: startTimeout, {
-            Result { try Self.bringUp(hardware, spec: spec, layout: layout, ioQueue: ioQueue, counters: counters) }
-        }, abandoned: { late in
-            if case .success(let up) = late { Self.tearDown(hardware, up.objects) }
-        })
-        guard let result = finished else {
+        guard let result = await bringUp(timeout: startTimeout) else {
             Self.logger.error("start timeout")
             state = .idle
             throw AudioSourceError.timedOut(call: "AudioDeviceStart")
@@ -134,29 +220,259 @@ public actor ProcessTapSource: AudioSource {
             state = .idle
             throw error
         }
-        guard let converter = try? SampleConverter(inputSampleRate: up.format.mSampleRate, inputChannels: Int(up.format.mChannelsPerFrame)) else {
+        guard let made = makePipeline(up, onBuffer: onBuffer) else {
             state = .idle
             await teardown(up.objects)
             throw AudioSourceError.unsupportedFormat
         }
-        let drain = SourceDrain.makeTask(track: track, ring: up.ring, converter: converter, inputRate: up.format.mSampleRate,
-                                          clock: clock, health: health, onBuffer: onBuffer)
-        state = .running(objects: up.objects, ring: up.ring, drain: drain)
+        pipeline = made
+        self.onBuffer = onBuffer
+        resetRecoveryState()
+        state = .running
+        watchdog = makeWatchdog()
         if stopRequestedWhileStarting { await stop() }
     }
 
+    /// The watchdog and any rebuild end first; then the teardown (bounded wait), then the drain task empties the ring
+    /// and flushes.
     public func stop() async {
         switch state {
         case .idle: return
         case .starting: stopRequestedWhileStarting = true; return
-        case .running(let objects, let ring, let drain):
+        case .running:
             state = .idle
-            await teardown(objects)
-            drain.cancel()
-            await drain.value
-            droppedAtStop = ring.droppedFrames
+            watchdog?.cancel(); watchdog = nil
+            // A rebuild sees `.idle` after its next await and stops; a tap it had already brought up lands in
+            // `pipeline`, so the lines below tear it down.
+            if let rebuildTask { await rebuildTask.value }
+            rebuildTask = nil
+            if let old = pipeline {
+                pipeline = nil
+                await retire(old)
+            }
+            onBuffer = nil
+            if rebuilds > 0 {
+                Self.logger.notice("system tap stopped after \(self.rebuilds, privacy: .public) rebuild(s)\(self.gaveUp ? " (gave up)" : "", privacy: .public)")
+            }
         }
     }
+
+    // MARK: - Recovery
+
+    private func resetRecoveryState() {
+        let now = clock.now().seconds
+        lastRecords = 0
+        lastCallbackAt = now
+        lastNonZeroCallbacks = counts.nonZeroCallbacks
+        lastNonZeroAt = now
+        othersPlayingSince = nil
+        pipelineSince = now
+        rebuilds = 0
+        consecutiveFailures = 0
+        rebuildsInBudget = 0
+        healthySince = nil
+        nextStallRebuildAt = now
+        zeroWait = policy.zeroTimeout
+        nextZeroRebuildAt = now
+        zeroRebuildsInStretch = 0
+        gaveUp = false
+    }
+
+    private func makeWatchdog() -> Task<Void, Never> {
+        let interval = policy.checkInterval
+        return Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: interval) } catch { return }
+                guard let self else { return }
+                await self.check()
+            }
+        }
+    }
+
+    /// One look at the tap. Decides whether a rebuild is due; never runs two rebuilds at once.
+    private func check() async {
+        guard case .running = state, !gaveUp, rebuildTask == nil else { return }
+        let hardware = self.hardware, exclude = excludeBundleIDs
+        let answer: Bool?? = await probeQueue.runAwaiting(timeout: policy.probeTimeout, {
+            hardware.otherProcessIsPlayingAudio(excludingBundleIDs: exclude)
+        }, abandoned: { _ in })
+        // `stop()` (or a give-up) may have run while this look waited on the probe queue.
+        guard case .running = state, !gaveUp, rebuildTask == nil else { return }
+        defer { looks += 1 }
+        let now = clock.now().seconds
+        // Unknown (no answer in time, or the system does not tell) counts as "nobody plays": never a reason to rebuild.
+        let playing = (answer ?? nil) == true
+        counts.recordOutputPoll(at: now, othersPlaying: playing)
+
+        let records = pipeline?.ring.recordsWritten ?? 0
+        if records != lastRecords {
+            lastRecords = records
+            lastCallbackAt = now
+            if consecutiveFailures > 0 {
+                Self.logger.notice("system tap callbacks are back after rebuild")
+            }
+            consecutiveFailures = 0
+            let since = healthySince ?? now
+            healthySince = since
+            if rebuildsInBudget > 0, now - since >= policy.rebuildBudgetReset {
+                Self.logger.notice("system tap ran \(Self.seconds(now - since), privacy: .public) s without a rebuild: rebuild budget reset (\(self.rebuildsInBudget, privacy: .public) used)")
+                rebuildsInBudget = 0
+            }
+        }
+        let nonZero = counts.nonZeroCallbacks
+        if nonZero != lastNonZeroCallbacks {
+            lastNonZeroCallbacks = nonZero
+            lastNonZeroAt = now
+            if zeroRebuildsInStretch > 0 {
+                Self.logger.notice("system audio is non-zero again after \(self.zeroRebuildsInStretch, privacy: .public) rebuild(s) for zeros")
+            }
+            zeroRebuildsInStretch = 0
+            zeroWait = policy.zeroTimeout
+            nextZeroRebuildAt = now
+        }
+
+        // A tap that could not be brought up again is down, whoever plays.
+        if pipeline == nil {
+            await rebuildForStall(reason: "tap is not running", now: now)
+            return
+        }
+        guard playing else {
+            othersPlayingSince = nil
+            return
+        }
+        let playingSince = othersPlayingSince ?? now
+        othersPlayingSince = playingSince
+
+        // Nothing is expected before somebody plays, nor before this tap came up.
+        let quiet = now - max(lastCallbackAt, playingSince, pipelineSince)
+        if quiet >= policy.stallTimeout {
+            await rebuildForStall(reason: "no callbacks for \(Self.seconds(quiet)) s while another process plays audio", now: now)
+            return
+        }
+        // Zeros are judged only on a tap that calls back; one that does not is the stall's business above.
+        let zeros = now - max(lastNonZeroAt, playingSince)
+        guard lastRecords > 0, zeros >= policy.zeroTimeout else { return }
+        if zeroRebuildsInStretch > 0, zeros >= policy.notArrivingAfter {
+            counts.reportNotArriving(seconds: Int(zeros))   // once per recording
+        }
+        guard now >= nextZeroRebuildAt else { return }
+        let reason = "only zero samples for \(Self.seconds(zeros)) s while another process plays audio"
+        rebuildTask = Task { await self.rebuild(reason: reason, stall: false) }
+    }
+
+    private func rebuildForStall(reason: String, now: Double) async {
+        guard now >= nextStallRebuildAt else { return }
+        if consecutiveFailures >= policy.maxConsecutiveFailures || rebuildsInBudget >= policy.maxRebuilds {
+            await giveUp(reason: reason)
+            return
+        }
+        rebuildTask = Task { await self.rebuild(reason: reason, stall: true) }
+    }
+
+    /// Tear down → bring up → new ring, converter and drain. `stall`: counted against the give-up budget.
+    private func rebuild(reason: String, stall: Bool) async {
+        defer { rebuildTask = nil }
+        rebuilds += 1
+        let attempt = rebuilds
+        var backoff = 0.0
+        if stall {
+            rebuildsInBudget += 1
+            consecutiveFailures += 1
+            healthySince = nil
+            // Exponential back-off for the next attempt if this one brings no callback.
+            backoff = policy.retryDelay * Double(1 << min(consecutiveFailures - 1, 6))
+        } else {
+            zeroRebuildsInStretch += 1
+        }
+        counts.noteRestart()
+        Self.logger.notice("system tap rebuild #\(attempt, privacy: .public) (\(reason, privacy: .public)) \(self.hardware.routeDescription(), privacy: .public)")
+
+        if let old = pipeline {
+            pipeline = nil
+            await retire(old)       // the old ring's tail is emitted at its own timeline position
+        }
+        guard case .running = state, let onBuffer else { return }
+
+        // A bring-up that outlives the wait is torn down on the control queue by itself.
+        let result = await bringUp(timeout: stopTimeout)
+        // If `stop()` arrived meanwhile, it waits for this task and then retires `pipeline`; so a tap that came up
+        // still gets its pipeline here, or nobody would tear it down.
+        let stopping: Bool = if case .running = state { false } else { true }
+        let after = clock.now().seconds
+        guard let result else {
+            if !stopping { fail(attempt, AudioSourceError.timedOut(call: "AudioDeviceStart"), backoff: backoff, now: after) }
+            return
+        }
+        switch result {
+        case .failure(let error):
+            if !stopping { fail(attempt, error, backoff: backoff, now: after) }
+        case .success(let up):
+            guard let made = makePipeline(up, onBuffer: onBuffer) else {
+                await teardown(up.objects)
+                if !stopping { fail(attempt, AudioSourceError.unsupportedFormat, backoff: backoff, now: after) }
+                return
+            }
+            pipeline = made
+            lastRecords = 0
+            lastCallbackAt = after
+            pipelineSince = after
+            if stall {
+                nextStallRebuildAt = after + backoff
+            } else {
+                zeroWait = min(zeroWait * 2, policy.zeroRetryMax)
+                nextZeroRebuildAt = after + zeroWait
+            }
+            Self.logger.notice("system tap rebuild #\(attempt, privacy: .public) restarted the tap (\(Int(up.format.mSampleRate.rounded()), privacy: .public) Hz \(Int(up.format.mChannelsPerFrame), privacy: .public) ch)")
+        }
+    }
+
+    private func fail(_ attempt: Int, _ error: any Error, backoff: Double, now: Double) {
+        nextStallRebuildAt = now + max(backoff, policy.retryDelay)
+        Self.logger.error("system tap rebuild #\(attempt, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+    }
+
+    /// Stops trying and tells the owner. The last tap stays up until `stop()`: should the system start calling it
+    /// again, that audio is still recorded.
+    private func giveUp(reason: String) async {
+        guard case .running = state, !gaveUp else { return }
+        gaveUp = true
+        watchdog?.cancel(); watchdog = nil
+        let message = "system audio stopped arriving and \(rebuilds) rebuild(s) did not bring it back (\(reason))"
+        Self.logger.error("system tap gave up after \(self.rebuilds, privacy: .public) rebuild(s): \(reason, privacy: .public)")
+        counts.reportFailure(message)
+    }
+
+    /// Teardown (bounded wait), then the drain empties the ring and flushes; the ring's dropped frames are kept.
+    private func retire(_ old: Pipeline) async {
+        await teardown(old.objects)
+        old.drain.cancel()
+        await old.drain.value
+        let dropped = old.ring.droppedFrames
+        retiredDropped += dropped
+        counts.addDroppedFrames(dropped)
+    }
+
+    private func makePipeline(_ up: BringUp, onBuffer: @Sendable @escaping (AudioChunk) -> Void) -> Pipeline? {
+        guard let converter = try? SampleConverter(inputSampleRate: up.format.mSampleRate,
+                                                   inputChannels: Int(up.format.mChannelsPerFrame)) else { return nil }
+        let drain = SourceDrain.makeTask(track: track, ring: up.ring, converter: converter, inputRate: up.format.mSampleRate,
+                                         clock: clock, health: counts, onBuffer: onBuffer)
+        return Pipeline(objects: up.objects, ring: up.ring, drain: drain, format: up.format)
+    }
+
+    /// Runs the bring-up on `controlQueue`, waiting at most `timeout`; nil when the wait timed out (the late bring-up
+    /// is then torn down on the queue at once and its objects are never used).
+    private func bringUp(timeout: Duration) async -> Result<BringUp, any Error>? {
+        let hardware = self.hardware, layout = self.layout, ioQueue = self.ioQueue, counters = self.counters
+        let spec = TapSpec(excludeBundleIDs: excludeBundleIDs)
+        return await controlQueue.runAwaiting(timeout: timeout, {
+            Result { try Self.bringUp(hardware, spec: spec, layout: layout, ioQueue: ioQueue, counters: counters) }
+        }, abandoned: { late in
+            if case .success(let up) = late { Self.tearDown(hardware, up.objects) }
+        })
+    }
+
+    private static func seconds(_ s: Double) -> String { String(format: "%.1f", s) }
 
     // MARK: - Hardware sequences (run on `controlQueue`)
 
