@@ -95,6 +95,22 @@ class NotifyTests(SandboxTest):
         self.assertEqual(len(Hook.received), 1)
         self.assertNotIn("SECRET-TOKEN", proc.stdout + proc.stderr + self.all_state_text())
 
+    def test_op_that_cannot_be_found_says_to_set_op_cmd(self):
+        # C-F5 / U-F1 (round 2): launchd's PATH has no Homebrew, so `op` is not found there.
+        self.sb.set_config(NOTIFY_MODE="slack", SLACK_WEBHOOK_OP_REF="op://Vault/Item/url", OP_CMD="op-not-installed")
+        proc = self.sb.share(self.sb.vault_file(STANDARD), now=DAY0)
+        self.assertOk(proc)
+        self.assertIn("OP_CMD", proc.stdout)
+        self.assertIn("絶対パス", proc.stdout)
+
+    def test_webhook_url_without_a_scheme_stays_secret_and_goes_to_outbox(self):
+        self.sb.set_config(NOTIFY_MODE="slack", SLACK_WEBHOOK_URL="hooks.example.invalid/services/SECRET-TOKEN")
+        proc = self.sb.share(self.sb.vault_file(STANDARD), now=DAY0)
+        self.assertOk(proc)
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertNotIn("SECRET-TOKEN", proc.stdout + proc.stderr + self.all_state_text())
+        self.assertEqual(len(os.listdir(os.path.join(self.sb.state, "outbox"))), 1)
+
     def test_macos_mode_uses_notify_cmd_and_notices_file(self):
         seen = os.path.join(self.sb.root, "notified.txt")
         fake = os.path.join(self.sb.root, "fake-notify")

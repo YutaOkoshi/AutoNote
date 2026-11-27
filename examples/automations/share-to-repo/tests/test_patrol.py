@@ -74,7 +74,8 @@ class PatrolTests(SandboxTest):
         self.assertEqual(len(seven), 1)
         self.assertIn("共有から 7 日", seven[0])
         # the unshared one was first seen on 11-20: already 7 days, and 21 days on 12-11
-        self.assertTrue(any("見本食堂" in t and "置いてから 7 日" in t for t in self.texts()))
+        self.assertTrue(any("見本食堂" in t and "まだ共有していない録画" in t for t in self.texts()))
+        self.assertFalse(any("見本食堂" in t and "消してください" in t for t in self.texts()))
         self.assertOk(self.sb.patrol(now="2026-12-11T09:00:00+09:00"))
         self.assertTrue(any("見本食堂" in t and "21 日" in t for t in self.texts()))
         self.assertFalse(any("置き方のメモ" in t for t in self.texts()))
@@ -99,6 +100,75 @@ class PatrolTests(SandboxTest):
             write(os.path.join(inbox, n), "video")
         self.sb.set_config(INBOX_DIR=inbox)
         return inbox
+
+    def test_unshared_recording_tells_the_owner_and_the_deadline_reminder_comes_after_sharing(self):
+        # C-F9 (round 2): nobody is told to delete a recording that has not been shared yet.
+        self.inbox_with(REC)
+        self.assertOk(self.sb.patrol(now="2026-11-24T09:00:00+09:00"))
+        self.assertOk(self.sb.patrol(now="2026-12-01T09:00:00+09:00"))
+        unshared = [t for t in self.texts() if "まだ共有していない録画" in t]
+        self.assertEqual(len(unshared), 1)
+        self.assertIn(REC, unshared[0])
+        self.assertIn("まだ共有していない録画", self.sb.state_file("todo.md"))
+        self.assertFalse(any("消してください" in t for t in self.texts()))
+        self.share_customer()  # 12-02: the days now count from the share
+        self.assertOk(self.sb.patrol(now="2026-12-08T09:00:00+09:00"))
+        self.assertFalse(any("共有から" in t for t in self.texts()))
+        self.assertOk(self.sb.patrol(now="2026-12-10T09:00:00+09:00"))  # the Mac was off on the due day
+        due = [t for t in self.texts() if REC in t and "消してください" in t and "共有から" in t]
+        self.assertEqual(len(due), 1)
+        self.assertIn("共有から 8 日", due[0])  # C-F14: the real number of days
+        self.assertOk(self.sb.patrol(now="2026-12-11T09:00:00+09:00"))
+        self.assertEqual(len([t for t in self.texts() if REC in t and "共有から" in t]), 1)
+
+    def test_mov_in_the_inbox_is_counted_even_though_the_guide_does_not_list_it(self):
+        # C-F6 (round 2)
+        mov = "2026-11-20_0900_見本食堂_画面収録.mov"
+        self.inbox_with(mov)
+        self.assertOk(self.sb.patrol(now="2026-11-24T09:00:00+09:00"))
+        self.assertOk(self.sb.patrol(now="2026-12-01T09:00:00+09:00"))
+        self.assertTrue(any(mov in t for t in self.texts()))
+
+    def test_recording_deleted_right_after_sharing_is_marked_deleted(self):
+        # C-F4 / U-F3 (round 2): seen in the inbox at share time counts as seen.
+        inbox = self.inbox_with(REC, "2026-11-30_1500_見本食堂_定例.mp4")
+        self.share_customer()
+        self.assertEqual([r["recording"] for r in self.sb.tsv("inbox-seen.tsv")], [REC])
+        os.remove(os.path.join(inbox, REC))
+        self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"))
+        self.assertIn("source_recording_deleted: はい\n", self.sb.remote_show(MIN))
+        self.assertFalse(any("見当たらない" in t for t in self.texts()))
+
+    def test_deleted_flag_without_the_line_in_the_repository_is_written_again(self):
+        # C-F13 (round 2): the flag is the truth; a commit dropped by a conflict is made again.
+        self.share_customer()
+        p = os.path.join(self.sb.state, "shared.tsv")
+        write(p, read(p).replace("notified_minutes,notified_new", "notified_minutes,notified_new,recording_deleted"))
+        self.assertIn("recording_deleted", self.sb.tsv("shared.tsv")[0]["flags"])
+        self.assertIn("source_recording_deleted: まだ\n", self.sb.remote_show(MIN))
+        self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"))
+        self.assertIn("source_recording_deleted: はい\n", self.sb.remote_show(MIN))
+
+    def test_failed_autonote_list_ends_with_1(self):
+        # C-F12 (round 2)
+        self.share_customer()
+        self.sb.set_config(AUTONOTE_CLI="/usr/bin/false")
+        self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"), 1)
+
+    def test_push_failure_in_the_patrol_reaches_the_owner(self):
+        # U-F2 (round 2): one todo line (not repeated) and at most one notice a day.
+        self.share_customer()
+        path = self.sb.vault_file(STANDARD)
+        write(path, read(path).replace("一緒に見る。", "直した。"))
+        os.rename(self.sb.remote, self.sb.remote + ".away")
+        self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"), 1)
+        self.assertEqual(self.sb.state_file("todo.md").count("置き場に送れていません"), 1)
+        self.assertEqual(len([t for t in self.texts() if "見回りで失敗" in t]), 1)
+        self.assertOk(self.sb.patrol(now="2026-12-03T15:00:00+09:00"), 1)  # same day: no second notice
+        self.assertEqual(len([t for t in self.texts() if "見回りで失敗" in t]), 1)
+        self.assertOk(self.sb.patrol(now="2026-12-04T09:00:00+09:00"), 1)
+        self.assertEqual(len([t for t in self.texts() if "見回りで失敗" in t]), 2)
+        self.assertEqual(self.sb.state_file("todo.md").count("置き場に送れていません"), 1)
 
     def test_recording_not_synced_yet_is_not_marked_deleted(self):
         # C-F2: the recording has not reached the synced folder when the patrol runs.

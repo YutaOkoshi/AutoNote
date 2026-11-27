@@ -3,6 +3,7 @@ import os
 import re
 
 from . import frontmatter as fmx
+from .names import nfc
 
 YEAR_RE = re.compile(r"^\d{4}$")
 DEFAULT_TEMPLATE = """# 会議の一覧
@@ -15,11 +16,11 @@ DEFAULT_TEMPLATE = """# 会議の一覧
 
 class Entry:
     def __init__(self, rel, fm, body):
-        self.rel = rel  # e.g. 2026/<stem>.md
+        self.rel = rel = nfc(rel)  # e.g. 2026/<stem>.md, as git's tree spells it
         self.fm = fm
         self.stem = os.path.splitext(os.path.basename(rel))[0]
         self.year = rel.split("/", 1)[0]
-        tf = fm.get("transcript_file", "")
+        tf = nfc(fm.get("transcript_file", ""))
         self.transcript_rel = "%s/%s" % (self.year, tf) if tf and tf != "なし" else None
         self.summary = summary_line(body)
 

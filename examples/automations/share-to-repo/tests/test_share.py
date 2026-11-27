@@ -339,6 +339,88 @@ class ShareTests(SandboxTest):
         self.assertIn("14 日", proc.stdout)
         self.assertNotIn("{{", proc.stdout)
 
+    def test_untracked_file_outside_the_scripts_folders_is_left_alone(self):
+        # C-F3 (round 2): Finder's .DS_Store must not stop sharing, and is never committed.
+        write(os.path.join(self.sb.repo, ".DS_Store"), "x")
+        write(os.path.join(self.sb.repo, "メモ.txt"), "持ち主のメモ")
+        self.assertOk(self.share_standard())
+        self.assertIn(MIN, self.sb.remote_files())
+        self.assertNotIn(".DS_Store", self.sb.remote_files())
+        self.assertNotIn("メモ.txt", self.sb.remote_files())
+        self.assertTrue(os.path.exists(os.path.join(self.sb.repo, "メモ.txt")))
+
+    def test_half_written_files_of_a_run_that_died_are_put_back_first(self):
+        # C-F3 (round 2): a run killed between writing and committing must not block the next one.
+        self.assertOk(self.share_standard())
+        write(os.path.join(self.sb.repo, MIN), "書きかけ")  # tracked, modified
+        write(os.path.join(self.sb.repo, "2026", "書きかけ.md"), "x")  # untracked, in a year folder
+        write(os.path.join(self.sb.repo, "INDEX.md"), "書きかけ")
+        self.assertOk(self.sb.share(self.sb.vault_file(NO_TRANSCRIPT)))
+        self.assertNotIn("書きかけ", self.sb.remote_show(MIN))
+        self.assertNotIn("2026/書きかけ.md", self.sb.remote_files())
+        self.assertIn("2026/2026-12-04_0930_社内定例.md", self.sb.remote_files())
+        self.assertEqual(self.sb.git("status", "--porcelain").strip(), "")
+
+    def test_uncommitted_change_to_a_file_the_script_does_not_write_stops_and_names_it(self):
+        write(os.path.join(self.sb.repo, "README.md"), "# 直しかけ\n")
+        proc = self.share_standard()
+        self.assertOk(proc, 1)
+        self.assertIn("README.md", proc.stdout)
+        self.assertIn("README.md", self.sb.state_file("todo.md"))
+        self.assertEqual(read(os.path.join(self.sb.repo, "README.md")), "# 直しかけ\n")
+        self.assertEqual([r["autonote_id"] for r in self.sb.tsv("pending.tsv")], [STANDARD_ID])
+
+    def test_recording_deleted_by_hand(self):
+        # C-F4 / U-F3 (round 2): the way to say "deleted" when there is no inbox folder to watch.
+        self.assertOk(self.share_standard())
+        self.assertIn("source_recording_deleted: まだ\n", self.sb.remote_show(MIN))
+        self.assertOk(self.sb.share("--recording-deleted", STANDARD_ID, now="2026-12-05T10:00:00+09:00"))
+        self.assertIn("source_recording_deleted: はい\n", self.sb.remote_show(MIN))
+        self.assertIn("recording_deleted", self.sb.tsv("shared.tsv")[0]["flags"])
+        self.assertOk(self.sb.share("--recording-deleted", STANDARD_ID))  # again: nothing to do, still 0
+        self.assertOk(self.sb.patrol(now="2026-12-10T09:00:00+09:00"))
+        self.assertFalse(any("録画は消しましたか" in m["text"] for m in self.sb.dry_messages()))
+        self.assertOk(self.sb.share("--recording-deleted", "20990101-0000-0000"), 1)
+        self.assertOk(self.sb.share(self.sb.vault_file(NO_TRANSCRIPT)))
+        self.assertOk(self.sb.share("--recording-deleted", NO_TRANSCRIPT_ID), 1)  # shared without --recording
+        self.assertOk(self.sb.share("--recording-deleted"), 2)
+
+    def test_recording_deleted_by_hand_while_offline_is_pushed_later(self):
+        self.assertOk(self.share_standard())
+        moved = self.sb.remote + ".away"
+        os.rename(self.sb.remote, moved)
+        self.assertOk(self.sb.share("--recording-deleted", STANDARD_ID), 1)
+        os.rename(moved, self.sb.remote)
+        self.assertIn("source_recording_deleted: まだ\n", self.sb.remote_show(MIN))
+        self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"))
+        self.assertIn("source_recording_deleted: はい\n", self.sb.remote_show(MIN))
+
+    def test_wrong_branch_name_is_named_in_the_message(self):
+        # U-F4 (round 2)
+        self.sb.set_config(SHARE_BRANCH="master")
+        proc = self.share_standard()
+        self.assertOk(proc, 1)
+        self.assertIn("SHARE_BRANCH", proc.stdout)
+        self.assertIn("main", proc.stdout)
+
+    def test_empty_remote_is_named_in_the_message(self):
+        remote = os.path.join(self.sb.root, "empty.git")
+        repo = os.path.join(self.sb.root, "empty-clone")
+        self.sb.git("init", "-q", "--bare", remote, cwd=self.sb.root)
+        self.sb.git("clone", "-q", remote, repo, cwd=self.sb.root)
+        self.sb.set_config(SHARE_REPO_DIR=repo)
+        proc = self.share_standard()
+        self.assertOk(proc, 1)
+        self.assertIn("空", proc.stdout)
+        self.assertIn("手順 3", proc.stdout)
+
+    def test_template_lists_only_the_formats_autonote_can_import(self):
+        # C-F6 (round 2): AutoNote imports wav / m4a / mp3 / mp4, not mov
+        proc = self.sb.share("--print-template", "README.md")
+        self.assertOk(proc)
+        self.assertIn("mp4・m4a・mp3・wav", proc.stdout)
+        self.assertNotIn("mov", proc.stdout)
+
     def test_index_template_is_used(self):
         self.assertOk(self.share_standard())
         index = self.sb.remote_show("INDEX.md")

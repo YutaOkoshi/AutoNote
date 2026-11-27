@@ -4,10 +4,9 @@ import os
 import subprocess
 from datetime import date
 
-from . import frontmatter as fmx
 from .share import (NOTICE_TITLE, Sharer, VaultUnreadable, find_vault_file, inbox_recordings, recording_name,
                     sha256_file)
-from .state import Lock, LockTimeout, flags, set_flag
+from .state import Lock, LockTimeout, atomic_write, flags, set_flag
 from .gitrepo import GitError
 
 
@@ -32,7 +31,9 @@ class Patrol:
                  # 2. re-share meetings edited in AutoNote's window or translated later (those emit no Automation)
                  ("reshare", self.reshare_changed),
                  # 3. recordings left in the inbox
-                 ("recordings", self.check_inbox if self.cfg.inbox_dir else self.ask_after_keep_days)]
+                 ("recordings", self.check_inbox if self.cfg.inbox_dir else self.ask_after_keep_days),
+                 # the repository follows the recording_deleted flags (also the ones set by hand)
+                 ("deleted", self.apply_deleted)]
         # 4. shared meetings that AutoNote no longer has
         if self.cfg.autonote_cli:
             steps.append(("autonote", self.check_autonote))
@@ -54,15 +55,52 @@ class Patrol:
             except Exception as e:
                 print("知らせを送る途中で止まりました: %s: %s" % (type(e).__name__, e))
                 self.rc = 1
+        try:
+            self.report_problems()
+        except Exception as e:
+            print("失敗の知らせを出す途中で止まりました: %s: %s" % (type(e).__name__, e))
+            self.rc = 1
         self.state.log("patrol", "done", "rc=%d" % self.rc)
         return self.rc
+
+    def report_problems(self):
+        """Nobody watches a patrol run by launchd: each failure goes to todo.md (the same line is not repeated),
+        and the owner gets one notice a day saying that something failed."""
+        problems = list(self.sharer.problems)
+        if not problems:
+            return
+        for text in problems:
+            self.state.add_todo(text)
+        marker = self.state.path("problem-notice-day")
+        today = self.cfg.today().isoformat()
+        try:
+            with open(marker, encoding="utf-8") as f:
+                last = f.read().strip()
+        except OSError:
+            last = ""
+        if last == today:
+            return
+        atomic_write(marker, today + "\n")
+        self.notify("【%sへ】見回りで失敗がありました（%d 件）。state/todo.md を見てください。1 件目: %s"
+                    % (self.cfg.owner_name, len(problems), problems[0]))
 
     def retry(self):
         self.rc |= self.sharer.retry_pending()
 
     def mirror(self):
         with Lock(self.cfg):
-            self.sharer._mirror()
+            if not self.sharer._mirror():
+                self.rc = 1
+
+    def apply_deleted(self):
+        with Lock(self.cfg):
+            self.sharer._began = False
+            try:
+                self.rc |= self.sharer.apply_deleted_flags()
+            except GitError as e:
+                print(e)
+                self.sharer._put_back()
+                self.rc = 1
 
     def notify(self, text, todo=False):
         from . import notify
@@ -99,33 +137,39 @@ class Patrol:
                 days = _days(row["first_shared"], today)
                 if days is not None and days >= self.cfg.keep_days:
                     set_flag(row, "reminded_keep")
-                    asked.append(row["recording"])
+                    asked.append((row["recording"], days))
             if asked:
                 self.state.save_shared(rows)
-        for rec in asked:
-            self.notify("録画は消しましたか: 受け取り箱の %s（共有から %d 日たちました。録画の道具の側の元とゴミ箱も）"
-                        % (rec, self.cfg.keep_days))
+        for rec, days in asked:
+            self.notify("録画は消しましたか: 受け取り箱の %s（共有から %d 日たちました。録画の道具の側の元とゴミ箱も）。"
+                        "消したら share-meeting.sh --recording-deleted <autonote_id> で記録する" % (rec, days))
 
     def check_inbox(self):
-        """Reminders for recordings left in the inbox, and `source_recording_deleted: はい` when one is gone.
+        """Reminders for recordings left in the inbox, and the recording_deleted flag when one is gone.
 
-        Days count from the first share (or from the day the patrol first saw a file nobody shared), and a reminder
-        goes out on the due day (days >= KEEP_DAYS), like ask_after_keep_days. A shared recording counts as deleted
-        only once it has been seen in the inbox and then is not there; a name never seen gets one "見当たらない"
-        notice instead (a typo, or the synced folder is late). An inbox with no recordings at all skips both checks,
-        because a synced folder can look empty for a while.
+        A shared recording counts from its first share: after KEEP_DAYS the reminder to delete it, after OWNER_DAYS a
+        notice for the owner. A recording nobody shared yet counts from the day it was first seen, and only the owner
+        is told ("まだ共有していない録画があります"): asking for it to be deleted would lose a recording that was
+        never taken in. Each flag belongs to one of the two counts, so sharing a recording late still gets it its
+        reminder. A reminder goes out on the first patrol on or after the due day, with the real number of days.
+
+        A shared recording counts as deleted only once it has been seen in the inbox (by a patrol, or at share time)
+        and then is not there; a name never seen gets one "見当たらない" notice instead (a typo, or the synced
+        folder is late). An inbox with no recordings at all skips both checks, because a synced folder can look
+        empty for a while. Deleted means the flag; apply_deleted_flags() then brings the repository in line.
         """
         cfg = self.cfg
         today = cfg.today()
         try:
             present = inbox_recordings(cfg.inbox_dir)
         except OSError as e:
-            print("受け取り箱を読めません: %s" % e)
-            self.state.add_todo("受け取り箱（INBOX_DIR）を読めません: %s" % e)
+            msg = "受け取り箱（INBOX_DIR）を読めません: %s" % (e.strerror or type(e).__name__)
+            print(msg)
+            self.state.add_todo(msg)
+            self.sharer._problem(msg)
             self.rc = 1
             return
         messages = []
-        gone = []
         with Lock(cfg):
             seen = {}
             for r in self.state.inbox_seen():
@@ -134,77 +178,56 @@ class Patrol:
             rows = self.state.shared()
             by_rec = {recording_name(r["recording"]): r for r in rows
                       if r["recording"] and "unshared" not in flags(r)}
+            owner = cfg.owner_name
             for name in present:
                 s = seen.get(name)
                 if s is None:
                     s = seen[name] = {"recording": name, "first_seen": today.isoformat(), "flags": ""}
-                shared = name in by_rec
-                start = by_rec[name]["first_shared"] if shared else s["first_seen"]
-                since = "共有から" if shared else "置いてから"
-                days = _days(start, today)
-                if days is None:
-                    continue
                 f = flags(s)
-                if days >= cfg.keep_days and "notified_keep" not in f:
-                    set_flag(s, "notified_keep")
-                    messages.append(("受け取り箱の録画を消してください（%s %d 日たちました）: %s"
-                                     % (since, cfg.keep_days, name), False))
-                if days >= cfg.owner_days and "notified_owner" not in f:
-                    set_flag(s, "notified_owner")
-                    messages.append(("【%sへ】受け取り箱に、%s %d 日たった録画が残っています: %s"
-                                     % (cfg.owner_name, since, cfg.owner_days, name), True))
+                if name in by_rec:
+                    days = _days(by_rec[name]["first_shared"], today)
+                    if days is None:
+                        continue
+                    if days >= cfg.keep_days and "notified_keep" not in f:
+                        set_flag(s, "notified_keep")
+                        messages.append(("受け取り箱の録画を消してください（共有から %d 日たちました）: %s" % (days, name),
+                                         False))
+                    if days >= cfg.owner_days and "notified_owner" not in f:
+                        set_flag(s, "notified_owner")
+                        messages.append(("【%sへ】受け取り箱に、共有から %d 日たった録画が残っています: %s"
+                                         % (owner, days, name), True))
+                else:
+                    days = _days(s["first_seen"], today)
+                    if days is None:
+                        continue
+                    if days >= cfg.keep_days and "notified_unshared" not in f:
+                        set_flag(s, "notified_unshared")
+                        messages.append(("【%sへ】受け取り箱に、まだ共有していない録画があります（置いてから %d 日）: %s。"
+                                         "取り込んで --recording を付けて共有するか、要らない録画なら片付ける"
+                                         % (owner, days, name), True))
+                    if days >= cfg.owner_days and "notified_owner_unshared" not in f:
+                        set_flag(s, "notified_owner_unshared")
+                        messages.append(("【%sへ】受け取り箱に、置いてから %d 日たった録画が残っています（まだ共有していない）: %s"
+                                         % (owner, days, name), True))
             self.state.save_inbox_seen(list(seen.values()))
-            missing = []
+            changed = False
             if present:
                 for rec, row in by_rec.items():
                     if rec in present or "recording_deleted" in flags(row):
                         continue
                     if rec in seen:
-                        gone.append(row)
+                        set_flag(row, "recording_deleted")
+                        self.state.log("patrol", row["autonote_id"], "recording gone from the inbox")
+                        changed = True
                     elif "inbox_missing_notified" not in flags(row):
                         set_flag(row, "inbox_missing_notified")
-                        missing.append(rec)
+                        changed = True
                         messages.append(("受け取り箱に見当たらない録画があります: %s（名前の打ち間違いなら --recording を直して"
                                          "載せ直す。同期が遅れているだけなら、置かれた後の見回りで数え始める）" % rec, False))
-            if missing and not gone:
+            if changed:
                 self.state.save_shared(rows)
-            if gone:
-                self.mark_deleted(rows, gone)
         for text, todo in messages:
             self.notify(text, todo=todo)
-
-    def mark_deleted(self, rows, gone):
-        """Under the lock: `source_recording_deleted: はい` in the shared minutes, then push."""
-        sharer = self.sharer
-        if sharer._check_repo():
-            self.rc = 1
-            return
-        pre = sharer.repo.head()
-        for row in gone:
-            rel = row["minutes_file"]
-            path = os.path.join(self.cfg.repo_dir, rel)
-            if rel and os.path.isfile(path):
-                with open(path, encoding="utf-8") as f:
-                    text = f.read()
-                fm = fmx.parse(fmx.split_document(text)[0])
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(fmx.set_value(text, "source_recording_deleted", "はい"))
-                sharer.repo.commit("update: %s %s" % (fm.get("date", ""), fm.get("title", row["autonote_id"])))
-            set_flag(row, "recording_deleted")
-        try:
-            status, detail = sharer._sync(pre)
-        except GitError as e:
-            print(e)
-            status, detail = "offline", "git"
-        if status == "conflict":
-            sharer._conflict(detail, "-")  # the commits were dropped; flags stay unsaved, so the next patrol redoes it
-            self.rc = 1
-            return
-        self.state.save_shared(rows)  # the commits stay in the clone even when the push waits for the next run
-        for row in gone:
-            self.state.log("patrol", row["autonote_id"], "recording deleted" + ("" if status == "ok" else " (push later)"))
-        if status != "ok":
-            self.rc = 1
 
     def check_autonote(self):
         try:
@@ -213,8 +236,9 @@ class Patrol:
         except (OSError, subprocess.TimeoutExpired, ValueError):
             data = None
         if data is None:
-            print("autonote list --json を読めませんでした（AutoNote は起動していますか）")
+            print("autonote list --json を読めませんでした（AUTONOTE_CLI のパスと、AutoNote が起動しているかを確かめる）")
             self.state.log("patrol", "autonote-list", "failed")
+            self.rc = 1
             return
         if isinstance(data, dict):
             data = data.get("meetings") or next((v for v in data.values() if isinstance(v, list)), [])

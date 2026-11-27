@@ -1,7 +1,9 @@
 """Fills the placeholders in templates/: {{keep_days}} (RECORDING_KEEP_DAYS) and {{exts}} (recording file types)."""
 import os
 
-EXTS_TEXT = "mp4・m4a・mov・wav・mp3"
+# What the guides ask people to record in: the formats AutoNote can import (AudioImporter.supportedExtensions).
+# The patrol counts more than this in the inbox (share.RECORDING_EXTS), so a stray .mov still gets its reminder.
+EXTS_TEXT = "mp4・m4a・mp3・wav"
 
 
 def fill(cfg, text):

@@ -6,6 +6,7 @@ The webhook URL is a secret: it is never written to logs, state files or stdout.
 in state/outbox/ and sent again on the next run; after OUTBOX_TODO_DAYS it also goes to todo.md once.
 Notices carry only titles, dates, links and deadlines, never what was said in the meeting.
 """
+import http.client
 import json
 import os
 import subprocess
@@ -47,7 +48,11 @@ def _deliver(cfg, state, msg):
     if mode == "slack":
         url = _webhook_url(cfg)
         body = json.dumps({"text": "%s\n%s" % (title, text)}, ensure_ascii=False).encode("utf-8")
-        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json; charset=utf-8"})
+        try:
+            req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json; charset=utf-8"})
+        except ValueError:
+            # urllib's own message quotes the URL, which is a secret: say only what is wrong with it.
+            raise NotifyError("slack: Webhook の URL の形が正しくありません（https:// から書く）")
         try:
             with urllib.request.urlopen(req, timeout=15) as res:
                 if res.status // 100 != 2:
@@ -56,6 +61,8 @@ def _deliver(cfg, state, msg):
             raise NotifyError("slack: HTTP %d" % e.code)
         except (urllib.error.URLError, OSError) as e:
             raise NotifyError("slack: %s" % type(e).__name__)
+        except (ValueError, http.client.HTTPException):
+            raise NotifyError("slack: Webhook の URL の形が正しくありません（https:// から書く）")
         return
     raise NotifyError("NOTIFY_MODE が分かりません: %s" % mode)
 
@@ -80,6 +87,9 @@ def _webhook_url(cfg):
 def _op_read(cfg, ref):
     try:
         p = subprocess.run([cfg.op_cmd, "read", ref], capture_output=True, text=True, timeout=60)
+    except FileNotFoundError:
+        return NotifyError("op が見つかりません（%s）。config.env の OP_CMD に op の絶対パスを書く（launchd から動かすと、"
+                           "PATH に Homebrew のフォルダが無い）" % cfg.op_cmd)
     except (OSError, subprocess.TimeoutExpired) as e:
         return NotifyError("op read: %s" % type(e).__name__)
     if p.returncode != 0 or not p.stdout.strip():

@@ -19,6 +19,23 @@ def _expand(value, known):
     return value
 
 
+def _closing_quote(value):
+    """Index of the quote that closes a value starting with ' or ", or -1 (not quoted, or never closed)."""
+    if value[:1] == "'":
+        return value.find("'", 1)
+    if value[:1] != '"':
+        return -1
+    i = 1
+    while i < len(value):
+        if value[i] == "\\":
+            i += 2
+            continue
+        if value[i] == '"':
+            return i
+        i += 1
+    return -1
+
+
 def parse_env_file(path):
     """Reads shell-style `KEY=value` lines. No commands run: only $VAR / ${VAR} and a leading ~ are expanded."""
     values = {}
@@ -33,8 +50,10 @@ def parse_env_file(path):
             if not m:
                 continue
             key, value = m.group(1), m.group(2).strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-                quote, value = value[0], value[1:-1]
+            end = _closing_quote(value)
+            if end > 0:
+                # A quoted value ends at its closing quote; what follows (`  # a note`) is a comment.
+                quote, value = value[0], value[1:end]
                 if quote == '"':
                     value = _expand(value.replace('\\"', '"'), values)
             else:
@@ -81,6 +100,7 @@ class Config:
         self.outbox_todo_days = int(g("OUTBOX_TODO_DAYS", "3"))
         self.lock_timeout = float(g("SHARE_LOCK_TIMEOUT_SEC", "120"))
         self.lock_poll = float(g("SHARE_LOCK_POLL_SEC", "2"))
+        self.git_timeout = float(g("SHARE_GIT_TIMEOUT_SEC", "120"))
         self.templates_dir = g("SHARE_TEMPLATES_DIR", os.path.join(PACKAGE_ROOT, "templates"))
         self._now = g("SHARE_NOW")
 

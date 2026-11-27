@@ -18,6 +18,7 @@ from . import frontmatter as fmx
 from . import index as indexmod
 from . import mdhtml
 from . import templates
+from .names import nfc, on_disk, settle
 from . import split
 from .state import read_tsv, write_tsv
 
@@ -129,7 +130,9 @@ def sync(cfg, state, repo_dir, full=False):
         return False
     root = cfg.mirror_dir
     manifest_path = state.path("mirror-files.tsv")
-    manifest = {r["path"]: r["source_sha256"] for r in read_tsv(manifest_path, MANIFEST_COLUMNS)}
+    # Keys are NFC on both sides: a manifest written with NFD names must not make "not wanted any more" out of a
+    # file that was just written (APFS opens both forms as the same file).
+    manifest = {nfc(r["path"]): r["source_sha256"] for r in read_tsv(manifest_path, MANIFEST_COLUMNS)}
     want = {}
     for base, (text, title) in desired(cfg, repo_dir).items():
         for fmt in cfg.mirror_formats:
@@ -142,6 +145,9 @@ def sync(cfg, state, repo_dir, full=False):
         for rel, (fmt, text, title) in sorted(want.items()):
             sha = _sha(fmt + "\n" + text)
             target = os.path.join(root, rel)
+            listed = on_disk(target)
+            if listed and listed != target:
+                settle(listed)
             if not full and manifest.get(rel) == sha and os.path.exists(target):
                 new_manifest[rel] = sha
                 continue

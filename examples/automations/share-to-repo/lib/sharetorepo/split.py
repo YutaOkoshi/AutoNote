@@ -9,6 +9,7 @@ import os
 import re
 
 from . import frontmatter as fmx
+from .names import nfc
 
 LINK_RE = re.compile(r"\[\[#\^t([0-9]{2})-([0-9]{2})-([0-9]{2})(?:-[0-9]+)?\\?\|[0-9:]+\]\]")
 SPEAKER_RE = re.compile(r"^\*\*\[\d{2}:\d{2}:\d{2}\] (.+?)\*\*: ")
@@ -92,7 +93,8 @@ class Meeting:
 
     @property
     def stem(self):
-        return os.path.splitext(os.path.basename(self.path))[0]
+        """The file name without .md, in NFC (the vault file itself is NFD on a Mac's disk)."""
+        return nfc(os.path.splitext(os.path.basename(self.path))[0])
 
     def speakers_unknown(self):
         speakers = [m.group(1) for m in (SPEAKER_RE.match(l) for l in (self.transcript or "").split("\n")) if m]

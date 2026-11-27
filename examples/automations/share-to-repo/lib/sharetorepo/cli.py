@@ -7,6 +7,7 @@ SHARE_USAGE = """使い方:
   share-meeting.sh <会議ファイル> [--kind internal|customer] [--customer <相手先>] [--recording <録画のファイル名>]
       --recording は受け取り箱でのファイル名（パスを付けても名前だけを使う）
   share-meeting.sh --unshare <autonote_id>
+  share-meeting.sh --recording-deleted <autonote_id>   （録画を消したことを記録し、置き場の議事録に載せる）
   share-meeting.sh --retry-pending
   share-meeting.sh --rebuild-index
   share-meeting.sh --rebuild-mirror
@@ -47,6 +48,11 @@ def main_share(argv):
             return _usage("--unshare には autonote_id を 1 つ渡す")
         sharer.flush_outbox()
         return sharer.unshare(argv[1])
+    if argv[0] == "--recording-deleted":
+        if len(argv) != 2:
+            return _usage("--recording-deleted には autonote_id を 1 つ渡す")
+        sharer.flush_outbox()
+        return sharer.recording_deleted(argv[1])
     if argv[0].startswith("--"):
         return _usage("知らない引数です: %s" % argv[0])
     path, rest = argv[0], argv[1:]

@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -115,6 +116,15 @@ class Sandbox:
 
     def vault_file(self, name):
         return os.path.join(self.vault, "2026", name)
+
+    def nfd_vault_file(self, name):
+        """Recreates a vault file the way AutoNote leaves it on a Mac: the name on disk is NFD (decomposed)."""
+        d = os.path.join(self.vault, "2026")
+        text = read(os.path.join(d, name))
+        os.remove(os.path.join(d, name))
+        path = os.path.join(d, unicodedata.normalize("NFD", name))
+        write(path, text)
+        return path
 
     def remote_files(self):
         out = self.git("ls-tree", "-r", "--name-only", "main", cwd=self.remote)

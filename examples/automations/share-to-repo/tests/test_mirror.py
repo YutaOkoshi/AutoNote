@@ -144,6 +144,7 @@ class MirrorTests(SandboxTest):
         self.assertIn("2026/%s.md" % NAME, self.sb.remote_files())
         self.assertIn("読む人向けの写し", self.sb.state_file("todo.md"))
         self.assertFalse(os.path.exists(os.path.join(self.mirror, "議事録")))
+        self.assertOk(self.sb.patrol(now="2026-12-03T08:00:00+09:00"), 1)  # C-F12 (round 2): still failing → 1
         self.enable()
         self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"))
         self.assertIn("議事録/2026/%s.docx" % NAME, mirror_files(self.mirror))
