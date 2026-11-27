@@ -5,8 +5,10 @@ import Synchronization
 /// Where AutoNote says that it did not use something written in `settings.json`: an unknown value replaced by a
 /// default, an engine that cannot run here, entries it dropped, a whole file it could not read. Settings are read
 /// again and again (every live summary tick, every settings screen), so the same line is written at most once per
-/// `repeatInterval`. The app stays up for days and the settings are read again whenever a recording starts, so a
-/// value that is still ignored shows up again then, inside the hour `log show --last 1h` looks at.
+/// `repeatInterval`. The app stays up for days and reads the settings and resolves the engines every 30 s for its
+/// readiness card (`AppModel.refresh`), so a value that is still ignored is written again every `repeatInterval`:
+/// one such line is always inside the hour `log show --last 1h` looks at. A file that was set aside is the
+/// exception: it is reported the one time it is moved.
 /// Lines hold key names and the values of keys that are not secret; never `claude_env`'s names or values.
 public final class SettingsDiagnostics: Sendable {
     public static let shared = SettingsDiagnostics()

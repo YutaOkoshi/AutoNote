@@ -40,9 +40,10 @@ AutoNote をソースからビルドし、テストし、変更を入れるた�
 
 利用者向けの読み方とコマンドは [利用者リファレンス](guide/reference.md) の「ログで理由を調べる」にある。開発で知っておくこと:
 
-- `settings.json` の値を使わなかったとき（知らない `live_engine`、確定版に書いた Apple のエンジン、未ダウンロードのモデル、退避したファイルなど）は `Settings` カテゴリに `settings: ignored ...` が `notice` で出る（`SettingsDiagnostics`）。同じ行は 30 分に 1 回まで（`repeatInterval`）で、プロセスごとに数える。値を引用するのはエンジン・モデル・翻訳の項目だけで、`claude_env` は個数だけ
+- `settings.json` の値を使わなかったとき（知らない `live_engine`、確定版に書いた Apple のエンジン、未ダウンロードのモデル、退避したファイルなど）は `Settings` カテゴリに `settings: ignored ...` が `notice` で出る（`SettingsDiagnostics`）。同じ行は 30 分に 1 回まで（`repeatInterval`）で、プロセスごとに数える。アプリは `AppModel.refresh`（30 秒ごと）で設定とエンジンの解決をやり直すので、値が使われていないあいだは 30 分ごとに出直す（退避の行だけは、退避したときの 1 回きり）。値を引用するのはエンジン・モデル・翻訳の項目だけで、`claude_env` は個数だけ
 - ライブ文字起こしの開始の行（`LiveTranscriptionWiring`）は、実際に動いたエンジンを `engine:` で示す（`EngineChoice.displayName`）
-- ライブ要約の `claude -p` が失敗すると、`ClaudeLiveSummarizer` カテゴリに `live claude -p failed: <種類> (exit N): <claude のエラー文>` が `error` で出る。エラー文は `ClaudeResultClassifier` が残したもの（エラーエンベロープの `subtype`・`result`・`errors` と stderr）で、1 行・200 文字まで、`claude_env` の値（8 文字以上）と `sk-…` 形のトークンは `***`。指示文・文字起こし・成功時の出力は出さない。文が何も無いときは出力の形（バイト数）だけ、`claude` を起動できなかったときは `live claude -p did not run: <型> (<domain> <code>)` が出る。会議 ID はこの行には無い（スケジューラの `live summary: failed (...) (<会議 ID>)` は `NSLog` で出るので、時刻で突き合わせる）
+- ライブ要約の `claude -p` が失敗すると、`ClaudeLiveSummarizer` カテゴリに `live claude -p failed: <種類> (exit N): <claude のエラー文>` が `error` で出る。エラー文は `ClaudeResultClassifier.failureText`（エラーエンベロープの `subtype`・`result`・`errors` と stderr）で、`claude_env` の値（8 文字以上）と `sk-…` 形のトークンを `***` にしてから 1 行・200 文字に切る（切ってから伏せると、切れ目にかかった値が残る）。指示文・文字起こし・成功時の出力は出さない。文が何も無いときは出力の形（バイト数）だけ、`claude` を起動できなかったときは `live claude -p did not run: <型> (<domain> <code>)` が出る。会議 ID はこの行には無い（スケジューラの `live summary: failed (...) (<会議 ID>)` は `NSLog` で出るので、時刻で突き合わせる）
+- 録音の最初の確認（`checkReady`: 実行ファイルの確認と `claude auth status --json`）や `LiveSummarizerFactory` が失敗すると、スケジューラはその録音の要約を止めて以後呼ばない。このときは `live claude -p unavailable: <種類> (<理由>)` が同じカテゴリに出る（確認の終了コード、JSON の `loggedIn`、stderr。stdout と `claude` のパスは出さない）
 - `swift test` と `autonote` の CLI も同じ行を本物のログに書く（テストは架空の値を使う）。アプリの行だけを読むなら、条件に `AND process == "AutoNoteApp"` を足す
 
 ## リポジトリ構成

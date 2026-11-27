@@ -22,8 +22,8 @@ import AutoNoteTestSupport
         func advance(_ seconds: TimeInterval) { time.withLock { $0 += seconds } }
     }
 
-    /// The app stays up for days: a value that is still ignored is written again once the interval has passed, so
-    /// `log show --last 1h` finds it after the next recording starts.
+    /// The app stays up for days and reads the settings every 30 s: a value that is still ignored is written again
+    /// once the interval has passed, so `log show --last 1h` always finds it.
     @Test func theSameLineComesBackAfterTheInterval() {
         let lines = LockedBox<[String]>([])
         let clock = Clock()
@@ -40,7 +40,8 @@ import AutoNoteTestSupport
         clock.advance(-86_400)
         diagnostics.report("a")
         #expect(lines.withLock { $0 } == ["a", "b", "a", "a"])
-        #expect(SettingsDiagnostics.repeatInterval <= 30 * 60)   // well inside the hour the guide's command reads
+        // The guide's command reads one hour: a line that comes back every half hour is always in it.
+        #expect(SettingsDiagnostics.repeatInterval <= 30 * 60)
     }
 
     private func catalog(installed: [String] = [], speech: Bool = true) -> EngineCatalog {
