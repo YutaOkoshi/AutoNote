@@ -90,6 +90,31 @@ import AutoNoteTestSupport
         #expect(plan.copies[6] == .init(source: Self.id(3), from: "tracks/mic-001.wav", to: "tracks/mic-003.wav"))
     }
 
+    @Test func carriesTheSourcesAudioHealthAndLossAddedUpPerTrack() throws {
+        var sources = Self.specExample   // third, first, second
+        sources[1].audioHealth = [
+            TrackHealth(track: .mic, noCallbackSeconds: 1, zeroSeconds: 2, restarts: 1, callbacks: 100),
+            TrackHealth(track: .system, noCallbackSeconds: 10, zeroSeconds: 20, restarts: 0, callbacks: 200),   // an older recording
+        ]
+        sources[2].audioHealth = [
+            TrackHealth(track: .system, noCallbackSeconds: 5, zeroSeconds: 60, restarts: 3, callbacks: 300,
+                        droppedFrames: 480, suspectZeroSeconds: 40, suspectNoCallbackSeconds: 4, excludedNoCallbackSeconds: 3),
+        ]
+        sources[2].audioLoss = [TrackLoss(track: .system, seconds: 44, sourceFailed: false)]
+        sources[0].audioLoss = [TrackLoss(track: .system, seconds: 300, sourceFailed: true), TrackLoss(track: .mic, seconds: 0, sourceFailed: true)]
+        let m = try MeetingCombiner.plan(sources, newID: Self.newID).manifest
+        #expect(m.audioHealth == [
+            TrackHealth(track: .mic, noCallbackSeconds: 1, zeroSeconds: 2, restarts: 1, callbacks: 100),
+            TrackHealth(track: .system, noCallbackSeconds: 15, zeroSeconds: 80, restarts: 3, callbacks: 500,
+                        droppedFrames: 480, suspectZeroSeconds: 40, suspectNoCallbackSeconds: 4, excludedNoCallbackSeconds: 3),
+        ])
+        #expect(m.audioLoss == [TrackLoss(track: .mic, seconds: 0, sourceFailed: true),
+                                TrackLoss(track: .system, seconds: 344, sourceFailed: true)])
+        // Sources without either leave both out.
+        let plain = try MeetingCombiner.plan(Self.specExample, newID: Self.newID).manifest
+        #expect(plain.audioHealth == nil && plain.audioLoss == nil)
+    }
+
     @Test func transcriptTimesRunThroughTheCombinedMeeting() throws {
         // SPEC §2.5: the second recording's first utterance lands near [00:01:30] (its file starts at 90 s).
         let m = try MeetingCombiner.plan(Self.specExample, newID: Self.newID).manifest

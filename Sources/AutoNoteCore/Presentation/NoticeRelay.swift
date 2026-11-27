@@ -7,8 +7,30 @@ public enum NoticeRelay {
         switch e {
         case .silenceWarning(let w): [.silence(w.track)]
         case .diskSpaceLow(let bytes): [.diskLow(availableBytes: bytes)]
+        case .sourceFailed(let track, _): [.recordingLoss(track, reason: .sourceFailed)]
+        case .audioNotArriving(let track, _, let heardBefore):
+            [.recordingLoss(track, reason: heardBefore ? .notArriving : .nothingArrived)]
         default: []
         }
+    }
+
+    /// Notices (by id) that an event makes untrue. Only one notice about a track at a time: "not arriving" takes the
+    /// place of the general silence warning and is itself taken back when audio is heard again; a failure takes the
+    /// place of both and is taken back when the track records again. Nothing about a recording outlives it.
+    public static func withdrawals(for e: RecordingEvent) -> [String] {
+        switch e {
+        case .audioNotArriving(.system, _, _): [UserNotice.silence(.system).id]
+        case .audioArrivingAgain(let track): notArriving(track)
+        case .sourceFailed(let track, _): notArriving(track) + [UserNotice.silence(track).id]
+        case .sourceRecovered(let track): [UserNotice.recordingLoss(track, reason: .sourceFailed).id]
+        case .stopped:
+            [Track.mic, .system].flatMap { notArriving($0) + [UserNotice.recordingLoss($0, reason: .sourceFailed).id] }
+        default: []
+        }
+    }
+
+    private static func notArriving(_ track: Track) -> [String] {
+        [RecordingLossReason.notArriving, .nothingArrived].map { UserNotice.recordingLoss(track, reason: $0).id }
     }
 
     public static func notices(previous: QueueStatus, current: QueueStatus, rows: [MeetingRow]) -> [UserNotice] {

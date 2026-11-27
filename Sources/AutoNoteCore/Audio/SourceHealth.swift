@@ -12,10 +12,28 @@ public struct TrackHealth: Codable, Equatable, Hashable, Sendable {
     /// Times the source rebuilt its input after the hardware configuration changed or the input stalled.
     public var restarts: Int
     public var callbacks: Int
+    /// Frames the ring buffers refused because the drain fell behind (`AudioRingBuffer.droppedFrames`), all rebuilds
+    /// together. nil on recordings made before this field.
+    public var droppedFrames: Int?
+    /// System track: whole seconds in which another process was playing audio while every sample that arrived was
+    /// exactly zero. A tap that went deaf looks like this; so does an app that keeps its output open and plays digital
+    /// silence. nil when the source does not watch other processes (the microphone, older recordings).
+    public var suspectZeroSeconds: Int?
+    /// System track: whole seconds in which another process was playing audio while no callback arrived. (With nobody
+    /// playing, an idle tap delivers no callbacks at all, so `noCallbackSeconds` alone says nothing.) nil as above.
+    public var suspectNoCallbackSeconds: Int?
+    /// Of `noCallbackSeconds`, those in which nothing was to be recorded: inside a pause of the recording, or after
+    /// the microphone was detached and did not come back before the stop. nil when there were none.
+    public var excludedNoCallbackSeconds: Int?
 
-    public init(track: Track, noCallbackSeconds: Int, zeroSeconds: Int, restarts: Int, callbacks: Int) {
+    public init(track: Track, noCallbackSeconds: Int, zeroSeconds: Int, restarts: Int, callbacks: Int,
+                droppedFrames: Int? = nil, suspectZeroSeconds: Int? = nil, suspectNoCallbackSeconds: Int? = nil,
+                excludedNoCallbackSeconds: Int? = nil) {
         self.track = track; self.noCallbackSeconds = noCallbackSeconds; self.zeroSeconds = zeroSeconds
         self.restarts = restarts; self.callbacks = callbacks
+        self.droppedFrames = droppedFrames; self.suspectZeroSeconds = suspectZeroSeconds
+        self.suspectNoCallbackSeconds = suspectNoCallbackSeconds
+        self.excludedNoCallbackSeconds = excludedNoCallbackSeconds
     }
 }
 
@@ -29,16 +47,28 @@ public struct SourceRuntimeFailure: Error, Equatable, Sendable, CustomStringConv
 /// Counters a source shares with its owner: written by the drain task (one record = one callback) and the source,
 /// read by `RecordingSession` at stop. Not on the real-time thread. One instance per source.
 public final class SourceHealth: Sendable {
-    /// Per whole timeline second: bit 0 = a callback delivered frames, bit 1 = some sample was non-zero.
+    /// Per whole timeline second: bit 0 = a callback delivered frames, bit 1 = some sample was non-zero,
+    /// bit 2 = a poll saw another process playing audio, bit 3 = a poll saw nobody playing.
     private struct State {
         var seconds: [UInt8] = []
         var callbacks = 0
+        var nonZeroCallbacks = 0
+        var windowState = WindowState.normal
         var restarts = 0
+        var droppedFrames = 0
+        var polled = false
+        var paused = false
         var windowCallbacks = 0
         var windowNonZero = false
         var failureObserver: (@Sendable (String) -> Void)?
+        var recoveryObserver: (@Sendable () -> Void)?
         var failure: String?
+        var notArrivingObserver: (@Sendable (Int?) -> Void)?
+        var notArriving: Int?
     }
+
+    private static let delivered: UInt8 = 0b0001, nonZero: UInt8 = 0b0010
+    private static let othersPlaying: UInt8 = 0b0100, nobodyPlaying: UInt8 = 0b1000
 
     private static let maxSeconds = 24 * 3600   // bounds memory for a runaway timestamp
     private let state = Mutex(State())
@@ -50,7 +80,7 @@ public final class SourceHealth: Sendable {
         state.withLock { s in
             s.callbacks += 1
             s.windowCallbacks += 1
-            if nonZero { s.windowNonZero = true }
+            if nonZero { s.windowNonZero = true; s.nonZeroCallbacks += 1 }
             guard start.isFinite, duration.isFinite, start + duration > 0 else { return }
             let first = max(0, Int(start.rounded(.down)))
             // A record ending exactly on a second boundary does not touch the next second.
@@ -61,16 +91,50 @@ public final class SourceHealth: Sendable {
         }
     }
 
+    /// One look at "is a process other than this app playing audio" at `seconds` on the timeline (the system source's
+    /// watchdog asks a few times a second). A second counts as suspect only when every poll in it said yes.
+    public func recordOutputPoll(at seconds: Double, othersPlaying: Bool) {
+        state.withLock { s in
+            s.polled = true
+            guard seconds.isFinite, seconds >= 0 else { return }
+            let i = min(Self.maxSeconds - 1, Int(seconds.rounded(.down)))
+            if s.seconds.count <= i { s.seconds.append(contentsOf: repeatElement(0, count: i + 1 - s.seconds.count)) }
+            s.seconds[i] |= othersPlaying ? Self.othersPlaying : Self.nobodyPlaying
+        }
+    }
+
     public func noteRestart() { state.withLock { $0.restarts += 1 } }
+
+    /// Set by the recording while it is paused: the source goes on delivering, but nothing is written, so it does
+    /// not rebuild for zeros or report audio as not arriving meanwhile.
+    public func setPaused(_ paused: Bool) { state.withLock { $0.paused = paused } }
+    public var isPaused: Bool { state.withLock { $0.paused } }
+
+    /// Frames a retired ring buffer had dropped (called when a rebuild or the stop lets go of the ring).
+    public func addDroppedFrames(_ frames: Int) { state.withLock { $0.droppedFrames += max(0, frames) } }
 
     public var restarts: Int { state.withLock { $0.restarts } }
     public var callbacks: Int { state.withLock { $0.callbacks } }
+    /// Callbacks so far that held a non-zero sample: a watchdog compares two readings to learn whether audio still arrives.
+    public var nonZeroCallbacks: Int { state.withLock { $0.nonZeroCallbacks } }
 
-    /// Callbacks since the previous call and whether any of them held a non-zero sample; resets the window.
-    public func takeWindow() -> (callbacks: Int, nonZero: Bool) {
+    /// What a track delivered in one log window.
+    public enum WindowState: String, Sendable {
+        case normal
+        case allZero = "all_zero"
+        case noCallbacks = "no_callbacks"
+    }
+
+    /// Callbacks since the previous call, the state of that window, and the state before it when the two differ (a
+    /// track starts out `normal`); resets the window. Kept here, not in the drain, so it carries across a rebuild's
+    /// new drain.
+    public func closeWindow() -> (callbacks: Int, state: WindowState, changedFrom: WindowState?) {
         state.withLock { s in
             defer { s.windowCallbacks = 0; s.windowNonZero = false }
-            return (s.windowCallbacks, s.windowNonZero)
+            let now: WindowState = s.windowCallbacks == 0 ? .noCallbacks : (s.windowNonZero ? .normal : .allZero)
+            let before = s.windowState
+            s.windowState = now
+            return (s.windowCallbacks, now, now == before ? nil : before)
         }
     }
 
@@ -89,22 +153,86 @@ public final class SourceHealth: Sendable {
         observer?(message)
     }
 
+    /// Called when a source that had reported a failure delivers audio after all (the tap it kept is heard again).
+    public func setRecoveryObserver(_ observer: (@Sendable () -> Void)?) { state.withLock { $0.recoveryObserver = observer } }
+
+    /// Takes the reported failure back; a later one is reported again.
+    func reportRecovered() {
+        let observer = state.withLock { s -> (@Sendable () -> Void)? in
+            guard s.failure != nil else { return nil }
+            s.failure = nil
+            return s.recoveryObserver
+        }
+        observer?()
+    }
+
+    /// Called with the seconds so far when the source keeps running but, for a long stretch, received nothing while
+    /// another process was playing audio (and rebuilding did not help), and with nil once audio is heard again.
+    /// Once per such stretch. Not a failure: the source goes on.
+    public func setNotArrivingObserver(_ observer: (@Sendable (Int?) -> Void)?) {
+        let pending = state.withLock { s -> Int? in s.notArrivingObserver = observer; return s.notArriving }
+        if let pending, let observer { observer(pending) }
+    }
+
+    /// Nothing is said about a paused recording.
+    func reportNotArriving(seconds: Int) {
+        let observer = state.withLock { s -> (@Sendable (Int?) -> Void)? in
+            guard s.notArriving == nil, !s.paused else { return nil }
+            s.notArriving = seconds
+            return s.notArrivingObserver
+        }
+        observer?(seconds)
+    }
+
+    /// A non-zero sample arrived: takes back what `reportNotArriving` said, if it said anything.
+    func reportArrivingAgain() {
+        let observer = state.withLock { s -> (@Sendable (Int?) -> Void)? in
+            guard s.notArriving != nil else { return nil }
+            s.notArriving = nil
+            return s.notArrivingObserver
+        }
+        observer?(nil)
+    }
+
+    /// The owner could not pass the report on (the recording was paused by the time it arrived): it may be made again.
+    public func forgetNotArriving() { state.withLock { $0.notArriving = nil } }
+
     /// The per-second marks, for merging several sources of one track (a microphone re-attached mid-meeting).
     fileprivate var marks: [UInt8] { state.withLock { $0.seconds } }
+    fileprivate var totals: (dropped: Int, polled: Bool) { state.withLock { ($0.droppedFrames, $0.polled) } }
 
     /// Summary over `0 ..< ceil(endSeconds)` of every source the track had, in any order.
-    public static func summary(track: Track, sources: [SourceHealth], endSeconds: Double) -> TrackHealth {
+    public static func summary(track: Track, sources: [SourceHealth], endSeconds: Double,
+                               pauses: [PauseInterval] = []) -> TrackHealth {
         let total = max(0, min(maxSeconds, Int(endSeconds.rounded(.up))))
         var merged = [UInt8](repeating: 0, count: total)
-        var restarts = 0, callbacks = 0
+        var restarts = 0, callbacks = 0, dropped = 0, polled = false
         for source in sources {
             let marks = source.marks
             for i in 0..<min(total, marks.count) { merged[i] |= marks[i] }
             restarts += source.restarts
             callbacks += source.callbacks
+            let totals = source.totals
+            dropped += totals.dropped
+            polled = polled || totals.polled
         }
-        let noCallback = merged.lazy.filter { $0 & 0b01 == 0 }.count
-        let zero = merged.lazy.filter { $0 == 0b01 }.count
-        return TrackHealth(track: track, noCallbackSeconds: noCallback, zeroSeconds: zero, restarts: restarts, callbacks: callbacks)
+        let audio = delivered | nonZero
+        let noCallback = merged.lazy.filter { $0 & delivered == 0 }.count
+        let zero = merged.lazy.filter { $0 & audio == delivered }.count
+        // Seconds wholly inside an interval of `pauses` (an open one runs to the end): nothing was to be recorded then.
+        var paused = [Bool](repeating: false, count: total)
+        for pause in pauses {
+            let from = max(0, Int(pause.start.seconds.rounded(.up)))
+            let to = min(total, Int((pause.end?.seconds ?? Double(total)).rounded(.down)))
+            if from < to { for i in from..<to { paused[i] = true } }
+        }
+        let pausedNoCallback = merged.indices.lazy.filter { paused[$0] && merged[$0] & delivered == 0 }.count
+        // Suspect: every poll of the second saw another process playing, and still no non-zero sample arrived.
+        let suspect = merged.indices.lazy.filter { !paused[$0] && merged[$0] & (othersPlaying | nobodyPlaying) == othersPlaying }
+        return TrackHealth(track: track, noCallbackSeconds: noCallback, zeroSeconds: zero, restarts: restarts, callbacks: callbacks,
+                           droppedFrames: dropped,
+                           suspectZeroSeconds: polled ? suspect.filter { merged[$0] & audio == delivered }.count : nil,
+                           suspectNoCallbackSeconds: polled ? suspect.filter { merged[$0] & delivered == 0 }.count : nil,
+                           excludedNoCallbackSeconds: pausedNoCallback > 0 ? pausedNoCallback : nil)
     }
 }

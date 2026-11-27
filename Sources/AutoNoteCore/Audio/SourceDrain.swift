@@ -89,14 +89,19 @@ enum SourceDrain {
             var lastHostTime: UInt64 = 0
             var window = (clock.now().seconds / healthWindowSeconds).rounded(.down)
 
-            /// Diagnostics only: one debug line per 10 s of meeting time, even when no callback came at all.
+            /// Diagnostics only: one debug line per 10 s of meeting time, even when no callback came at all; and one
+            /// notice line when the track's state changed (normal ↔ all zero ↔ no callbacks), which is what a later
+            /// look at the log needs and what a default log capture keeps.
             func logWindow() {
                 guard let health else { return }
                 let current = (clock.now().seconds / healthWindowSeconds).rounded(.down)
                 guard current > window else { return }
                 window = current
-                let (callbacks, nonZero) = health.takeWindow()
-                healthLogger.debug("\(track.rawValue, privacy: .public): last \(Int(healthWindowSeconds), privacy: .public) s callbacks=\(callbacks, privacy: .public) all_zero=\(callbacks > 0 && !nonZero, privacy: .public)")
+                let w = health.closeWindow()
+                healthLogger.debug("\(track.rawValue, privacy: .public): last \(Int(healthWindowSeconds), privacy: .public) s callbacks=\(w.callbacks, privacy: .public) all_zero=\(w.state == .allZero, privacy: .public)")
+                if let before = w.changedFrom {
+                    healthLogger.notice("\(track.rawValue, privacy: .public): \(before.rawValue, privacy: .public) -> \(w.state.rawValue, privacy: .public) at \(Int(current * healthWindowSeconds), privacy: .public) s (callbacks=\(w.callbacks, privacy: .public) in the last \(Int(healthWindowSeconds), privacy: .public) s)")
+                }
             }
 
             func drainAvailable() {

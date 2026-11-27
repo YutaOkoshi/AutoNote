@@ -122,6 +122,30 @@ import AutoNoteTestSupport
         let row = try #require(MeetingListBuilder.build(index: [], manifests: [m], queue: .empty, outputFolder: nil).first)
         #expect(row.state == .tooShort)
         #expect(row.silenceWarning)
+        #expect(row.audioLossLabel == nil && row.audioLossHelp == nil)
+    }
+
+    /// Lost audio is its own line on the row (which track, how long), apart from the silence mark.
+    @Test func aLossyRecordingSaysWhichTrackAndHowLong() throws {
+        var m = manifest("20261024-1400-a1b2", status: .recorded)
+        m.audioLoss = [TrackLoss(track: .system, seconds: 720, sourceFailed: false)]
+        let row = try #require(MeetingListBuilder.build(index: [], manifests: [m], queue: .empty, outputFolder: nil).first)
+        #expect(row.audioLossLabel == "録音の欠損の可能性: システム音声 約 12 分")
+        #expect(row.audioLossHelp == AudioLossPresentation.help(m.audioLoss))
+        #expect(row.audioLossHelp?.hasPrefix("システム音声（相手の声）が約 12 分、") == true)
+        #expect(!row.silenceWarning)
+        // An older client's row (no such key) still decodes, and a row without a loss does not send the key.
+        let json = String(decoding: try AutoNoteJSON.compactEncoder().encode(MeetingRow(id: "x")), as: UTF8.self)
+        #expect(!json.contains("audio_loss_label") && !json.contains("audio_loss_help") && !json.contains("mic_silent_label"))
+        #expect(row.micSilentLabel == nil)
+        // A microphone that was all zeros for long: its own, weaker line, and no loss.
+        m.audioLoss = nil
+        m.endedAt = m.startedAt.addingTimeInterval(4140)
+        m.audioHealth = [TrackHealth(track: .mic, noCallbackSeconds: 0, zeroSeconds: 1186, restarts: 0, callbacks: 1, droppedFrames: 0)]
+        let silent = try #require(MeetingListBuilder.build(index: [], manifests: [m], queue: .empty, outputFolder: nil).first)
+        #expect(silent.micSilentLabel == "マイクが約 20 分、完全な無音でした（ミュートしていたなら問題ありません）")
+        #expect(silent.audioLossLabel == nil)
+        #expect(try AutoNoteJSON.decoder().decode(MeetingRow.self, from: Data(json.utf8)).audioLossLabel == nil)
     }
 
     /// X28: in-flight manifest statuses become `.processing`, labelled from the queue or "処理待ち".

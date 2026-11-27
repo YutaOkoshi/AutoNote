@@ -131,7 +131,9 @@ public enum MeetingCombiner {
             device: first.device, language: first.language, tracks: tracks,
             pauses: pauses.sorted { $0.start < $1.start }, bookmarks: bookmarks.sorted { $0.at < $1.at },
             status: .recorded, silenceWarning: sources.contains { $0.silenceWarning },
-            autonoteVersion: appVersion, mergedFrom: sources.map(\.id))
+            autonoteVersion: appVersion, mergedFrom: sources.map(\.id),
+            audioHealth: TrackHealth.combine(sources.map(\.audioHealth)),
+            audioLoss: AudioLossRule.combine(sources.map(\.audioLoss)))
         return CombinePlan(manifest: manifest, sources: sources, copies: copies, offsets: offsets, gapSeconds: gap)
     }
 

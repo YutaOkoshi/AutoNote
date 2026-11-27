@@ -16,6 +16,8 @@ public enum UserNotice: Equatable, Sendable {
     case overwriteConfirmation(MeetingID)
     case outputFolderMissing
     case automationFailed(name: String, MeetingID)
+    /// While recording: a track is not being recorded, so the user can still do something about it.
+    case recordingLoss(Track, reason: RecordingLossReason)
 
     /// The same event always has the same id, so a notice can be withdrawn by it.
     public var id: String {
@@ -34,11 +36,24 @@ public enum UserNotice: Equatable, Sendable {
         case .overwriteConfirmation(let m): "meeting.overwrite.\(m.rawValue)"
         case .outputFolderMissing: "output.missing"
         case .automationFailed(let name, let m): "automation.\(name).\(m.rawValue)"
+        case .recordingLoss(let t, let reason): "recording.loss.\(t.rawValue).\(reason.rawValue)"
         }
     }
 }
 
 public enum RegisterAnswer: Equatable, Sendable { case yes, no, never }
+
+/// Why `UserNotice.recordingLoss` is shown.
+public enum RecordingLossReason: String, Equatable, Sendable {
+    /// The track's source or writer failed (`RecordingEvent.sourceFailed`): nothing more is recorded on it.
+    case sourceFailed
+    /// Audio that should be arriving has not for a minute although the source was rebuilt
+    /// (`RecordingEvent.audioNotArriving`); the source keeps trying, and the notice is withdrawn when audio is back.
+    case notArriving
+    /// The same, on a track that has not delivered one non-zero sample in this recording: the permission to record
+    /// it may be what is missing, so this one keeps the way to the settings.
+    case nothingArrived
+}
 
 public enum UserNoticeAction: Equatable, Sendable {
     case cancelCountdown

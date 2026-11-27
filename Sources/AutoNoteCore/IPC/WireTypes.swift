@@ -106,10 +106,18 @@ public struct MeetingRow: Codable, Equatable, Sendable, Identifiable {
     public var filePath: String?
     public var silenceWarning: Bool
     public var summaryFirstLine: String?
+    /// 「録音の欠損の可能性: システム音声 約 12 分」 when the recording lost audio (`manifest.audio_loss`); nil otherwise.
+    public var audioLossLabel: String?
+    /// The sentences behind the label (whose voice, how sure, what is missing); nil without a loss.
+    public var audioLossHelp: String?
+    /// 「マイクが約 20 分、完全な無音でした（ミュートしていたなら問題ありません）」 when the microphone delivered only
+    /// zeros for long; not a loss (`AudioLossPresentation.micSilentLabel`). nil otherwise.
+    public var micSilentLabel: String?
 
     public init(id: String = "", title: String = "", startedAt: Date = Date(timeIntervalSince1970: 0), durationMinutes: Int? = nil,
                 durationSeconds: Int? = nil, state: MeetingRowState = .recorded, progressLabel: String? = nil, filePath: String? = nil,
-                silenceWarning: Bool = false, summaryFirstLine: String? = nil) {
+                silenceWarning: Bool = false, summaryFirstLine: String? = nil, audioLossLabel: String? = nil,
+                audioLossHelp: String? = nil, micSilentLabel: String? = nil) {
         self.id = id
         self.title = title
         self.startedAt = startedAt
@@ -120,6 +128,9 @@ public struct MeetingRow: Codable, Equatable, Sendable, Identifiable {
         self.filePath = filePath
         self.silenceWarning = silenceWarning
         self.summaryFirstLine = summaryFirstLine
+        self.audioLossLabel = audioLossLabel
+        self.audioLossHelp = audioLossHelp
+        self.micSilentLabel = micSilentLabel
     }
 }
 

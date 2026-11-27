@@ -372,11 +372,17 @@ func feed(_ engine: FakeMicrophoneEngine, host: FakeHostClock, from: Double) -> 
         src.health?.setFailureObserver { failure.set($0) }
         let feeder = feed(engine, host: host, from: 0)
         defer { feeder.cancel() }
-        for _ in 1...3 {
+        for round in 1...3 {
             try await Task.sleep(for: .milliseconds(150))
             engine.simulateConfigurationChange(stopEngine: true)
+            // A change that lands inside the rebuild before it counts as covered by that rebuild, so on a slow
+            // machine three changes 150 ms apart could end in one rebuild. Each one waits for its own.
+            if round < 3 {
+                #expect(await eventuallyTrue(.seconds(30)) { engine.startCount == round + 1 && engine.isRunning })
+                #expect(await eventuallyTrue(.seconds(30)) { !(await src.isRebuilding) })
+            }
         }
-        #expect(await eventuallyTrue { failure.message != nil })
+        #expect(await eventuallyTrue(.seconds(30)) { failure.message != nil })
         #expect(engine.startCount == 3)
         await src.stop()
     }

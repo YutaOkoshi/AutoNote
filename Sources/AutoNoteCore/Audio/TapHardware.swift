@@ -30,10 +30,18 @@ public protocol TapHardware: Sendable {
     func destroyTap(_ tap: AudioObjectID) throws
     /// Default input / output for diagnostics (transport, rate, channels, running). No names.
     func routeDescription() -> String
+    /// Whether some process other than this one and other than `excludingBundleIDs` runs audio output right now
+    /// (what the tap would pick up). nil when the system does not tell. Read-only; called a few times a second.
+    func otherProcessIsPlayingAudio(excludingBundleIDs: [String]) -> Bool?
+    /// Something that changes when the default output device does (its UID); nil when unknown. Read-only; called a
+    /// few times a second.
+    func outputRouteToken() -> String?
 }
 
 extension TapHardware {
     public func routeDescription() -> String { "unavailable" }
+    public func otherProcessIsPlayingAudio(excludingBundleIDs: [String]) -> Bool? { nil }
+    public func outputRouteToken() -> String? { nil }
 }
 
 /// Production glue: each method maps 1:1 to a Core Audio call. Not unit-tested (needs a device).
@@ -118,4 +126,39 @@ public struct CoreAudioTapHardware: TapHardware {
     }
 
     public func routeDescription() -> String { AudioRoute.describeDefaults() }
+
+    public func outputRouteToken() -> String? { try? defaultOutputDeviceUID() }
+
+    /// The HAL's process objects (`kAudioHardwarePropertyProcessObjectList`) with `kAudioProcessPropertyIsRunningOutput`.
+    /// Measured on macOS 27.2: true within 0.5 s of a process starting playback and false within 0.5 s of its end; a
+    /// browser keeps it true for about 10 s after a pause, and for as long as a page plays digital silence.
+    public func otherProcessIsPlayingAudio(excludingBundleIDs: [String]) -> Bool? {
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        var listAddr = Self.address(kAudioHardwarePropertyProcessObjectList)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(system, &listAddr, 0, nil, &size) == noErr else { return nil }
+        var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        guard !ids.isEmpty else { return false }
+        guard AudioObjectGetPropertyData(system, &listAddr, 0, nil, &size, &ids) == noErr else { return nil }
+        let me = getpid()
+        for id in ids.prefix(Int(size) / MemoryLayout<AudioObjectID>.size) {
+            var runningAddr = Self.address(kAudioProcessPropertyIsRunningOutput)
+            var running: UInt32 = 0
+            var runningSize = UInt32(MemoryLayout<UInt32>.size)
+            guard AudioObjectGetPropertyData(id, &runningAddr, 0, nil, &runningSize, &running) == noErr, running != 0 else { continue }
+            var pidAddr = Self.address(kAudioProcessPropertyPID)
+            var pid: pid_t = -1
+            var pidSize = UInt32(MemoryLayout<pid_t>.size)
+            if AudioObjectGetPropertyData(id, &pidAddr, 0, nil, &pidSize, &pid) == noErr, pid == me { continue }
+            if !excludingBundleIDs.isEmpty {
+                var bundleAddr = Self.address(kAudioProcessPropertyBundleID)
+                var bundle: Unmanaged<CFString>?
+                var bundleSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+                if AudioObjectGetPropertyData(id, &bundleAddr, 0, nil, &bundleSize, &bundle) == noErr, let bundle,
+                   excludingBundleIDs.contains(bundle.takeRetainedValue() as String) { continue }
+            }
+            return true
+        }
+        return false
+    }
 }

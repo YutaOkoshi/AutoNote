@@ -29,11 +29,18 @@ public struct MenuBarPresentation: Equatable, Sendable {
     ///   counting while paused (§5.4).
     public static func make(recorder: RecorderSnapshot, elapsedSeconds: Int?, queue: QueueStatus, readiness: Readiness,
                             latestMinutesAvailable: Bool, rows: [MeetingRow], automationFailures: [AutomationRunRecord],
-                            shortcuts: Shortcuts = Shortcuts(), update: MenuItem? = nil, now: Date,
+                            shortcuts: Shortcuts = Shortcuts(), update: MenuItem? = nil,
+                            recordingLoss: [UserNotice] = [], now: Date,
                             timeZone: TimeZone = .current) -> MenuBarPresentation {
         var items: [MenuItem] = []
         let starting = recorder.state == .recording && recorder.meetingID == nil
         if let line = statusLine(recorder, now: now) { items.append(.status(line)) }
+        // A track that is not being recorded (`UserNotice.recordingLoss`, while its notice is up): said in the menu
+        // and on the icon, which is all that is in sight while another app's window is shared.
+        let losses: [String] = recorder.state == .idle || recorder.state == .countdown ? [] : recordingLoss.compactMap {
+            if case .recordingLoss(let track, let reason) = $0 { RecordingLossCopy.menuLine(track, reason) } else { nil }
+        }
+        items += losses.map(MenuItem.status)
 
         let bindings = ShortcutBindings(shortcuts)
         let toggle = bindings.combo(for: .toggleRecording), pause = bindings.combo(for: .togglePause)
@@ -59,7 +66,8 @@ public struct MenuBarPresentation: Equatable, Sendable {
         case .recording, .paused, .grace: starting ? nil : elapsedSeconds.map(clock)
         case .idle, .countdown: nil
         }
-        return MenuBarPresentation(symbol: symbol(recorder.state, queue: queue), title: title, items: items)
+        return MenuBarPresentation(symbol: losses.isEmpty ? symbol(recorder.state, queue: queue) : lossSymbol,
+                                   title: title, items: items)
     }
 
     /// ⚠ items for what stops minutes: the output folder first, then Claude Code. The model never makes one, since
@@ -105,6 +113,9 @@ public struct MenuBarPresentation: Equatable, Sendable {
         case .grace: Banner.grace(seconds: secondsRemaining(r.deadline, now: now))
         }
     }
+
+    /// The icon while a track is not being recorded.
+    public static let lossSymbol = "exclamationmark.triangle"
 
     private static func symbol(_ state: RecorderState, queue: QueueStatus) -> String {
         switch state {

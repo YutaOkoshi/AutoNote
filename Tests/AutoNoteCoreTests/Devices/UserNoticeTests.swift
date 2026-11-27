@@ -56,6 +56,8 @@ private let nonDevice: [(UserNotice, String)] = [
     (.overwriteConfirmation(mid), "meeting.overwrite.20261025-1000-abcd"),
     (.outputFolderMissing, "output.missing"),
     (.automationFailed(name: "post", mid), "automation.post.20261025-1000-abcd"),
+    (.recordingLoss(.system, reason: .notArriving), "recording.loss.system.notArriving"),
+    (.recordingLoss(.mic, reason: .sourceFailed), "recording.loss.mic.sourceFailed"),
 ]
 
 @Test(arguments: nonDevice.indices)

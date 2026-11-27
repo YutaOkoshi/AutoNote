@@ -69,6 +69,8 @@ public struct MeetingDocument: Sendable {
                                                 appVersion: appVersion, timeZone: timeZone)
         sections.append(String(frontmatter.render(values).dropLast()))
         sections.append("# \(title)")
+        // Before anything else: the reader should know that part of the meeting is missing below.
+        if let note = AudioLossPresentation.noteLine(manifest.audioLoss) { sections.append(note) }
 
         if let m = minutes {
             sections += Self.minutesSections(m, flat: flat, link: link, withLink: withLink, cell: cell, list: list)

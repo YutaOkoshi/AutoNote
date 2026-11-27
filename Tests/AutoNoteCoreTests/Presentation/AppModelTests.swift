@@ -242,6 +242,29 @@ import AutoNoteTestSupport
         #expect(model.prompts.isEmpty)
     }
 
+    /// Lost audio while recording is also a band in the window (a system notification is hidden while the screen is
+    /// shared), until it is taken back or the recording ends.
+    @Test func aRecordingLossIsABandUntilTakenBackOrTheRecordingEnds() async {
+        let fakes = FakePorts(recorder: FakeRecorderPort(recording()))
+        let (model, task) = await start(fakes)
+        defer { task.cancel() }
+        let notArriving = UserNotice.recordingLoss(.system, reason: .notArriving)
+        model.noticePosted(notArriving)
+        model.noticePosted(notArriving)
+        #expect(model.prompts == [notArriving])
+        // The menu bar says it too while the band is up, and stops with it.
+        #expect(model.menuBar(now: Date()).symbol == MenuBarPresentation.lossSymbol)
+        #expect(model.menuBar(now: Date()).items.contains(.status("⚠ システム音声が録音に入っていません")))
+        model.noticeWithdrawn(id: notArriving.id)
+        #expect(model.prompts.isEmpty)
+        #expect(model.menuBar(now: Date()).symbol == "record.circle")
+        model.noticePosted(.recordingLoss(.mic, reason: .sourceFailed))
+        model.noticePosted(.interruptedRecordingFound(m1))
+        await fakes.recorder.send(.idle(language: .ja))
+        await model.settle()
+        #expect(model.prompts == [.interruptedRecordingFound(m1)])
+    }
+
     @Test func overwritePromptDerivedFromQueueState() async {
         // 上書き確認待ちのジョブがある QueueStatus → post なしでも prompts に出る（I1）。確認待ちでなくなれば消える
         let awaiting = QueueItemDTO(meetingID: m1.rawValue, stage: "write_vault", state: "waiting", awaitingConfirmation: true)
