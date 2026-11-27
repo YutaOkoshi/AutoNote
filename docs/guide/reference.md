@@ -87,6 +87,12 @@
 
 `claude_args` と `claude_env` は、議事録は次の作成から、リアルタイム要約は次の録音から効く（アプリの再起動は要らない）。
 
+手で書いた値を AutoNote が使わなかったときは、ログに 1 回出る（同じ内容はアプリを起動している間に 1 回だけ）。読むには `log show --last 1h --predicate 'subsystem == "com.yutaokoshi.autonote" AND category == "Settings"'`。
+
+- `live_engine` / `final_engine`（リアルタイム版・確定版のエンジン。`dictation` / `speech` / `whisper` のどれか）や `translation_mode` / `translation_target` に知らない値があると、その項目だけ既定で動く。ログは `settings: ignored live_engine "system" (known: dictation, speech, whisper); using this Mac's default engine` の形。実際に動いたリアルタイム版のエンジンは、録音ごとの `live transcript started (..., engine: ...)` の行で分かる
+- `claude_env` の不正な名前は、無視した個数だけを出す（名前と値は出さない）
+- ファイル全体が読めない（JSON として壊れている、値の型が違う、`default_language` が知らない値、など）ときは、ファイルを同じフォルダの `settings.json.corrupt-<日時>` に退避し、すべて既定で動く。ログには読めなかった場所（キー名）と退避先の名前が出る
+
 翻訳（設定 › 翻訳。どれも書かなければ既定）:
 
 - `translation_mode`: `off`（既定）/ `after_recording`（録音後に訳す）/ `during_recording`（録音中も訳す。Intel では録音後だけになる）

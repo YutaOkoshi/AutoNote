@@ -27,9 +27,18 @@ public struct EngineChoice: Codable, Hashable, Sendable {
     }
 
     /// Parses `Settings.liveEngine/liveModel` (live) or `finalEngine/finalModel` (batch).
-    /// Returns nil for a missing or unknown kind. A whisper choice without a model gets the machine's default for the role.
-    public static func fromSettings(kind: String?, model: String?, role: EngineRole, machine: MachineKind) -> EngineChoice? {
-        guard let kind, let parsed = EngineKind(rawValue: kind) else { return nil }
+    /// Returns nil for a missing or unknown kind, so the caller resolves the machine's default (`EngineCatalog.resolve`);
+    /// an unknown kind (`system` is a track, not an engine) is reported to `diagnostics` under the role's key.
+    /// A whisper choice without a model gets the machine's default for the role.
+    public static func fromSettings(kind: String?, model: String?, role: EngineRole, machine: MachineKind,
+                                    diagnostics: SettingsDiagnostics = .shared) -> EngineChoice? {
+        guard let kind else { return nil }
+        guard let parsed = EngineKind(rawValue: kind) else {
+            diagnostics.report(SettingsDiagnostics.ignoredValue(
+                key: role == .live ? "live_engine" : "final_engine", value: kind,
+                known: EngineKind.allCases.map(\.rawValue), using: "this Mac's default engine"))
+            return nil
+        }
         switch parsed {
         case .dictation: return .dictation
         case .speech: return .speech
