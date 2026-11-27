@@ -13,6 +13,13 @@ public protocol LiveSummarizer: Sendable {
 public struct ClaudeLiveSummarizer: LiveSummarizer {
     private static let logger = Logger(subsystem: "com.yutaokoshi.autonote", category: "ClaudeLiveSummarizer")
     public static let defaultTimeout: Duration = .seconds(60)
+    /// The longest detail (claude's own error text) in a failure log line.
+    public static let failureDetailLimit = 200
+    /// Writes a failure line to the unified log (subsystem `com.yutaokoshi.autonote`, category `ClaudeLiveSummarizer`).
+    /// Public in the log: `failureLogLine` holds claude's error text, never the prompt or the model's output.
+    public static let systemLog: @Sendable (String) -> Void = { line in
+        logger.error("\(line, privacy: .public)")
+    }
 
     public let claudePath: String
     public let model: String
@@ -23,13 +30,17 @@ public struct ClaudeLiveSummarizer: LiveSummarizer {
     public let extraArguments: [String]
     /// `Settings.claudeEnv`, over the child environment on every launch (the login check included).
     public let environmentOverrides: [String: String]
+    /// Gets one `failureLogLine` per failed call.
+    let log: @Sendable (String) -> Void
 
     public init(claudePath: String, model: String, workingDirectory: URL,
                 runner: any ProcessRunning = FoundationProcessRunner(), timeout: Duration = defaultTimeout,
-                extraArguments: [String] = [], environmentOverrides: [String: String] = [:]) {
+                extraArguments: [String] = [], environmentOverrides: [String: String] = [:],
+                log: @escaping @Sendable (String) -> Void = ClaudeLiveSummarizer.systemLog) {
         self.claudePath = claudePath; self.model = model; self.workingDirectory = workingDirectory
         self.runner = runner; self.timeout = timeout
         self.extraArguments = extraArguments; self.environmentOverrides = environmentOverrides
+        self.log = log
     }
 
     /// The minutes command line with the live schema and `--model <model>`.
@@ -57,10 +68,36 @@ public struct ClaudeLiveSummarizer: LiveSummarizer {
             Self.logger.info("live claude -p succeeded (exit \(result.exitCode, privacy: .public))")
             return output
         case .failure(let error):
-            Self.logger.error("live claude -p failed: \(ClaudeCodeSummarizer.className(error), privacy: .public) (exit \(result.exitCode, privacy: .public))")
+            log(Self.failureLogLine(error, exitCode: result.exitCode, secrets: Array(environmentOverrides.values)))
             throw error
         }
     }
+
+    /// The log line of a failed call: the failure class, the exit code and the message `ClaudeResultClassifier` kept
+    /// (an error envelope's `result` and stderr, or which part of the output did not decode). The minutes side
+    /// stores the same message in `Job.summaryFailure` (`SummarizeStage.classify`); a live call has no job, so the log
+    /// is the only place it can go. The classifier never copies the prompt or a successful envelope's `result` (the
+    /// model's prose about the meeting) into a message. Here the message becomes one line, loses every value of
+    /// `secrets` (the `claude_env` values) and anything shaped like an API key, and is cut to `failureDetailLimit`.
+    static func failureLogLine(_ error: SummarizerError, exitCode: Int32, secrets: [String] = []) -> String {
+        let head = "live claude -p failed: \(ClaudeCodeSummarizer.className(error)) (exit \(exitCode))"
+        let message: String
+        switch error {
+        case .rateLimited(let m), .contextExceeded(let m), .invalidOutput(let m), .failed(_, let m): message = m
+        case .claudeNotFound, .notLoggedIn, .timedOut: message = ""     // a path is not a message
+        }
+        var detail = message.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        for secret in secrets where secret.count >= minimumSecretLength {
+            detail = detail.replacingOccurrences(of: secret, with: "***")
+        }
+        detail = detail.replacing(/sk-[A-Za-z0-9_\-]{8,}/, with: "***")
+        guard !detail.isEmpty else { return head }
+        return head + ": " + (detail.count > failureDetailLimit ? String(detail.prefix(failureDetailLimit)) + "…" : detail)
+    }
+
+    /// Shorter `claude_env` values (`1`, `true`, a region name's fragment) are not secrets, and masking them would
+    /// eat ordinary words of the message.
+    static let minimumSecretLength = 8
 }
 
 /// Builds the live summarizer from the current settings (the same path resolution as `SummarizerFactory`).

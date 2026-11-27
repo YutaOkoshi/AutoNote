@@ -158,6 +158,23 @@ import Foundation
                 == .failure(.failed(exitCode: 1, message: String(long.prefix(500)))))
     }
 
+    /// An error envelope with no `result` and nothing on stderr (the shape of `error_max_turns` and
+    /// `error_during_execution`) still says which kind it was.
+    @Test func errorEnvelopeWithoutTextKeepsItsSubtype() {
+        func classify(_ out: String, _ err: String = "") -> Result<MinutesOutput, SummarizerError> {
+            ClaudeResultClassifier.classify(ProcessResult(exitCode: 1, stdout: Data(out.utf8), stderr: Data(err.utf8), timedOut: false))
+        }
+        #expect(classify(#"{"is_error":true,"subtype":"error_max_turns"}"#)
+                == .failure(.failed(exitCode: 1, message: "subtype=error_max_turns")))
+        #expect(classify(#"{"is_error":true,"subtype":"error_max_turns"}"#, "boom\n")
+                == .failure(.failed(exitCode: 1, message: "subtype=error_max_turns\nboom")))
+        #expect(classify(#"{"is_error":true,"subtype":"error_during_execution","result":"it broke"}"#)
+                == .failure(.failed(exitCode: 1, message: "subtype=error_during_execution\nit broke")))
+        // `success` with `is_error` is an API error whose text says it all; no subtype at all adds nothing.
+        #expect(classify(#"{"is_error":true,"subtype":"success"}"#) == .failure(.failed(exitCode: 1, message: "")))
+        #expect(classify(#"{"is_error":true}"#) == .failure(.failed(exitCode: 1, message: "")))
+    }
+
     @Test func classifierUsesStderrAndOrder() {
         func classify(_ out: String, _ err: String, exit: Int32 = 1, timedOut: Bool = false) -> Result<MinutesOutput, SummarizerError> {
             ClaudeResultClassifier.classify(ProcessResult(exitCode: exit, stdout: Data(out.utf8), stderr: Data(err.utf8), timedOut: timedOut))

@@ -91,6 +91,65 @@ import AutoNoteTestSupport
         }
     }
 
+    /// The envelope and stderr a real `claude -p` printed for a model it does not know (exit 1), with a made-up name.
+    private static let unknownModel = #"{"type":"result","subtype":"success","is_error":true,"num_turns":1,"result":"There's an issue with the selected model (no-such-model). It may not exist or you may not have access to it. Run --model to pick a different model."}"#
+
+    @Test func aFailedCallLogsWhatClaudeSaid() async throws {
+        let dir = try TemporaryDirectory.make(), paths = AppPaths(root: dir.appending(path: "root"))
+        let claude = try FakeClaude.make(in: dir.appending(path: "fake"), responses: [Self.unknownModel], exitCode: 1)
+        let logs = LockedBox<[String]>([])
+        let live = ClaudeLiveSummarizer(claudePath: claude.path(percentEncoded: false), model: "no-such-model",
+                                        workingDirectory: paths.liveSummaryWorkingDirectory,
+                                        log: { line in logs.withLock { $0.append(line) } })
+        let e = await failure { _ = try await live.summarize(request()) }
+        guard case .failed(let exitCode, let message) = e else {
+            Issue.record("expected failed, got \(String(describing: e))")
+            return
+        }
+        #expect(exitCode == 1)
+        let lines = logs.withLock { $0 }
+        #expect(lines == ["live claude -p failed: failed (exit 1): \(message)"])
+        #expect(lines.first?.contains("issue with the selected model (no-such-model)") == true)
+        // The prompt (the utterances) never reaches the log.
+        #expect(lines.allSatisfy { !$0.contains("架空の発話") })
+    }
+
+    @Test func aSuccessfulCallLogsNoFailure() async throws {
+        let dir = try TemporaryDirectory.make(), paths = AppPaths(root: dir.appending(path: "root"))
+        let claude = try FakeClaude.make(in: dir.appending(path: "fake"), responses: [Self.ok])
+        let logs = LockedBox<[String]>([])
+        let live = ClaudeLiveSummarizer(claudePath: claude.path(percentEncoded: false), model: "haiku",
+                                        workingDirectory: paths.liveSummaryWorkingDirectory,
+                                        log: { line in logs.withLock { $0.append(line) } })
+        _ = try await live.summarize(request())
+        #expect(logs.withLock { $0 }.isEmpty)
+    }
+
+    @Test func failureLogLineIsOneShortLineWithoutSecrets() {
+        // Nothing to add: the line is as it was.
+        #expect(ClaudeLiveSummarizer.failureLogLine(.timedOut, exitCode: -1) == "live claude -p failed: timedOut (exit -1)")
+        #expect(ClaudeLiveSummarizer.failureLogLine(.failed(exitCode: 1, message: ""), exitCode: 1)
+                == "live claude -p failed: failed (exit 1)")
+        // A path is not a message (`claudeNotFound` carries one).
+        #expect(ClaudeLiveSummarizer.failureLogLine(.claudeNotFound(path: "/Users/someone/bin/claude"), exitCode: 1)
+                == "live claude -p failed: claudeNotFound (exit 1)")
+        // Line breaks and runs of blanks become one space.
+        #expect(ClaudeLiveSummarizer.failureLogLine(.failed(exitCode: 2, message: "first\n\n  second\tthird\r\n"), exitCode: 2)
+                == "live claude -p failed: failed (exit 2): first second third")
+        // The other classes keep their message too.
+        #expect(ClaudeLiveSummarizer.failureLogLine(.invalidOutput(message: "subtype=error_max_turns: no structured_output"), exitCode: 1)
+                == "live claude -p failed: invalidOutput (exit 1): subtype=error_max_turns: no structured_output")
+        // Cut to the limit, with a mark that it was cut.
+        let long = String(repeating: "x", count: 600)
+        let cut = ClaudeLiveSummarizer.failureLogLine(.failed(exitCode: 1, message: long), exitCode: 1)
+        #expect(cut == "live claude -p failed: failed (exit 1): " + String(repeating: "x", count: ClaudeLiveSummarizer.failureDetailLimit) + "…")
+        // A `claude_env` value and an API-key-shaped token are masked wherever they appear.
+        let secret = ClaudeLiveSummarizer.failureLogLine(
+            .failed(exitCode: 1, message: "bad token made-up-value-123 or sk-ant-abc_DEF-0123456789 in request"),
+            exitCode: 1, secrets: ["made-up-value-123", "", "in"])
+        #expect(secret == "live claude -p failed: failed (exit 1): bad token *** or *** in request")
+    }
+
     @Test func defaultTimeoutIsSixtySeconds() {
         #expect(ClaudeLiveSummarizer.defaultTimeout == .seconds(60))
     }

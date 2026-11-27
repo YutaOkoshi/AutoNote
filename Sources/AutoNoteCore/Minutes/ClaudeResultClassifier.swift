@@ -79,7 +79,10 @@ public enum ClaudeResultClassifier {
         if let envelope, envelope.isError != true {
             return .failure(.invalidOutput(message: "subtype=\(envelope.subtype ?? "missing"): no is_error"))
         }
-        let combined = [errorText, stderr].filter { !$0.isEmpty }.joined(separator: "\n")
+        // An error envelope other than an API error (`error_max_turns`, `error_during_execution`, …) often has no
+        // `result` and nothing on stderr; its subtype is then the only thing that says what happened.
+        let kind = envelope?.subtype.flatMap { $0 == "success" ? nil : "subtype=\($0)" } ?? ""
+        let combined = [kind, errorText, stderr].filter { !$0.isEmpty }.joined(separator: "\n")
         return .failure(.failed(exitCode: result.exitCode, message: String(combined.prefix(messageLimit))))
     }
 
