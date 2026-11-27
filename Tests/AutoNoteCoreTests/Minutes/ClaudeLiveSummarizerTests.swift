@@ -91,7 +91,8 @@ import AutoNoteTestSupport
         }
     }
 
-    /// The envelope and stderr a real `claude -p` printed for a model it does not know (exit 1), with a made-up name.
+    /// The envelope a real `claude -p` (2.1.332) printed for a model it does not know (exit 1), with a made-up name.
+    /// The real run also wrote one line to stderr (`[claude-code:unrecognized_model] {…}`), which follows in the log.
     private static let unknownModel = #"{"type":"result","subtype":"success","is_error":true,"num_turns":1,"result":"There's an issue with the selected model (no-such-model). It may not exist or you may not have access to it. Run --model to pick a different model."}"#
 
     @Test func aFailedCallLogsWhatClaudeSaid() async throws {
@@ -114,6 +115,57 @@ import AutoNoteTestSupport
         #expect(lines.allSatisfy { !$0.contains("架空の発話") })
     }
 
+    /// `notLoggedIn` stands for four different errors and carries no message: the line says which one it was.
+    @Test func aCallClassifiedAsNotLoggedInLogsWhatClaudeSaid() async throws {
+        let dir = try TemporaryDirectory.make(), paths = AppPaths(root: dir.appending(path: "root"))
+        let envelope = #"{"type":"result","subtype":"success","is_error":true,"result":"Invalid API key · Fix external API key"}"#
+        let claude = try FakeClaude.make(in: dir.appending(path: "fake"), responses: [envelope], exitCode: 1)
+        let logs = LockedBox<[String]>([])
+        let live = ClaudeLiveSummarizer(claudePath: claude.path(percentEncoded: false), model: "haiku",
+                                        workingDirectory: paths.liveSummaryWorkingDirectory,
+                                        log: { line in logs.withLock { $0.append(line) } })
+        let e = await failure { _ = try await live.summarize(request()) }
+        #expect(e == .notLoggedIn)
+        #expect(logs.withLock { $0 } == ["live claude -p failed: notLoggedIn (exit 1): Invalid API key · Fix external API key"])
+    }
+
+    /// Nothing on stdout that is an envelope and nothing on stderr: the line gives the shape of the output, sizes only.
+    @Test func aFailureWithoutAnyTextLogsTheShapeOfTheOutput() async throws {
+        let dir = try TemporaryDirectory.make(), paths = AppPaths(root: dir.appending(path: "root"))
+        let claude = try FakeClaude.make(in: dir.appending(path: "fake"), responses: ["made-up output"], exitCode: 1)
+        let logs = LockedBox<[String]>([])
+        let live = ClaudeLiveSummarizer(claudePath: claude.path(percentEncoded: false), model: "haiku",
+                                        workingDirectory: paths.liveSummaryWorkingDirectory,
+                                        log: { line in logs.withLock { $0.append(line) } })
+        let e = await failure { _ = try await live.summarize(request()) }
+        #expect(e == .failed(exitCode: 1, message: ""))
+        #expect(logs.withLock { $0 } == [
+            "live claude -p failed: failed (exit 1): no error text (stdout 14 bytes, not a JSON object; stderr 0 bytes)",
+        ])
+        #expect(logs.withLock { $0 }.allSatisfy { !$0.contains("made-up output") })
+    }
+
+    private struct ThrowingRunner: ProcessRunning {
+        var error: any Error & Sendable
+        func run(executable: URL, arguments: [String], stdin: Data, workingDirectory: URL,
+                 environment: [String: String], timeout: Duration) async throws -> ProcessResult { throw error }
+    }
+
+    /// A call that never ran (claude could not be started) says so, by error type and code; a cancelled one says nothing.
+    @Test func aCallThatNeverRanIsLoggedUnlessCancelled() async throws {
+        let dir = try TemporaryDirectory.make(), paths = AppPaths(root: dir.appending(path: "root"))
+        let logs = LockedBox<[String]>([])
+        func live(_ error: any Error & Sendable) -> ClaudeLiveSummarizer {
+            ClaudeLiveSummarizer(claudePath: "/Fictional/claude", model: "haiku", workingDirectory: paths.liveSummaryWorkingDirectory,
+                                 runner: ThrowingRunner(error: error), log: { line in logs.withLock { $0.append(line) } })
+        }
+        let posix = NSError(domain: NSPOSIXErrorDomain, code: 13, userInfo: [NSFilePathErrorKey: "/Users/someone/claude"])
+        await #expect(throws: (any Error).self) { _ = try await live(posix).summarize(request()) }
+        #expect(logs.withLock { $0 } == ["live claude -p did not run: NSError (NSPOSIXErrorDomain 13)"])
+        await #expect(throws: CancellationError.self) { _ = try await live(CancellationError()).summarize(request()) }
+        #expect(logs.withLock { $0 }.count == 1)
+    }
+
     @Test func aSuccessfulCallLogsNoFailure() async throws {
         let dir = try TemporaryDirectory.make(), paths = AppPaths(root: dir.appending(path: "root"))
         let claude = try FakeClaude.make(in: dir.appending(path: "fake"), responses: [Self.ok])
@@ -128,6 +180,12 @@ import AutoNoteTestSupport
     @Test func failureLogLineIsOneShortLineWithoutSecrets() {
         // Nothing to add: the line is as it was.
         #expect(ClaudeLiveSummarizer.failureLogLine(.timedOut, exitCode: -1) == "live claude -p failed: timedOut (exit -1)")
+        #expect(ClaudeLiveSummarizer.failureLogLine(.timedOut, exitCode: -1, otherwise: "no error text") == "live claude -p failed: timedOut (exit -1)")
+        // A class without a message, or an empty one, takes what the caller found instead.
+        #expect(ClaudeLiveSummarizer.failureLogLine(.notLoggedIn, exitCode: 1, otherwise: "authentication_error")
+                == "live claude -p failed: notLoggedIn (exit 1): authentication_error")
+        #expect(ClaudeLiveSummarizer.failureLogLine(.failed(exitCode: 1, message: " \n"), exitCode: 1, otherwise: "no error text")
+                == "live claude -p failed: failed (exit 1): no error text")
         #expect(ClaudeLiveSummarizer.failureLogLine(.failed(exitCode: 1, message: ""), exitCode: 1)
                 == "live claude -p failed: failed (exit 1)")
         // A path is not a message (`claudeNotFound` carries one).
@@ -152,6 +210,15 @@ import AutoNoteTestSupport
         let spaced = ClaudeLiveSummarizer.failureLogLine(
             .failed(exitCode: 1, message: "header was made-up  two\twords here"), exitCode: 1, secrets: ["made-up  two\twords"])
         #expect(spaced == "live claude -p failed: failed (exit 1): header was *** here")
+        // A value that starts with another one is masked whole, whatever order the values come in.
+        for secrets in [["made-up-token", "made-up-token-AAAA-BBBB"], ["made-up-token-AAAA-BBBB", "made-up-token"]] {
+            #expect(ClaudeLiveSummarizer.failureLogLine(.failed(exitCode: 1, message: "token made-up-token-AAAA-BBBB rejected"),
+                                                        exitCode: 1, secrets: secrets)
+                    == "live claude -p failed: failed (exit 1): token *** rejected")
+        }
+        // `sk-` inside a word is not a key.
+        #expect(ClaudeLiveSummarizer.failureLogLine(.failed(exitCode: 1, message: "task-notification failed; disk-space-low"), exitCode: 1)
+                == "live claude -p failed: failed (exit 1): task-notification failed; disk-space-low")
     }
 
     @Test func defaultTimeoutIsSixtySeconds() {

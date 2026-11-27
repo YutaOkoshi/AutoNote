@@ -28,6 +28,19 @@ public enum ClaudeResultClassifier {
         var isError: Bool?
         var subtype: String?
         var result: String?
+        /// claude's own sentences about an error that is not an API error (`error_max_turns` comes with
+        /// `["Reached maximum number of turns (1)"]` and no `result`). Read leniently: any other shape is no errors.
+        var errors: [String]
+
+        private enum CodingKeys: String, CodingKey { case isError, subtype, result, errors }
+
+        init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            isError = try c.decodeIfPresent(Bool.self, forKey: .isError)
+            subtype = try c.decodeIfPresent(String.self, forKey: .subtype)
+            result = try c.decodeIfPresent(String.self, forKey: .result)
+            errors = (try? c.decodeIfPresent([String].self, forKey: .errors)) ?? nil ?? []
+        }
     }
 
     private struct Structured<Output: Decodable>: Decodable {
@@ -79,11 +92,28 @@ public enum ClaudeResultClassifier {
         if let envelope, envelope.isError != true {
             return .failure(.invalidOutput(message: "subtype=\(envelope.subtype ?? "missing"): no is_error"))
         }
-        // An error envelope other than an API error (`error_max_turns`, `error_during_execution`, …) often has no
-        // `result` and nothing on stderr; its subtype is then the only thing that says what happened.
-        let kind = envelope?.subtype.flatMap { $0 == "success" ? nil : "subtype=\($0)" } ?? ""
-        let combined = [kind, errorText, stderr].filter { !$0.isEmpty }.joined(separator: "\n")
-        return .failure(.failed(exitCode: result.exitCode, message: String(combined.prefix(messageLimit))))
+        return .failure(.failed(exitCode: result.exitCode, message: failureText(envelope, stderr: stderr)))
+    }
+
+    /// What claude itself said about a run that did not succeed, cut to `messageLimit`: the subtype of an error
+    /// envelope that is not an API error (`error_max_turns`, `error_during_execution`; these often have no `result`
+    /// and nothing on stderr), then the envelope's `result`, its `errors` and stderr. Empty when it said nothing.
+    /// Never a successful envelope's `result` (the model's prose about the meeting).
+    private static func failureText(_ envelope: Envelope?, stderr: String) -> String {
+        let failed = envelope?.isError == true
+        let kind = failed ? envelope?.subtype.flatMap { $0 == "success" ? nil : "subtype=\($0)" } ?? "" : ""
+        let errorText = failed ? (envelope?.result ?? "").trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let errors = failed ? (envelope?.errors ?? []).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let combined = [kind, errorText, errors, stderr].filter { !$0.isEmpty }.joined(separator: "\n")
+        return String(combined.prefix(messageLimit))
+    }
+
+    /// `failureText` of a finished run, for the log line of a failure whose class carries no message (`notLoggedIn`
+    /// stands for four different errors).
+    static func failureText(_ result: ProcessResult) -> String {
+        let isObject = (try? JSONSerialization.jsonObject(with: result.stdout)) is [String: Any]
+        let envelope = isObject ? try? AutoNoteJSON.decoder().decode(Envelope.self, from: result.stdout) : nil
+        return failureText(envelope, stderr: String(decoding: result.stderr, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     /// `claude auth status --json` succeeded and reported `"loggedIn": true`.

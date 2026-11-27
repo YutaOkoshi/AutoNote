@@ -170,6 +170,14 @@ import Foundation
                 == .failure(.failed(exitCode: 1, message: "subtype=error_max_turns\nboom")))
         #expect(classify(#"{"is_error":true,"subtype":"error_during_execution","result":"it broke"}"#)
                 == .failure(.failed(exitCode: 1, message: "subtype=error_during_execution\nit broke")))
+        // claude's own sentences in `errors` follow (the shape a real `--max-turns 1` overrun had: no `result`, stderr empty).
+        #expect(classify(#"{"is_error":true,"subtype":"error_max_turns","result":null,"errors":["Reached maximum number of turns (1)"]}"#)
+                == .failure(.failed(exitCode: 1, message: "subtype=error_max_turns\nReached maximum number of turns (1)")))
+        // An `errors` of another shape is no errors, not a reason to lose the envelope.
+        #expect(classify(#"{"is_error":true,"subtype":"error_during_execution","errors":[{"code":5}]}"#)
+                == .failure(.failed(exitCode: 1, message: "subtype=error_during_execution")))
+        #expect(classify(#"{"is_error":true,"subtype":"success","result":"You've hit your limit","errors":"x"}"#)
+                == .failure(.rateLimited(message: "You've hit your limit")))
         // `success` with `is_error` is an API error whose text says it all; no subtype at all adds nothing.
         #expect(classify(#"{"is_error":true,"subtype":"success"}"#) == .failure(.failed(exitCode: 1, message: "")))
         #expect(classify(#"{"is_error":true}"#) == .failure(.failed(exitCode: 1, message: "")))
