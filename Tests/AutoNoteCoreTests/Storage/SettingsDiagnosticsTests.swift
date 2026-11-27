@@ -16,6 +16,72 @@ import AutoNoteTestSupport
         return try decoder.decode(Settings.self, from: Data(json.utf8))
     }
 
+    private final class Clock: Sendable {
+        private let time = LockedBox(Date(timeIntervalSince1970: 1_800_000_000))
+        var now: Date { time.withLock { $0 } }
+        func advance(_ seconds: TimeInterval) { time.withLock { $0 += seconds } }
+    }
+
+    /// The app stays up for days: a value that is still ignored is written again once the interval has passed, so
+    /// `log show --last 1h` finds it after the next recording starts.
+    @Test func theSameLineComesBackAfterTheInterval() {
+        let lines = LockedBox<[String]>([])
+        let clock = Clock()
+        let diagnostics = SettingsDiagnostics(sink: { line in lines.withLock { $0.append(line) } }, now: { clock.now })
+        diagnostics.report("a"); diagnostics.report("a"); diagnostics.report("b")
+        #expect(lines.withLock { $0 } == ["a", "b"])
+        clock.advance(SettingsDiagnostics.repeatInterval - 1)
+        diagnostics.report("a")
+        #expect(lines.withLock { $0 } == ["a", "b"])
+        clock.advance(1)
+        diagnostics.report("a"); diagnostics.report("a")
+        #expect(lines.withLock { $0 } == ["a", "b", "a"])
+        // A clock set back does not silence a line for good.
+        clock.advance(-86_400)
+        diagnostics.report("a")
+        #expect(lines.withLock { $0 } == ["a", "b", "a", "a"])
+        #expect(SettingsDiagnostics.repeatInterval <= 30 * 60)   // well inside the hour the guide's command reads
+    }
+
+    private func catalog(installed: [String] = [], speech: Bool = true) -> EngineCatalog {
+        EngineCatalog(machine: .appleSilicon,
+                      speech: FakeSpeechCapabilities(speechAvailable: speech, speechLocales: speech ? ["ja-JP"] : [],
+                                                     dictationLocales: ["ja-JP"]),
+                      installedModels: { installed })
+    }
+
+    /// A known engine that cannot run falls back too: only whisper transcribes a finished recording, a model may not
+    /// be downloaded, or not be a whisper model at all. The line names the reason and what runs instead.
+    @Test func anEngineThatCannotRunIsReportedWithWhatRunsInstead() async {
+        let (diagnostics, lines) = recorder()
+        let c = catalog(installed: ["small"])
+        let apple = EngineChoice.fromSettings(kind: "speech", model: nil, role: .batch, machine: .appleSilicon, diagnostics: diagnostics)
+        #expect(apple == .speech)       // returned as written: the settings screen still shows the file's value
+        #expect(await c.resolve(role: .batch, language: .ja, override: apple, diagnostics: diagnostics) == .whisper("small"))
+        #expect(await c.resolve(role: .batch, language: .ja, override: .whisper("large-v3-turbo"), diagnostics: diagnostics) == .whisper("small"))
+        #expect(await c.resolve(role: .live, language: .ja, override: .whisper("larg-v3"), diagnostics: diagnostics) == .speech)
+        #expect(lines.withLock { $0 } == [
+            #"settings: ignored final_engine "speech" (only whisper can be the final engine); using whisper.cpp small"#,
+            #"settings: ignored final_engine "whisper" with model "large-v3-turbo" (model large-v3-turbo is not downloaded); using whisper.cpp small"#,
+            #"settings: ignored live_engine "whisper" with model "larg-v3" (not a whisper model AutoNote knows); using Apple SpeechTranscriber"#,
+        ])
+        // Nothing can run at all.
+        let none = catalog(installed: [])
+        #expect(await none.resolve(role: .batch, language: .ja, override: .whisper("base"), diagnostics: diagnostics) == nil)
+        #expect(lines.withLock { $0 }.last
+                == #"settings: ignored final_engine "whisper" with model "base" (model base is not downloaded); using no engine (none can run)"#)
+    }
+
+    @Test func anEngineThatRunsAndNoOverrideReportNothing() async {
+        let (diagnostics, lines) = recorder()
+        let c = catalog(installed: ["small"])
+        #expect(await c.resolve(role: .batch, language: .ja, override: .whisper("small"), diagnostics: diagnostics) == .whisper("small"))
+        #expect(await c.resolve(role: .live, language: .ja, override: .dictation, diagnostics: diagnostics) == .dictation)
+        #expect(await c.resolve(role: .live, language: .ja, override: nil, diagnostics: diagnostics) == .speech)
+        #expect(await c.resolve(role: .batch, language: .ja, override: nil, diagnostics: diagnostics) == .whisper("small"))
+        #expect(lines.withLock { $0 }.isEmpty)
+    }
+
     @Test func anUnknownEngineKindIsReportedOncePerValue() {
         let (diagnostics, lines) = recorder()
         // `system` is a track's name, not an engine.
@@ -29,7 +95,7 @@ import AutoNoteTestSupport
         #expect(EngineChoice.fromSettings(kind: "system", model: nil, role: .batch, machine: .intel, diagnostics: diagnostics) == nil)
         #expect(EngineChoice.fromSettings(kind: "sf", model: nil, role: .live, machine: .intel, diagnostics: diagnostics) == nil)
         #expect(lines.withLock { $0 }.dropFirst() == [
-            #"settings: ignored final_engine "system" (known: dictation, speech, whisper); using this Mac's default engine"#,
+            #"settings: ignored final_engine "system" (known: whisper); using this Mac's default engine"#,
             #"settings: ignored live_engine "sf" (known: dictation, speech, whisper); using this Mac's default engine"#,
         ])
     }
