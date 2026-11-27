@@ -36,21 +36,25 @@ public struct Manifest: Codable, Equatable, Hashable, Sendable {
     /// deleting the combined meeting undoes a merge.
     public var mergedInto: MeetingID?
     /// Live recordings since this field was added: per track, the seconds without callbacks, the seconds of all-zero
-    /// samples and the input rebuilds (`SourceHealth`). Diagnostics only; nil on older and imported meetings.
+    /// samples and the input rebuilds (`SourceHealth`). nil on older and imported meetings.
     public var audioHealth: [TrackHealth]?
+    /// The tracks that are missing part of their audio, judged from `audioHealth` and the source failures at the stop
+    /// (`AudioLossRule`). nil when no track is, and on older and imported meetings.
+    public var audioLoss: [TrackLoss]?
 
     public init(id: MeetingID, title: String?, startedAt: Date, endedAt: Date?, source: MeetingSource,
                 device: DeviceRef?, language: Language, tracks: [TrackFile], pauses: [PauseInterval],
                 bookmarks: [Bookmark], status: MeetingStatus, silenceWarning: Bool, autonoteVersion: String,
                 notePath: String? = nil, noteTitle: String? = nil,
-                mergedFrom: [MeetingID]? = nil, mergedInto: MeetingID? = nil, audioHealth: [TrackHealth]? = nil) {
+                mergedFrom: [MeetingID]? = nil, mergedInto: MeetingID? = nil, audioHealth: [TrackHealth]? = nil,
+                audioLoss: [TrackLoss]? = nil) {
         self.id = id; self.title = title; self.startedAt = startedAt; self.endedAt = endedAt
         self.source = source; self.device = device; self.language = language
         self.tracks = tracks; self.pauses = pauses; self.bookmarks = bookmarks
         self.status = status; self.silenceWarning = silenceWarning; self.autonoteVersion = autonoteVersion
         self.notePath = notePath; self.noteTitle = noteTitle
         self.mergedFrom = mergedFrom; self.mergedInto = mergedInto
-        self.audioHealth = audioHealth
+        self.audioHealth = audioHealth; self.audioLoss = audioLoss
     }
 
     /// `endedAt - startedAt` in seconds; nil while still recording.
