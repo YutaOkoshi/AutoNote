@@ -146,6 +146,26 @@ class ShareTests(SandboxTest):
         self.assertIn("GitHub 側で直されています", self.sb.dry_messages()[-1]["text"])
         self.assertEqual([r["autonote_id"] for r in self.sb.tsv("pending.tsv")], [STANDARD_ID])
 
+    def test_meeting_that_conflicted_is_shared_again_from_autonote_on_the_next_retry(self):
+        # What the README says under 失敗したとき: the next retry replaces the edit made upstream, and it stays in history.
+        self.assertOk(self.share_standard())
+        other = self.sb.other_clone()
+        p = os.path.join(other, MIN)
+        write(p, read(p).replace("一緒に見る。", "画面で直した。"))
+        self.sb.git("commit", "-q", "-am", "edit on the web", cwd=other)
+        self.sb.git("push", "-q", "origin", "HEAD:main", cwd=other)
+        path = self.sb.vault_file(STANDARD)
+        write(path, read(path).replace("一緒に見る。", "AutoNote で直した。"))
+        self.assertOk(self.sb.share(path), 1)
+        self.assertOk(self.sb.share("--retry-pending"))
+        self.assertIn("AutoNote で直した。", self.sb.remote_show(MIN))
+        self.assertNotIn("画面で直した。", self.sb.remote_show(MIN))
+        self.assertEqual(self.sb.tsv("pending.tsv"), [])
+        conflicts = [m for m in self.sb.dry_messages() if "GitHub 側で直されています" in m["text"]]
+        self.assertEqual(len(conflicts), 1)  # the retry does not report the same conflict again
+        subjects = self.sb.git("log", "--format=%s", "main", cwd=self.sb.remote)
+        self.assertIn("edit on the web", subjects)
+
     def test_push_failure_goes_to_pending_and_retry_pushes(self):
         moved = self.sb.remote + ".away"
         os.rename(self.sb.remote, moved)
