@@ -46,7 +46,7 @@ private func rebuilt(_ src: ProcessTapSource, _ n: Int) async -> Bool {
 /// `fed`, after two more callbacks were drained). Also needed right after `start`: "another process has been playing
 /// since" is the time of the first look that saw it. Returns early once `done`; gives up after 3 s (a rebuild under
 /// way holds the looks back).
-private func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { false }) async {
+func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { false }) async {
     if fed {
         let drained = src.health?.callbacks ?? 0
         _ = await eventuallyTrue { done() || (src.health?.callbacks ?? 0) >= drained + 2 }
@@ -58,8 +58,6 @@ private func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> B
     }
 }
 
-/// After the source gave up there are no more looks to wait for.
-private func pause() async { try? await Task.sleep(for: .milliseconds(80)) }
 
 @Suite struct ProcessTapRecoveryTests {
     private func source(_ hw: FakeTapHardware, _ host: FakeHostClock,
@@ -231,7 +229,7 @@ private func pause() async { try? await Task.sleep(for: .milliseconds(80)) }
         #expect(failure.message?.contains("3 rebuild(s)") == true)
         #expect(creations(hw) == 4)                              // the start plus three rebuilds
         let after = creations(hw)
-        for _ in 0..<5 { host.advance(30); await pause() }
+        for _ in 0..<5 { host.advance(30); await settle(src) }
         #expect(creations(hw) == after)                          // no more attempts after giving up
         await src.stop()
         #expect(creations(hw) == destructions(hw))

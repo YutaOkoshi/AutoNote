@@ -61,6 +61,27 @@ import AutoNoteTestSupport
         #expect(got.message == "61")
     }
 
+    /// The 10 s windows of the drain log: a line at notice level only when the track's state changes.
+    @Test func aWindowTellsWhenTheTrackChangesState() {
+        let h = SourceHealth()
+        h.recordCallback(start: 0, duration: 1, nonZero: true)
+        var w = h.closeWindow()
+        #expect(w.callbacks == 1 && w.state == .normal && w.changedFrom == nil)      // a track starts out normal
+        h.recordCallback(start: 10, duration: 1, nonZero: false)
+        h.recordCallback(start: 11, duration: 1, nonZero: false)
+        w = h.closeWindow()
+        #expect(w.callbacks == 2 && w.state == .allZero && w.changedFrom == .normal)
+        h.recordCallback(start: 20, duration: 1, nonZero: false)
+        w = h.closeWindow()
+        #expect(w.state == .allZero && w.changedFrom == nil)                         // unchanged: nothing to tell
+        w = h.closeWindow()
+        #expect(w.callbacks == 0 && w.state == .noCallbacks && w.changedFrom == .allZero)
+        h.recordCallback(start: 40, duration: 1, nonZero: false)
+        h.recordCallback(start: 41, duration: 1, nonZero: true)
+        w = h.closeWindow()
+        #expect(w.state == .normal && w.changedFrom == .noCallbacks)
+    }
+
     @Test func theNewFieldsAreOptionalInJSON() throws {
         let old = TrackHealth(track: .system, noCallbackSeconds: 3, zeroSeconds: 4, restarts: 1, callbacks: 9)
         let oldJSON = String(decoding: try AutoNoteJSON.encoder().encode(old), as: UTF8.self)

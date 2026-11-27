@@ -47,6 +47,8 @@ public actor RecordingSession {
     var writers = TrackWriters()
     var monitor: SilenceMonitor?
     private var silenceWarning = false
+    /// Tracks whose source or writer failed during this meeting (`.sourceFailed`): lossy whatever their counters say.
+    private var failedTracks: Set<Track> = []
     private var lastDiskCheck: TimelineTime?
     private var diskLowReported = false
     private var diskStopRequested = false
@@ -292,7 +294,7 @@ public actor RecordingSession {
 
         meetingID = id; self.clock = clock; self.startedAt = startedAt
         saver = ManifestSaver(store: manifests, initial: initial)
-        monitor = SilenceMonitor(start: .zero); silenceWarning = false
+        monitor = SilenceMonitor(start: .zero); silenceWarning = false; failedTracks = []
         lastDiskCheck = nil; diskLowReported = false; diskStopRequested = false
         stats = [.mic: TrackStatistics(), .system: TrackStatistics()]
         recentPeaks = [.mic: RecentPeakWindow(), .system: RecentPeakWindow()]
@@ -381,6 +383,11 @@ public actor RecordingSession {
         await reportWriterFailures(failures)
         routeMonitor?.stop()
         let health = trackHealth(until: end, meeting: id)
+        let loss = AudioLossRule.evaluate(health: health, failedTracks: failedTracks, recordedSeconds: end.seconds)
+        if let loss {
+            let detail = loss.map { "\($0.track.rawValue) \($0.seconds) s\($0.sourceFailed ? " (source failed)" : "")" }.joined(separator: ", ")
+            Self.logger.notice("\(id.rawValue, privacy: .public): audio loss: \(detail, privacy: .public)")
+        }
         let endedAt = startedAt.addingTimeInterval(end.seconds).truncatedToMilliseconds   // returned == saved
         let status: MeetingStatus = end.seconds < Self.minimumDurationSeconds ? .tooShort : .recorded
         let finish: @Sendable (inout Manifest) -> Void = { m in
@@ -389,6 +396,7 @@ public actor RecordingSession {
             m.endedAt = endedAt
             m.status = status
             if let health { m.audioHealth = health }
+            if let loss { m.audioLoss = loss }
         }
         let result: Result<Manifest, any Error>
         do {
@@ -416,8 +424,9 @@ public actor RecordingSession {
         micSource = nil; systemSource = nil; ticker = nil
         queue = nil; consumer = nil
         routeMonitor?.stop(); routeMonitor = nil
-        for list in healthSources.values { for h in list { h.setFailureObserver(nil) } }
+        for list in healthSources.values { for h in list { h.setFailureObserver(nil); h.setNotArrivingObserver(nil) } }
         healthSources = [:]
+        failedTracks = []
     }
 
     // MARK: - Source health (diagnostics)
@@ -429,6 +438,16 @@ public actor RecordingSession {
         health.setFailureObserver { [weak self] message in
             Task { await self?.sourceStoppedDelivering(track, message: message, meeting: id) }
         }
+        health.setNotArrivingObserver { [weak self] seconds in
+            Task { await self?.audioNotArriving(track, seconds: seconds, meeting: id) }
+        }
+    }
+
+    /// The source keeps running and keeps trying; the listener (a notification) tells the user while it still helps.
+    private func audioNotArriving(_ track: Track, seconds: Int, meeting id: MeetingID) {
+        guard meetingID == id, state != .idle, !failedTracks.contains(track) else { return }
+        Self.logger.notice("\(id.rawValue, privacy: .public): \(track.rawValue, privacy: .public) audio is not arriving (\(seconds, privacy: .public) s)")
+        broadcaster.yield(.audioNotArriving(track, seconds: seconds))
     }
 
     private func sourceStoppedDelivering(_ track: Track, message: String, meeting id: MeetingID) async {
@@ -436,14 +455,16 @@ public actor RecordingSession {
         await reportFailure(track, SourceRuntimeFailure(message: message))
     }
 
-    /// Per track with counters: seconds without callbacks, seconds of all-zero samples, rebuilds. Also logged.
+    /// Per track with counters: seconds without callbacks, seconds of all-zero samples, rebuilds, dropped frames and
+    /// (system audio) the seconds of both kinds in which another process was playing. Also logged.
     private func trackHealth(until end: TimelineTime, meeting id: MeetingID) -> [TrackHealth]? {
         let result = [Track.mic, .system].compactMap { track -> TrackHealth? in
             guard let list = healthSources[track], !list.isEmpty else { return nil }
             return SourceHealth.summary(track: track, sources: list, endSeconds: end.seconds)
         }
         for h in result {
-            Self.logger.notice("\(id.rawValue, privacy: .public): \(h.track.rawValue, privacy: .public) health: no callbacks \(h.noCallbackSeconds, privacy: .public) s, all zero \(h.zeroSeconds, privacy: .public) s, rebuilds \(h.restarts, privacy: .public), callbacks \(h.callbacks, privacy: .public)")
+            let suspect = h.suspectZeroSeconds.map { ", while another process played: all zero \($0) s, no callbacks \(h.suspectNoCallbackSeconds ?? 0) s" } ?? ""
+            Self.logger.notice("\(id.rawValue, privacy: .public): \(h.track.rawValue, privacy: .public) health: no callbacks \(h.noCallbackSeconds, privacy: .public) s, all zero \(h.zeroSeconds, privacy: .public) s, rebuilds \(h.restarts, privacy: .public), callbacks \(h.callbacks, privacy: .public), dropped frames \(h.droppedFrames ?? 0, privacy: .public)\(suspect, privacy: .public)")
         }
         return result.isEmpty ? nil : result
     }
@@ -483,6 +504,7 @@ public actor RecordingSession {
     /// `.sourceFailed` plus the manifest's `silenceWarning` flag.
     private func reportFailure(_ track: Track, _ error: any Error) async {
         Self.log("\(track.rawValue) source", error)
+        failedTracks.insert(track)
         broadcaster.yield(.sourceFailed(track, message: String(describing: error)))
         guard !silenceWarning else { return }
         silenceWarning = true

@@ -77,6 +77,7 @@ public struct RecordingReport: Codable, Equatable, Sendable {
         case .silenceWarning(let w): "silenceWarning(\(w.track.rawValue))"
         case .diskSpaceLow: "diskSpaceLow"
         case .sourceFailed(let track, _): "sourceFailed(\(track.rawValue))"
+        case .audioNotArriving(let track, _): "audioNotArriving(\(track.rawValue))"
         case .microphoneDetached: "microphoneDetached"
         case .microphoneAttached: "microphoneAttached"
         case .stopped: "stopped"

@@ -41,10 +41,39 @@ private final class EngineSourceFactory: AudioSourceFactory, @unchecked Sendable
         #expect(mic.noCallbackSeconds == 3)   // seconds 0, 2, 3
         #expect(mic.zeroSeconds == 0)
         #expect(m.audioHealth?.contains { $0.track == .system } == false)   // the fake system source keeps no counters
+        #expect(m.audioLoss == nil)           // three seconds are far below the threshold
 
         let saved = try String(contentsOf: paths.meetingDirectory(m.id).appending(path: "manifest.json"), encoding: .utf8)
         #expect(saved.contains("\"audio_health\""))
         #expect(saved.contains("\"no_callback_seconds\""))
+        #expect(try await manifests.load(m.id) == m)
+    }
+
+    /// The input never comes back: still silence in the file, and now also on record as lost audio.
+    @Test func aMicrophoneThatGaveUpIsALossInTheManifestAndAnEvent() async throws {
+        let paths = AppPaths(root: try TemporaryDirectory.make())
+        let manifests = ManifestStore(paths: paths)
+        let engine = FakeMicrophoneEngine()   // never pushes: every rebuild stalls
+        let factory = EngineSourceFactory(engine: engine)
+        let host = FakeHostClock()
+        let session = RecordingSession(paths: paths, manifests: manifests, sources: factory, host: host, disk: FakeDiskSpace(),
+                                       now: { Samples.start }, tickInterval: .seconds(3600), timeZone: Samples.tokyo)
+        let events = await session.events()
+        _ = try await session.start(.init(language: .ja))
+        #expect(await eventuallyTrue(.seconds(10)) { engine.isStopped && engine.startCount == 4 })   // gave up after 3 rebuilds
+        try await Task.sleep(for: .milliseconds(100))
+        host.advance(20)
+        let m = try await session.stop()
+
+        let samples = try m.tracks.filter { $0.track == .mic }.flatMap {
+            try WAVFile.readSamples(paths.meetingDirectory(m.id).appending(path: $0.relativePath))
+        }
+        #expect(abs(samples.count - 320_000) <= 16 && samples.allSatisfy { $0 == 0 })   // filled with silence, as before
+        #expect(m.audioLoss == [TrackLoss(track: .mic, seconds: 20, sourceFailed: true)])
+        let received = await eventsUntilStopped(events)
+        #expect(received.contains { if case .sourceFailed(.mic, _) = $0 { true } else { false } })
+        let saved = try String(contentsOf: paths.meetingDirectory(m.id).appending(path: "manifest.json"), encoding: .utf8)
+        #expect(saved.contains("\"audio_loss\""))
         #expect(try await manifests.load(m.id) == m)
     }
 }

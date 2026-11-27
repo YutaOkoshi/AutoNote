@@ -289,20 +289,22 @@ public actor ProcessTapSource: AudioSource {
         }
     }
 
-    /// One look at the tap. Decides whether a rebuild is due; never runs two rebuilds at once.
+    /// One look at the tap. Decides whether a rebuild is due; never runs two rebuilds at once. After a give-up it
+    /// only keeps recording whether another process plays, so the manifest still counts the seconds that went missing.
     private func check() async {
-        guard case .running = state, !gaveUp, rebuildTask == nil else { return }
+        guard case .running = state, rebuildTask == nil else { return }
         let hardware = self.hardware, exclude = excludeBundleIDs
         let answer: Bool?? = await probeQueue.runAwaiting(timeout: policy.probeTimeout, {
             hardware.otherProcessIsPlayingAudio(excludingBundleIDs: exclude)
         }, abandoned: { _ in })
-        // `stop()` (or a give-up) may have run while this look waited on the probe queue.
-        guard case .running = state, !gaveUp, rebuildTask == nil else { return }
+        // `stop()` may have run while this look waited on the probe queue.
+        guard case .running = state, rebuildTask == nil else { return }
         defer { looks += 1 }
         let now = clock.now().seconds
         // Unknown (no answer in time, or the system does not tell) counts as "nobody plays": never a reason to rebuild.
         let playing = (answer ?? nil) == true
         counts.recordOutputPoll(at: now, othersPlaying: playing)
+        guard !gaveUp else { return }
 
         let records = pipeline?.ring.recordsWritten ?? 0
         if records != lastRecords {
@@ -431,12 +433,11 @@ public actor ProcessTapSource: AudioSource {
         Self.logger.error("system tap rebuild #\(attempt, privacy: .public) failed: \(String(describing: error), privacy: .public)")
     }
 
-    /// Stops trying and tells the owner. The last tap stays up until `stop()`: should the system start calling it
+    /// Stops rebuilding and tells the owner. The last tap stays up until `stop()`: should the system start calling it
     /// again, that audio is still recorded.
     private func giveUp(reason: String) async {
         guard case .running = state, !gaveUp else { return }
         gaveUp = true
-        watchdog?.cancel(); watchdog = nil
         let message = "system audio stopped arriving and \(rebuilds) rebuild(s) did not bring it back (\(reason))"
         Self.logger.error("system tap gave up after \(self.rebuilds, privacy: .public) rebuild(s): \(reason, privacy: .public)")
         counts.reportFailure(message)

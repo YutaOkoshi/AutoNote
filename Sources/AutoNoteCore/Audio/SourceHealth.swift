@@ -48,6 +48,7 @@ public final class SourceHealth: Sendable {
         var seconds: [UInt8] = []
         var callbacks = 0
         var nonZeroCallbacks = 0
+        var windowState = WindowState.normal
         var restarts = 0
         var droppedFrames = 0
         var polled = false
@@ -105,11 +106,23 @@ public final class SourceHealth: Sendable {
     /// Callbacks so far that held a non-zero sample: a watchdog compares two readings to learn whether audio still arrives.
     public var nonZeroCallbacks: Int { state.withLock { $0.nonZeroCallbacks } }
 
-    /// Callbacks since the previous call and whether any of them held a non-zero sample; resets the window.
-    public func takeWindow() -> (callbacks: Int, nonZero: Bool) {
+    /// What a track delivered in one log window.
+    public enum WindowState: String, Sendable {
+        case normal
+        case allZero = "all_zero"
+        case noCallbacks = "no_callbacks"
+    }
+
+    /// Callbacks since the previous call, the state of that window, and the state before it when the two differ (a
+    /// track starts out `normal`); resets the window. Kept here, not in the drain, so it carries across a rebuild's
+    /// new drain.
+    public func closeWindow() -> (callbacks: Int, state: WindowState, changedFrom: WindowState?) {
         state.withLock { s in
             defer { s.windowCallbacks = 0; s.windowNonZero = false }
-            return (s.windowCallbacks, s.windowNonZero)
+            let now: WindowState = s.windowCallbacks == 0 ? .noCallbacks : (s.windowNonZero ? .normal : .allZero)
+            let before = s.windowState
+            s.windowState = now
+            return (s.windowCallbacks, now, now == before ? nil : before)
         }
     }
 
