@@ -89,6 +89,25 @@ class PatrolTests(SandboxTest):
         self.assertOk(self.sb.share(path, now="2026-12-26T09:00:00+09:00"))
         self.assertIn("source_recording_deleted: はい\n", self.sb.remote_show(MIN))
 
+    def test_unreadable_vault_is_reported_and_other_steps_still_run(self):
+        # launchd without the Documents permission: listing the vault fails with "Operation not permitted".
+        self.share_customer()
+        moved = self.sb.remote + ".away"
+        os.rename(self.sb.remote, moved)
+        path = self.sb.vault_file(NO_TRANSCRIPT)
+        self.assertOk(self.sb.share(path, now=DAY0), 1)  # leaves a commit and a pending row
+        os.rename(moved, self.sb.remote)
+        os.chmod(self.sb.vault, 0)
+        try:
+            proc = self.sb.patrol(now="2026-12-03T09:00:00+09:00")
+        finally:
+            os.chmod(self.sb.vault, 0o755)
+        self.assertOk(proc, 1)
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertIn("会議ファイルのフォルダ（VAULT_ROOT）を読めません", self.sb.state_file("todo.md"))
+        # the commit left by the failed push still went out
+        self.assertIn("2026/2026-12-04_0930_社内定例.md", self.sb.remote_files())
+
     def fake_cli(self, ids):
         path = os.path.join(self.sb.root, "fake-autonote")
         rows = [{"id": i, "title": "x", "startedAt": "2026-12-02T01:00:00Z", "state": "minutes_generated"} for i in ids]

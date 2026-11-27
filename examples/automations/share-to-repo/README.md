@@ -101,7 +101,11 @@ launchctl bootout "gui/$(id -u)/$LABEL"
 mv "$HOME/Library/LaunchAgents/$LABEL.plist" ~/.Trash/
 ```
 
-launchd の下から `~/Documents` を読むには macOS の許可が要ることがあります。初回の実行の後、`logs/launchd-patrol.err.log` に `Operation not permitted` が出ていないかを見てください。
+launchd の下から書類フォルダ（`~/Documents`）は読めないことがあります。macOS 26 で試したときは、許可のダイアログは出ずに `Operation not permitted` で黙って拒まれました（git の fetch は通った）。このとき見回りは `state/todo.md` に「会議ファイルのフォルダ（VAULT_ROOT）を読めません」と書き、ほかの手順（送り直し・写しの作り直し）は続けて、終了コード 1 で終わります。初回の実行の後に `todo.md` と `logs/launchd-patrol.out.log` を見てください。読めるようにする方法の例:
+
+- AutoNote の出力フォルダを書類フォルダの外（例 `~/AutoNote`）に変え、`VAULT_ROOT` もそこに向ける
+- システム設定 › プライバシーとセキュリティ › フルディスクアクセス で、見回りを動かすプログラム（`/bin/sh` と `python3`）に許可を与える（許す範囲が広いので、選ぶ前によく考える）
+- 見回りの載せ直し（手順 2）は使わず、手で `share-meeting.sh` を打つ
 
 ## 見回り（`daily-patrol.sh`）
 

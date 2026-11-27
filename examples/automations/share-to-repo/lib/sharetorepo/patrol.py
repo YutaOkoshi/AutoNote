@@ -5,7 +5,7 @@ import subprocess
 from datetime import date
 
 from . import frontmatter as fmx
-from .share import NOTICE_TITLE, Sharer, find_vault_file, sha256_file
+from .share import NOTICE_TITLE, Sharer, VaultUnreadable, find_vault_file, sha256_file
 from .state import Lock, LockTimeout, flags, set_flag
 from .gitrepo import GitError
 
@@ -25,28 +25,38 @@ class Patrol:
         self.rc = 0
 
     def run(self):
-        self.sharer.flush_outbox()
-        # 1. pushes and shares that failed earlier
-        self.rc |= self.sharer.retry_pending()
-        # 2. re-share meetings edited in AutoNote's window or translated later (those emit no Automation)
-        self.reshare_changed()
-        # 3. recordings left in the inbox
-        if self.cfg.inbox_dir:
-            self.check_inbox()
-        else:
-            self.ask_after_keep_days()
+        steps = [("outbox", self.sharer.flush_outbox),
+                 # 1. pushes and shares that failed earlier
+                 ("retry", self.retry),
+                 # 2. re-share meetings edited in AutoNote's window or translated later (those emit no Automation)
+                 ("reshare", self.reshare_changed),
+                 # 3. recordings left in the inbox
+                 ("recordings", self.check_inbox if self.cfg.inbox_dir else self.ask_after_keep_days)]
         # 4. shared meetings that AutoNote no longer has
         if self.cfg.autonote_cli:
-            self.check_autonote()
+            steps.append(("autonote", self.check_autonote))
         # the reader copy: rebuilds whatever is missing or stale (also after a failed run)
         if self.cfg.mirror_dir:
+            steps.append(("mirror", self.mirror))
+        for name, step in steps:
             try:
-                with Lock(self.cfg):
-                    self.sharer._mirror()
+                step()
             except LockTimeout as e:
                 print(e)
+                self.rc = 1
+            except Exception as e:  # one broken step must not stop the others
+                print("見回りの %s で止まりました: %s: %s" % (name, type(e).__name__, e))
+                self.state.log("patrol", name, "error", type(e).__name__)
+                self.rc = 1
         self.state.log("patrol", "done", "rc=%d" % self.rc)
         return self.rc
+
+    def retry(self):
+        self.rc |= self.sharer.retry_pending()
+
+    def mirror(self):
+        with Lock(self.cfg):
+            self.sharer._mirror()
 
     def notify(self, text, todo=False):
         from . import notify
@@ -59,7 +69,12 @@ class Patrol:
 
     def reshare_changed(self):
         for row in self.live_rows():
-            path = find_vault_file(self.cfg, row["autonote_id"], row["source_path"] or None)
+            try:
+                path = find_vault_file(self.cfg, row["autonote_id"], row["source_path"] or None)
+            except VaultUnreadable as e:
+                self.sharer.report_vault_unreadable(e)
+                self.rc = 1
+                return
             if not path:
                 continue
             if sha256_file(path) != row["source_sha256"]:

@@ -23,14 +23,30 @@ def sha256_file(path):
     return h.hexdigest()
 
 
+class VaultUnreadable(Exception):
+    """VAULT_ROOT exists but cannot be listed (typically launchd without the Documents permission)."""
+
+
+VAULT_UNREADABLE_TODO = ("会議ファイルのフォルダ（VAULT_ROOT）を読めません: %s。launchd から動かしているなら、"
+                         "macOS がこのフォルダ（書類フォルダなど）の読み取りを許していない。README の「見回りを入れる」を見る")
+
+
 def vault_files(vault_root):
     if not os.path.isdir(vault_root):
         return
-    for d in sorted(os.listdir(vault_root)):
+    try:
+        names = sorted(os.listdir(vault_root))
+    except OSError as e:
+        raise VaultUnreadable("%s (%s)" % (vault_root, e.strerror or type(e).__name__))
+    for d in names:
         full = os.path.join(vault_root, d)
         if d.startswith(".") or d.startswith("_") or not os.path.isdir(full):
             continue
-        for n in sorted(os.listdir(full)):
+        try:
+            inner = sorted(os.listdir(full))
+        except OSError as e:
+            raise VaultUnreadable("%s (%s)" % (full, e.strerror or type(e).__name__))
+        for n in inner:
             if n.endswith(".md") and not n.startswith("."):
                 yield os.path.join(full, n)
 
@@ -375,6 +391,12 @@ class Sharer:
         finally:
             self.send_notices()
 
+    def report_vault_unreadable(self, e):
+        msg = VAULT_UNREADABLE_TODO % e
+        print(msg)
+        self.state.add_todo(msg)
+        self.state.log("share", "-", "vault unreadable")
+
     def retry_pending(self):
         rc = self.push_ahead()
         for row in self.state.pending():
@@ -382,7 +404,11 @@ class Sharer:
             if row["trigger"] == "unshare":
                 rc |= self.unshare(mid)
                 continue
-            path = find_vault_file(self.cfg, mid, row["meeting_file"] or None)
+            try:
+                path = find_vault_file(self.cfg, mid, row["meeting_file"] or None)
+            except VaultUnreadable as e:
+                self.report_vault_unreadable(e)
+                return 1
             if not path:
                 print("会議ファイルが見つかりません（pending のまま）: %s" % mid)
                 self.state.log("share", mid, "retry: vault file missing")
