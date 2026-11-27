@@ -34,7 +34,16 @@ AutoNote をソースからビルドし、テストし、変更を入れるた�
 
 ### 録音の開始・停止の理由をログで読む
 
-録音がなぜ始まった・止まったかは `log show --last 1h --predicate 'subsystem == "com.yutaokoshi.autonote"'` で読める（流しながら見るなら `log stream --predicate ...`）。開始・停止・一時停止のたびに、`devices` カテゴリに `recording -> idle on manualStop (origin: hotkey, stop: manual, meeting: <会議 ID>)` のような 1 行が出る。`origin` がきっかけ（`hotkey`・`menu`・`window`・`notificationAction`・`cli`・`countdownFired`・`graceExpired`・`diskFull`・`terminating`・`sessionEnded`・`startFailed`・`deviceConnected`・`deviceDisconnected`。定義は `Sources/AutoNoteCore/Devices/RecordingControlOrigin.swift`）、`stop` が録音に渡した `StopReason` で、何も変えなかった操作は末尾に `ignored` が付く。前後の行で、ショートカットの受信（`HotKeyCenter`）、CLI のコマンドと送信元 PID（`SocketServer`）、機材の追加・削除（`DeviceMonitor` と `devices`）、設定の保存で変わったキー名（`AppWiring`。値は出さない）、録音セッションの開始・終了と秒数（`RecordingSession`）、ライブ文字起こし・ライブ要約の開始・終了を突き合わせる。ライブ文字起こしの開始の行は実際に動いたエンジンを `engine:` で示し、`settings.json` の値を使わなかったとき（知らない `live_engine` など）は `Settings` カテゴリに `settings: ignored ...` が出る（`SettingsDiagnostics`。同じ行は起動中に 1 回だけ）。ライブ要約の `claude -p` が失敗すると、`ClaudeLiveSummarizer` カテゴリに失敗の種類・終了コードと claude 自身のエラー文（1 行、200 文字まで。指示文や文字起こしは出さない）が出る。どれも `notice` 以上なので後から `log show` で読める（`info` と `debug` は残らない）。
+録音がなぜ始まった・止まったかは `log show --last 1h --predicate 'subsystem == "com.yutaokoshi.autonote"'` で読める（流しながら見るなら `log stream --predicate ...`）。開始・停止・一時停止のたびに、`devices` カテゴリに `recording -> idle on manualStop (origin: hotkey, stop: manual, meeting: <会議 ID>)` のような 1 行が出る。`origin` がきっかけ（`hotkey`・`menu`・`window`・`notificationAction`・`cli`・`countdownFired`・`graceExpired`・`diskFull`・`terminating`・`sessionEnded`・`startFailed`・`deviceConnected`・`deviceDisconnected`。定義は `Sources/AutoNoteCore/Devices/RecordingControlOrigin.swift`）、`stop` が録音に渡した `StopReason` で、何も変えなかった操作は末尾に `ignored` が付く。前後の行で、ショートカットの受信（`HotKeyCenter`）、CLI のコマンドと送信元 PID（`SocketServer`）、機材の追加・削除（`DeviceMonitor` と `devices`）、設定の保存で変わったキー名（`AppWiring`。値は出さない）、録音セッションの開始・終了と秒数（`RecordingSession`）、ライブ文字起こし・ライブ要約の開始・終了を突き合わせる。どれも `notice` 以上なので後から `log show` で読める（`info` と `debug` は残らない）。
+
+### 使われなかった設定値とライブ要約の失敗をログで読む
+
+利用者向けの読み方とコマンドは [利用者リファレンス](guide/reference.md) の「ログで理由を調べる」にある。開発で知っておくこと:
+
+- `settings.json` の値を使わなかったとき（知らない `live_engine`、確定版に書いた Apple のエンジン、未ダウンロードのモデル、退避したファイルなど）は `Settings` カテゴリに `settings: ignored ...` が `notice` で出る（`SettingsDiagnostics`）。同じ行は 30 分に 1 回まで（`repeatInterval`）で、プロセスごとに数える。値を引用するのはエンジン・モデル・翻訳の項目だけで、`claude_env` は個数だけ
+- ライブ文字起こしの開始の行（`LiveTranscriptionWiring`）は、実際に動いたエンジンを `engine:` で示す（`EngineChoice.displayName`）
+- ライブ要約の `claude -p` が失敗すると、`ClaudeLiveSummarizer` カテゴリに `live claude -p failed: <種類> (exit N): <claude のエラー文>` が `error` で出る。エラー文は `ClaudeResultClassifier` が残したもの（エラーエンベロープの `subtype`・`result`・`errors` と stderr）で、1 行・200 文字まで、`claude_env` の値（8 文字以上）と `sk-…` 形のトークンは `***`。指示文・文字起こし・成功時の出力は出さない。文が何も無いときは出力の形（バイト数）だけ、`claude` を起動できなかったときは `live claude -p did not run: <型> (<domain> <code>)` が出る。会議 ID はこの行には無い（スケジューラの `live summary: failed (...) (<会議 ID>)` は `NSLog` で出るので、時刻で突き合わせる）
+- `swift test` と `autonote` の CLI も同じ行を本物のログに書く（テストは架空の値を使う）。アプリの行だけを読むなら、条件に `AND process == "AutoNoteApp"` を足す
 
 ## リポジトリ構成
 

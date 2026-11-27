@@ -87,11 +87,7 @@
 
 `claude_args` と `claude_env` は、議事録は次の作成から、リアルタイム要約は次の録音から効く（アプリの再起動は要らない）。
 
-手で書いた値を AutoNote が使わなかったときは、ログに 1 回出る（同じ内容はアプリを起動している間に 1 回だけ）。読むには `log show --last 1h --predicate 'subsystem == "com.yutaokoshi.autonote" AND category == "Settings"'`。
-
-- `live_engine` / `final_engine`（リアルタイム版・確定版のエンジン。`dictation` / `speech` / `whisper` のどれか）や `translation_mode` / `translation_target` に知らない値があると、その項目だけ既定で動く。ログは `settings: ignored live_engine "system" (known: dictation, speech, whisper); using this Mac's default engine` の形。実際に動いたリアルタイム版のエンジンは、録音ごとの `live transcript started (..., engine: ...)` の行で分かる
-- `claude_env` の不正な名前は、無視した個数だけを出す（名前と値は出さない）
-- ファイル全体が読めない（JSON として壊れている、値の型が違う、`default_language` が知らない値、など）ときは、ファイルを同じフォルダの `settings.json.corrupt-<日時>` に退避し、すべて既定で動く。ログには読めなかった場所（キー名）と退避先の名前が出る
+手で書いた値を AutoNote が使わなかったときの調べ方は、下の「ログで理由を調べる」を参照。
 
 翻訳（設定 › 翻訳。どれも書かなければ既定）:
 
@@ -102,3 +98,66 @@
 - `translation_shown`: 文字起こしの「訳文」スイッチ（既定 `true`）
 
 翻訳モデルは `~/Library/Application Support/AutoNote/models/translation/` に、訳文は会議ごとに `transcripts/<会議ID>/translation.json`（確定版の訳）と `live-translation.json`（録音中の訳。確定版の訳ができると消える）に保存する。文字起こしのファイル（`final.json` など）は書き換えない。モデルの重みには PLaMo Community License が適用され、業務（社内利用を含む）で使う場合は PFN への事前登録が要る（README の「翻訳モデル」を参照）。
+
+## ログで理由を調べる
+
+設定が効いていない、リアルタイム要約が更新されない、というときは macOS のログに理由が残っている（この節の行が出るのは 0.8.1 以降の版）。ターミナルで次の形のコマンドを打つ（`--last 1h` は「直近 1 時間」）。
+
+### 使われなかった設定値
+
+次のどれかに当たると、その項目は書いた値ではなく既定で動き、ログに 1 行出る。
+
+- 知らない値: `live_engine`（`dictation` / `speech` / `whisper` のどれか）、`final_engine`（`whisper` だけ）、`translation_mode`、`translation_target`。`translation_mode` と `translation_target` は文字列でない値を書いたときも同じ（その項目だけ既定）
+- この Mac で動かせないエンジン: 値は正しくても、`final_engine` に `dictation` / `speech` を書いた、`live_model` / `final_model` のモデルをダウンロードしていない・名前が違う、選んだ言語に対応していない、のどれか
+- `claude_env` の不正な名前（無視した個数だけが出る。名前と値は出ない）
+- `settings.json` 全体が読めない（JSON として壊れている、上の 2 つ以外の項目で値の型が違う、`default_language` が知らない値、など）。このときはファイルを同じフォルダの `settings.json.corrupt-<日時>` に退避し、すべて既定で動く
+
+ここに無いものはログに出さずに置き換わる: 範囲外の数値は端に丸め、空の `live_summary_model` は `haiku`、知らない `translation_model` はこの Mac の既定になり、打ち間違えたキーは読まれない。
+
+読み方: 同じ内容の行は 30 分に 1 回までしか出ない。設定は録音のたびに読み直すので、**録音を 1 回始めて止めてから**、1 時間以内に次を打つ（AutoNote は何日も起動したままになるので、録音せずに打つと、値が今も使われていなくても何も出ないことがある）。
+
+```sh
+log show --last 1h --predicate 'subsystem == "com.yutaokoshi.autonote" AND category == "Settings"'
+```
+
+出る行の例:
+
+```text
+settings: ignored live_engine "system" (known: dictation, speech, whisper); using this Mac's default engine
+settings: ignored final_engine "speech" (only whisper can be the final engine); using whisper.cpp large-v3-turbo
+settings: ignored live_engine "whisper" with model "small" (model small is not downloaded); using Apple SpeechTranscriber
+settings: settings.json could not be read (invalid value at default_language); moved to settings.json.corrupt-20261127-221500, using the defaults
+```
+
+`settings.json` が退避されたときの戻し方: AutoNote を終了し、`settings.json.corrupt-<日時>` の中身を直して、名前を `settings.json` に戻してから起動する。退避されたまま設定画面で何かを保存すると、既定から新しい `settings.json` が作られる（退避されたファイルは残るので、そこから値を写せる）。
+
+### 実際に動いたエンジン
+
+リアルタイム版は、録音を始めるたびに次の行が出る（上のコマンドとはカテゴリが違う）。
+
+```sh
+log show --last 1h --predicate 'subsystem == "com.yutaokoshi.autonote" AND category == "LiveTranscriptionWiring"'
+```
+
+```text
+20261127-1000-ab12: live transcript started (on recording started, engine: Apple SpeechTranscriber)
+```
+
+`engine:` の値と設定値の対応は、`Apple DictationTranscriber` = `dictation`、`Apple SpeechTranscriber` = `speech`、`whisper.cpp <モデル名>` = `whisper`。確定版で動いたエンジンは、議事録の先頭（frontmatter）の `transcript_engine` に同じ表記で入る。
+
+### リアルタイム要約が失敗した理由
+
+録音中の画面に「要約を更新できません」と出たとき（3 回続けて失敗したとき）は、失敗のたびに理由が 1 行残っている。
+
+```sh
+log show --last 1h --predicate 'subsystem == "com.yutaokoshi.autonote" AND category == "ClaudeLiveSummarizer"'
+```
+
+```text
+live claude -p failed: failed (exit 1): There's an issue with the selected model (…). It may not exist or you may not have access to it. Run --model to pick a different model. …
+```
+
+- `failed:` の後ろが失敗の種類、`(exit N)` が `claude` の終了コード、その後ろが `claude` 自身のエラー文（1 行、200 文字まで）。会議の内容は出ない。`claude_env` に書いた値（8 文字以上）は `***` に置き換わる
+- 上の例はモデル名が使えないとき。設定 › 一般 ›「リアルタイム要約」の「モデル」（`live_summary_model`。既定は `haiku`）を、その Mac の Claude Code で使える名前に直す
+- `subtype=error_max_turns` は `claude` が 1 回のやり取りで答えを出し切れなかったとき、`notLoggedIn` はログインや API キーの問題（後ろの文で区別できる）、`timedOut` は 60 秒で終わらなかったとき
+- `live claude -p did not run: …` は `claude` を起動できなかったとき（設定 › 一般 の `claude` の場所を確かめる）
