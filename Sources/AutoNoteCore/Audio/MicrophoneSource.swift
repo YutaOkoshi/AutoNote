@@ -24,16 +24,24 @@ public struct MicrophoneRecoveryPolicy: Sendable, Equatable {
     /// After a rebuild, callbacks flowing this long without another rebuild give the `maxRebuilds` budget back, so a
     /// long meeting with now-and-then interruptions never runs out of it.
     public var rebuildBudgetReset: Duration
+    /// Callbacks arrive but every sample was exactly zero for this long: rebuild. A real input always carries noise,
+    /// so exact zeros mean a broken path or a headset's mute button; the two look the same, so these rebuilds spend
+    /// none of the budget above and never end the source. nil: never rebuild for zeros. The wait doubles per rebuild…
+    public var zeroTimeout: Duration?
+    /// …up to this, and goes back to `zeroTimeout` once a non-zero sample arrives.
+    public var zeroRetryMax: Duration
 
     public init(checkInterval: Duration = .milliseconds(250), settleDelay: Duration = .milliseconds(300),
                 stallTimeout: Duration = .seconds(2), retryDelay: Duration = .milliseconds(500),
                 maxConsecutiveFailures: Int = 5, maxRebuilds: Int = 30,
                 holdSettle: Duration = .milliseconds(300), holdSettleTimeout: Duration = .seconds(2),
-                rebuildBudgetReset: Duration = .seconds(60)) {
+                rebuildBudgetReset: Duration = .seconds(60),
+                zeroTimeout: Duration? = .seconds(5), zeroRetryMax: Duration = .seconds(60)) {
         self.checkInterval = checkInterval; self.settleDelay = settleDelay; self.stallTimeout = stallTimeout
         self.retryDelay = retryDelay; self.maxConsecutiveFailures = maxConsecutiveFailures; self.maxRebuilds = maxRebuilds
         self.holdSettle = holdSettle; self.holdSettleTimeout = holdSettleTimeout
         self.rebuildBudgetReset = rebuildBudgetReset
+        self.zeroTimeout = zeroTimeout; self.zeroRetryMax = zeroRetryMax
     }
 
     public static let standard = MicrophoneRecoveryPolicy()
@@ -105,6 +113,12 @@ public actor MicrophoneSource: AudioSource {
     private var healthySince: ContinuousClock.Instant?
     private var nextRebuildAllowedAt = ContinuousClock.now
     private var gaveUp = false
+    // The zero watch (`policy.zeroTimeout`): its own wait, apart from the stall budget above.
+    private var lastNonZeroCallbacks = 0
+    private var lastNonZeroAt = ContinuousClock.now
+    private var zeroWait = Duration.zero
+    private var nextZeroRebuildAt = ContinuousClock.now
+    private var zeroRebuildsInStretch = 0
     /// Whether `inputHold` holds a Bluetooth input for this recording.
     private var holdingInput = false
 
@@ -206,6 +220,7 @@ public actor MicrophoneSource: AudioSource {
             if let pipeline {
                 pipeline.drain.cancel()
                 await pipeline.drain.value
+                health?.addDroppedFrames(pipeline.ring.droppedFrames)
             }
             pipeline = nil
             onBuffer = nil
@@ -228,6 +243,11 @@ public actor MicrophoneSource: AudioSource {
         healthySince = nil
         nextRebuildAllowedAt = .now
         gaveUp = false
+        lastNonZeroCallbacks = health?.nonZeroCallbacks ?? 0
+        lastNonZeroAt = .now
+        zeroWait = policy.zeroTimeout ?? .zero
+        nextZeroRebuildAt = .now
+        zeroRebuildsInStretch = 0
     }
 
     /// A notification posted before the latest rebuild began is about the engine that rebuild replaced: ignored.
@@ -271,6 +291,17 @@ public actor MicrophoneSource: AudioSource {
                 rebuildsInBudget = 0
             }
         }
+        let nonZero = health?.nonZeroCallbacks ?? 0
+        if nonZero != lastNonZeroCallbacks {
+            lastNonZeroCallbacks = nonZero
+            lastNonZeroAt = now
+            if zeroRebuildsInStretch > 0 {
+                Self.logger.notice("mic input is non-zero again after \(self.zeroRebuildsInStretch, privacy: .public) rebuild(s) for zeros")
+            }
+            zeroRebuildsInStretch = 0
+            zeroWait = policy.zeroTimeout ?? .zero
+            nextZeroRebuildAt = now
+        }
         let engine = self.engine
         // Staleness first and alone: on a stale graph `AVAudioEngine.isRunning` can block for seconds while the engine
         // follows a new Bluetooth default input by itself (seen on the real headset).
@@ -304,7 +335,16 @@ public actor MicrophoneSource: AudioSource {
         } else if now - lastCallbackAt >= policy.stallTimeout {
             reason = "no callbacks for \(Self.seconds(now - lastCallbackAt)) s"
         }
-        guard let reason else { return }
+        guard let reason else {
+            // Nothing wrong with the engine. Callbacks that carry nothing but exact zeros get a rebuild of their own
+            // kind: no budget, no giving up (the headset's mute button looks the same).
+            if let zeroTimeout = policy.zeroTimeout, lastRecords > 0, now - lastNonZeroAt >= zeroTimeout,
+               now >= nextZeroRebuildAt, now >= nextRebuildAllowedAt {
+                let zeros = "only zero samples for \(Self.seconds(now - lastNonZeroAt)) s"
+                rebuildTask = Task { await self.rebuild(reason: zeros, forZeros: true) }
+            }
+            return
+        }
         guard now >= nextRebuildAllowedAt else { return }
         if consecutiveFailures >= policy.maxConsecutiveFailures || rebuildsInBudget >= policy.maxRebuilds {
             await giveUp(reason: reason)
@@ -313,17 +353,24 @@ public actor MicrophoneSource: AudioSource {
         rebuildTask = Task { await self.rebuild(reason: reason) }
     }
 
-    private func rebuild(reason: String) async {
+    /// `forZeros`: a rebuild of the zero watch. It spends none of the stall budget; if it leaves the engine down, the
+    /// next look finds "engine not running" and the budgeted rebuilds take over.
+    private func rebuild(reason: String, forZeros: Bool = false) async {
         defer { rebuildTask = nil }
         lastRebuildStartedAt = .now
         rebuilds += 1
-        rebuildsInBudget += 1
-        healthySince = nil
-        consecutiveFailures += 1
+        var backoff = policy.retryDelay
+        if forZeros {
+            zeroRebuildsInStretch += 1
+        } else {
+            rebuildsInBudget += 1
+            healthySince = nil
+            consecutiveFailures += 1
+            // Exponential backoff for the next attempt if this one brings no callback.
+            backoff = policy.retryDelay * (1 << min(consecutiveFailures - 1, 6))
+        }
         health?.noteRestart()
         let attempt = rebuilds
-        // Exponential backoff for the next attempt if this one brings no callback.
-        let backoff = policy.retryDelay * (1 << min(consecutiveFailures - 1, 6))
         Self.logger.notice("mic rebuild #\(attempt, privacy: .public) (\(reason, privacy: .public)) \(self.engine.routeDescription(), privacy: .public)")
 
         let engine = self.engine, timeout = self.stopTimeout
@@ -333,6 +380,7 @@ public actor MicrophoneSource: AudioSource {
         if let old = pipeline {
             old.drain.cancel()
             await old.drain.value       // the old ring's tail is emitted at its own timeline position
+            health?.addDroppedFrames(old.ring.droppedFrames)
         }
         pipeline = nil
         guard case .running = state, let onBuffer else { return }
@@ -393,7 +441,12 @@ public actor MicrophoneSource: AudioSource {
             lastRecords = 0
             lastCallbackAt = .now
             configurationChangedAt = nil
-            nextRebuildAllowedAt = .now + backoff
+            if forZeros {
+                zeroWait = min(zeroWait * 2, policy.zeroRetryMax)
+                nextZeroRebuildAt = .now + zeroWait
+            } else {
+                nextRebuildAllowedAt = .now + backoff
+            }
             Self.logger.notice("mic rebuild #\(attempt, privacy: .public) restarted the engine (\(Self.describe(format), privacy: .public))")
         }
     }
@@ -413,6 +466,7 @@ public actor MicrophoneSource: AudioSource {
         if let old = pipeline {
             old.drain.cancel()
             await old.drain.value
+            health?.addDroppedFrames(old.ring.droppedFrames)
         }
         pipeline = nil
         await releaseHold()

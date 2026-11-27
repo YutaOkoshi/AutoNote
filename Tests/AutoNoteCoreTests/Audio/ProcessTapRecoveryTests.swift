@@ -76,6 +76,7 @@ private func pause() async { try? await Task.sleep(for: .milliseconds(80)) }
         try await src.start { _ in }
         await settle(src)
         let feeder = feedTap(hw, host: host) { 0 }
+        await settle(src, fed: true)                             // callbacks flow before the clock moves
         defer { feeder.cancel() }
         host.advance(4.0)
         await settle(src, fed: true)
@@ -99,6 +100,7 @@ private func pause() async { try? await Task.sleep(for: .milliseconds(80)) }
         for _ in 0..<10 { host.advance(30); await settle(src) }     // 5 minutes without one callback
         #expect(creations(hw) == 1)
         let feeder = feedTap(hw, host: host) { 0 }
+        await settle(src, fed: true)                             // callbacks flow before the clock moves
         for _ in 0..<10 { host.advance(30); await settle(src, fed: true) }   // 5 minutes of zeros
         feeder.cancel(); await feeder.value
         #expect(creations(hw) == 1)
@@ -113,6 +115,7 @@ private func pause() async { try? await Task.sleep(for: .milliseconds(80)) }
         try await src.start { _ in }
         await settle(src)
         let feeder = feedTap(hw, host: host) { 0 }
+        await settle(src, fed: true)                             // callbacks flow before the clock moves
         for _ in 0..<5 { host.advance(30); await settle(src, fed: true) }
         feeder.cancel(); await feeder.value
         #expect(creations(hw) == 1)
@@ -125,6 +128,7 @@ private func pause() async { try? await Task.sleep(for: .milliseconds(80)) }
         try await src.start { _ in }
         await settle(src)
         let feeder = feedTap(hw, host: host) { 0.25 }
+        await settle(src, fed: true)                             // callbacks flow before the clock moves
         for _ in 0..<20 { host.advance(3); await settle(src, fed: true) }
         feeder.cancel(); await feeder.value
         await src.stop()
@@ -139,6 +143,7 @@ private func pause() async { try? await Task.sleep(for: .milliseconds(80)) }
         try await src.start { _ in }
         await settle(src)
         let feeder = feedTap(hw, host: host) { level.withLock { $0 } }
+        await settle(src, fed: true)                             // callbacks flow before the clock moves
         defer { feeder.cancel() }
         host.advance(5.1)
         #expect(await rebuilt(src, 1))                           // first rebuild after 5 s
@@ -174,6 +179,7 @@ private func pause() async { try? await Task.sleep(for: .milliseconds(80)) }
         try await src.start { _ in }
         await settle(src)
         let feeder = feedTap(hw, host: host) { 0 }
+        await settle(src, fed: true)                             // callbacks flow before the clock moves
         defer { feeder.cancel() }
         host.advance(5.1)
         #expect(await eventuallyTrue { creations(hw) == 2 })
@@ -240,6 +246,7 @@ private func pause() async { try? await Task.sleep(for: .milliseconds(80)) }
         try await src.start { _ in }
         await settle(src)
         let feeder = feedTap(hw, host: host) { 0 }
+        await settle(src, fed: true)                             // callbacks flow before the clock moves
         defer { feeder.cancel() }
         hw.failOn = "createAggregate"
         hw.othersPlaying = true
@@ -257,6 +264,7 @@ private func pause() async { try? await Task.sleep(for: .milliseconds(80)) }
         try await src.start { _ in }
         await settle(src)
         let feeder = feedTap(hw, host: host) { 0 }
+        await settle(src, fed: true)                             // callbacks flow before the clock moves
         hw.startDelay = .milliseconds(300)                       // the rebuild's bring-up takes a while
         host.advance(5.1)
         #expect(await eventuallyTrue { creations(hw) == 2 })
@@ -276,6 +284,7 @@ private func pause() async { try? await Task.sleep(for: .milliseconds(80)) }
         try await src.start { _ in }
         await settle(src)
         let feeder = feedTap(hw, host: host) { 0 }
+        await settle(src, fed: true)                             // callbacks flow before the clock moves
         for _ in 0..<20 { host.advance(1); await settle(src, fed: true) }   // 20 s of zeros, nobody plays
         hw.othersPlaying = true
         await settle(src)
