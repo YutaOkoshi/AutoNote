@@ -27,6 +27,24 @@ import AutoNoteTestSupport
         #expect(s.suspectNoCallbackSeconds == 1) // 2
     }
 
+    /// While the recording is paused nothing is written, so those seconds are neither suspect nor lost.
+    @Test func secondsInsideAPauseAreNotSuspect() {
+        let h = SourceHealth()
+        for second in 0..<10 {
+            h.recordOutputPoll(at: Double(second), othersPlaying: true)
+            if second < 8 { h.recordCallback(start: Double(second), duration: 1, nonZero: false) }   // 8, 9: no callback
+        }
+        let whole = SourceHealth.summary(track: .system, sources: [h], endSeconds: 10)
+        #expect(whole.suspectZeroSeconds == 8 && whole.suspectNoCallbackSeconds == 2 && whole.pausedNoCallbackSeconds == nil)
+        // Paused from 2.5 s to 6 s, and again from 8 s with no resume: seconds 3, 4, 5 and 8, 9 are wholly inside.
+        let pauses = [PauseInterval(start: .init(seconds: 2.5), end: .init(seconds: 6)), PauseInterval(start: .init(seconds: 8))]
+        let s = SourceHealth.summary(track: .system, sources: [h], endSeconds: 10, pauses: pauses)
+        #expect(s.zeroSeconds == 8 && s.noCallbackSeconds == 2)      // unchanged counting
+        #expect(s.suspectZeroSeconds == 5)                           // 0, 1, 2, 6, 7
+        #expect(s.suspectNoCallbackSeconds == 0)
+        #expect(s.pausedNoCallbackSeconds == 2)                      // 8, 9
+    }
+
     @Test func aSourceThatNeverPolledReportsNoSuspectSeconds() {
         let h = SourceHealth()
         h.recordCallback(start: 0, duration: 1, nonZero: false)
@@ -89,9 +107,9 @@ import AutoNoteTestSupport
         #expect(try AutoNoteJSON.decoder().decode(TrackHealth.self, from: Data(oldJSON.utf8)) == old)
 
         var new = old
-        new.droppedFrames = 12; new.suspectZeroSeconds = 5; new.suspectNoCallbackSeconds = 6
+        new.droppedFrames = 12; new.suspectZeroSeconds = 5; new.suspectNoCallbackSeconds = 6; new.pausedNoCallbackSeconds = 2
         let newJSON = String(decoding: try AutoNoteJSON.encoder().encode(new), as: UTF8.self)
-        for key in ["dropped_frames", "suspect_zero_seconds", "suspect_no_callback_seconds"] { #expect(newJSON.contains("\"\(key)\"")) }
+        for key in ["dropped_frames", "suspect_zero_seconds", "suspect_no_callback_seconds", "paused_no_callback_seconds"] { #expect(newJSON.contains("\"\(key)\"")) }
         #expect(try AutoNoteJSON.decoder().decode(TrackHealth.self, from: Data(newJSON.utf8)) == new)
     }
 }
@@ -133,6 +151,14 @@ import AutoNoteTestSupport
         let dead = [Self.health(.mic, noCallback: 400, zero: 10)]
         #expect(AudioLossRule.evaluate(health: dead, failedTracks: [], recordedSeconds: 3600)
                 == [TrackLoss(track: .mic, seconds: 400, sourceFailed: false)])
+    }
+
+    /// A microphone that was gone only while the recording was paused lost nothing.
+    @Test func theMicrophonesSecondsInsideAPauseAreNotLost() {
+        var h = Self.health(.mic, noCallback: 400)
+        h.pausedNoCallbackSeconds = 390
+        #expect(AudioLossRule.lostSeconds(h) == 10)
+        #expect(AudioLossRule.evaluate(health: [h], failedTracks: [], recordedSeconds: 600) == nil)
     }
 
     @Test func aFailedTrackIsALossWhateverItsSeconds() {

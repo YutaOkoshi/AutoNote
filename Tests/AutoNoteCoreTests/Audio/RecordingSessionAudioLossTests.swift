@@ -117,6 +117,36 @@ private func failed(_ events: [RecordingEvent], _ track: Track) -> Bool {
         #expect(m.audioLoss == nil)                         // 20 s of 300 s: below max(30 s, 10 %)
     }
 
+    /// Paused for most of the meeting while another app went on playing into a tap that delivered zeros: nothing
+    /// was being recorded then, so it is neither rebuilt for, nor told, nor a loss.
+    @Test func zerosWhileTheRecordingIsPausedAreNotALoss() async throws {
+        let t = try TapSession(); t.factory.hardware.othersPlaying = true
+        let level = Mutex<Float>(0.25)
+        let events = await t.session.events()
+        _ = try await t.session.start(.init(language: .ja))
+        let tap = try #require(t.factory.tap)
+        await settle(tap)
+        let feeder = feedTap(t.factory.hardware, host: t.host) { level.withLock { $0 } }
+        await settle(tap, fed: true)
+        for _ in 0..<20 { t.host.advance(1); await settle(tap, fed: true) }      // 20 s of sound
+        try await t.session.pause()
+        level.withLock { $0 = 0 }
+        for _ in 0..<100 { t.host.advance(1); await settle(tap, fed: true) }     // 100 s of zeros, paused
+        level.withLock { $0 = 0.25 }
+        await settle(tap, fed: true)
+        try await t.session.resume()
+        for _ in 0..<20 { t.host.advance(1); await settle(tap, fed: true) }      // 20 s of sound
+        feeder.cancel(); await feeder.value
+        let m = try await t.session.stop()
+
+        let system = try #require(m.audioHealth?.first { $0.track == .system })
+        #expect(system.zeroSeconds >= 95)                   // counted as before
+        #expect((system.suspectZeroSeconds ?? 99) <= 2)     // only the seconds the pause began and ended in
+        #expect(system.restarts == 0)
+        #expect(m.audioLoss == nil)
+        #expect(notArriving(await eventsUntilStopped(events)).isEmpty)
+    }
+
     /// Another app plays and the tap does not call back at all; rebuilding does not help.
     @Test func aTapThatNeverCallsBackWhileAnotherProcessPlaysFailsTheTrack() async throws {
         var policy = tapRecoveryTestPolicy

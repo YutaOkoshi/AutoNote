@@ -26,13 +26,13 @@ public enum AudioLossRule {
     }
 
     /// Seconds of the track that should have held audio and did not.
-    /// - microphone: seconds without callbacks. An open input always calls back, so none means the input was gone.
-    ///   All-zero seconds do not count: a headset's mute button delivers exact zeros.
+    /// - microphone: seconds without callbacks, outside the recording's pauses. An open input always calls back, so
+    ///   none means the input was gone. All-zero seconds do not count: a headset's mute button delivers exact zeros.
     /// - system audio: seconds in which another process was playing audio and nothing but zeros (or no callback)
     ///   arrived. With nobody playing, an idle tap delivers zeros or no callbacks at all, and that is not a loss.
     public static func lostSeconds(_ health: TrackHealth) -> Int {
         switch health.track {
-        case .mic: health.noCallbackSeconds
+        case .mic: max(0, health.noCallbackSeconds - (health.pausedNoCallbackSeconds ?? 0))
         case .system: (health.suspectZeroSeconds ?? 0) + (health.suspectNoCallbackSeconds ?? 0)
         }
     }
@@ -78,7 +78,8 @@ extension TrackHealth {
                                zeroSeconds: mine.reduce(0) { $0 + $1.zeroSeconds },
                                restarts: mine.reduce(0) { $0 + $1.restarts }, callbacks: mine.reduce(0) { $0 + $1.callbacks },
                                droppedFrames: sum(mine, \.droppedFrames), suspectZeroSeconds: sum(mine, \.suspectZeroSeconds),
-                               suspectNoCallbackSeconds: sum(mine, \.suspectNoCallbackSeconds))
+                               suspectNoCallbackSeconds: sum(mine, \.suspectNoCallbackSeconds),
+                               pausedNoCallbackSeconds: sum(mine, \.pausedNoCallbackSeconds))
         }
         return result.isEmpty ? nil : result
     }

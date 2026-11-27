@@ -22,13 +22,18 @@ public struct TrackHealth: Codable, Equatable, Hashable, Sendable {
     /// System track: whole seconds in which another process was playing audio while no callback arrived. (With nobody
     /// playing, an idle tap delivers no callbacks at all, so `noCallbackSeconds` alone says nothing.) nil as above.
     public var suspectNoCallbackSeconds: Int?
+    /// Of `noCallbackSeconds`, those that lay inside a pause of the recording (nothing was being recorded then).
+    /// nil when there were none.
+    public var pausedNoCallbackSeconds: Int?
 
     public init(track: Track, noCallbackSeconds: Int, zeroSeconds: Int, restarts: Int, callbacks: Int,
-                droppedFrames: Int? = nil, suspectZeroSeconds: Int? = nil, suspectNoCallbackSeconds: Int? = nil) {
+                droppedFrames: Int? = nil, suspectZeroSeconds: Int? = nil, suspectNoCallbackSeconds: Int? = nil,
+                pausedNoCallbackSeconds: Int? = nil) {
         self.track = track; self.noCallbackSeconds = noCallbackSeconds; self.zeroSeconds = zeroSeconds
         self.restarts = restarts; self.callbacks = callbacks
         self.droppedFrames = droppedFrames; self.suspectZeroSeconds = suspectZeroSeconds
         self.suspectNoCallbackSeconds = suspectNoCallbackSeconds
+        self.pausedNoCallbackSeconds = pausedNoCallbackSeconds
     }
 }
 
@@ -52,6 +57,7 @@ public final class SourceHealth: Sendable {
         var restarts = 0
         var droppedFrames = 0
         var polled = false
+        var paused = false
         var windowCallbacks = 0
         var windowNonZero = false
         var failureObserver: (@Sendable (String) -> Void)?
@@ -97,6 +103,11 @@ public final class SourceHealth: Sendable {
     }
 
     public func noteRestart() { state.withLock { $0.restarts += 1 } }
+
+    /// Set by the recording while it is paused: the source goes on delivering, but nothing is written, so it does
+    /// not rebuild for zeros or report audio as not arriving meanwhile.
+    public func setPaused(_ paused: Bool) { state.withLock { $0.paused = paused } }
+    public var isPaused: Bool { state.withLock { $0.paused } }
 
     /// Frames a retired ring buffer had dropped (called when a rebuild or the stop lets go of the ring).
     public func addDroppedFrames(_ frames: Int) { state.withLock { $0.droppedFrames += max(0, frames) } }
@@ -162,7 +173,8 @@ public final class SourceHealth: Sendable {
     fileprivate var totals: (dropped: Int, polled: Bool) { state.withLock { ($0.droppedFrames, $0.polled) } }
 
     /// Summary over `0 ..< ceil(endSeconds)` of every source the track had, in any order.
-    public static func summary(track: Track, sources: [SourceHealth], endSeconds: Double) -> TrackHealth {
+    public static func summary(track: Track, sources: [SourceHealth], endSeconds: Double,
+                               pauses: [PauseInterval] = []) -> TrackHealth {
         let total = max(0, min(maxSeconds, Int(endSeconds.rounded(.up))))
         var merged = [UInt8](repeating: 0, count: total)
         var restarts = 0, callbacks = 0, dropped = 0, polled = false
@@ -178,11 +190,20 @@ public final class SourceHealth: Sendable {
         let audio = delivered | nonZero
         let noCallback = merged.lazy.filter { $0 & delivered == 0 }.count
         let zero = merged.lazy.filter { $0 & audio == delivered }.count
+        // Seconds wholly inside a pause (an open pause runs to the end): nothing was being recorded then.
+        var paused = [Bool](repeating: false, count: total)
+        for pause in pauses {
+            let from = max(0, Int(pause.start.seconds.rounded(.up)))
+            let to = min(total, Int((pause.end?.seconds ?? Double(total)).rounded(.down)))
+            if from < to { for i in from..<to { paused[i] = true } }
+        }
+        let pausedNoCallback = merged.indices.lazy.filter { paused[$0] && merged[$0] & delivered == 0 }.count
         // Suspect: every poll of the second saw another process playing, and still no non-zero sample arrived.
-        let suspect = merged.lazy.filter { $0 & (othersPlaying | nobodyPlaying) == othersPlaying }
+        let suspect = merged.indices.lazy.filter { !paused[$0] && merged[$0] & (othersPlaying | nobodyPlaying) == othersPlaying }
         return TrackHealth(track: track, noCallbackSeconds: noCallback, zeroSeconds: zero, restarts: restarts, callbacks: callbacks,
                            droppedFrames: dropped,
-                           suspectZeroSeconds: polled ? suspect.filter { $0 & audio == delivered }.count : nil,
-                           suspectNoCallbackSeconds: polled ? suspect.filter { $0 & delivered == 0 }.count : nil)
+                           suspectZeroSeconds: polled ? suspect.filter { merged[$0] & audio == delivered }.count : nil,
+                           suspectNoCallbackSeconds: polled ? suspect.filter { merged[$0] & delivered == 0 }.count : nil,
+                           pausedNoCallbackSeconds: pausedNoCallback > 0 ? pausedNoCallback : nil)
     }
 }

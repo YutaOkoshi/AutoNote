@@ -75,6 +75,7 @@ private final class IOCounters: Sendable {
 ///   `maxRebuilds`) stop rebuilding and report through `health` (`MicrophoneRecoveryPolicy`'s budget);
 /// - only zeros for `zeroTimeout` (`zeroTimeoutAfterRouteChange` right after the default output device changed):
 ///   rebuild, wait twice as long before the next one (up to `zeroRetryMax`), never give up.
+/// Neither while the recording is paused (`SourceHealth.setPaused`).
 /// Chunks keep their host-time stamps, so a rebuild's gap is silence on the track's timeline, not a shift.
 public actor ProcessTapSource: AudioSource {
     public static let aggregateUIDPrefix = "com.yutaokoshi.autonote.tap."
@@ -358,7 +359,9 @@ public actor ProcessTapSource: AudioSource {
             await rebuildForStall(reason: "tap is not running", now: now)
             return
         }
-        guard playing else {
+        // A paused recording writes nothing, so nothing can be missing: like nobody playing, and the waits start
+        // over at the resume.
+        guard playing, !counts.isPaused else {
             othersPlayingSince = nil
             return
         }

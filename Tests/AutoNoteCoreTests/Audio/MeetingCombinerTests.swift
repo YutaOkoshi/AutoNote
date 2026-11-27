@@ -98,7 +98,7 @@ import AutoNoteTestSupport
         ]
         sources[2].audioHealth = [
             TrackHealth(track: .system, noCallbackSeconds: 5, zeroSeconds: 60, restarts: 3, callbacks: 300,
-                        droppedFrames: 480, suspectZeroSeconds: 40, suspectNoCallbackSeconds: 4),
+                        droppedFrames: 480, suspectZeroSeconds: 40, suspectNoCallbackSeconds: 4, pausedNoCallbackSeconds: 3),
         ]
         sources[2].audioLoss = [TrackLoss(track: .system, seconds: 44, sourceFailed: false)]
         sources[0].audioLoss = [TrackLoss(track: .system, seconds: 300, sourceFailed: true), TrackLoss(track: .mic, seconds: 0, sourceFailed: true)]
@@ -106,7 +106,7 @@ import AutoNoteTestSupport
         #expect(m.audioHealth == [
             TrackHealth(track: .mic, noCallbackSeconds: 1, zeroSeconds: 2, restarts: 1, callbacks: 100),
             TrackHealth(track: .system, noCallbackSeconds: 15, zeroSeconds: 80, restarts: 3, callbacks: 500,
-                        droppedFrames: 480, suspectZeroSeconds: 40, suspectNoCallbackSeconds: 4),
+                        droppedFrames: 480, suspectZeroSeconds: 40, suspectNoCallbackSeconds: 4, pausedNoCallbackSeconds: 3),
         ])
         #expect(m.audioLoss == [TrackLoss(track: .mic, seconds: 0, sourceFailed: true),
                                 TrackLoss(track: .system, seconds: 344, sourceFailed: true)])

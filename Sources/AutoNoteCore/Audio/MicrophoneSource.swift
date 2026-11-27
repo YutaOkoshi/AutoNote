@@ -26,22 +26,26 @@ public struct MicrophoneRecoveryPolicy: Sendable, Equatable {
     public var rebuildBudgetReset: Duration
     /// Callbacks arrive but every sample was exactly zero for this long: rebuild. A real input always carries noise,
     /// so exact zeros mean a broken path or a headset's mute button; the two look the same, so these rebuilds spend
-    /// none of the budget above and never end the source. nil: never rebuild for zeros. The wait doubles per rebuild…
+    /// none of the budget above and never end the source. Not while the recording is paused. nil: never rebuild for
+    /// zeros. The wait doubles per rebuild…
     public var zeroTimeout: Duration?
     /// …up to this, and goes back to `zeroTimeout` once a non-zero sample arrives.
     public var zeroRetryMax: Duration
+    /// Rebuilds for one stretch of zeros (5, 10, 20 s into it); after that the input is taken to be muted and is
+    /// left alone until a non-zero sample arrives.
+    public var maxZeroRebuilds: Int
 
     public init(checkInterval: Duration = .milliseconds(250), settleDelay: Duration = .milliseconds(300),
                 stallTimeout: Duration = .seconds(2), retryDelay: Duration = .milliseconds(500),
                 maxConsecutiveFailures: Int = 5, maxRebuilds: Int = 30,
                 holdSettle: Duration = .milliseconds(300), holdSettleTimeout: Duration = .seconds(2),
                 rebuildBudgetReset: Duration = .seconds(60),
-                zeroTimeout: Duration? = .seconds(5), zeroRetryMax: Duration = .seconds(60)) {
+                zeroTimeout: Duration? = .seconds(5), zeroRetryMax: Duration = .seconds(60), maxZeroRebuilds: Int = 3) {
         self.checkInterval = checkInterval; self.settleDelay = settleDelay; self.stallTimeout = stallTimeout
         self.retryDelay = retryDelay; self.maxConsecutiveFailures = maxConsecutiveFailures; self.maxRebuilds = maxRebuilds
         self.holdSettle = holdSettle; self.holdSettleTimeout = holdSettleTimeout
         self.rebuildBudgetReset = rebuildBudgetReset
-        self.zeroTimeout = zeroTimeout; self.zeroRetryMax = zeroRetryMax
+        self.zeroTimeout = zeroTimeout; self.zeroRetryMax = zeroRetryMax; self.maxZeroRebuilds = maxZeroRebuilds
     }
 
     public static let standard = MicrophoneRecoveryPolicy()
@@ -302,6 +306,8 @@ public actor MicrophoneSource: AudioSource {
             zeroWait = policy.zeroTimeout ?? .zero
             nextZeroRebuildAt = now
         }
+        // A paused recording writes nothing: zeros are left alone and are counted from the resume.
+        if health?.isPaused == true { lastNonZeroAt = now }
         let engine = self.engine
         // Staleness first and alone: on a stale graph `AVAudioEngine.isRunning` can block for seconds while the engine
         // follows a new Bluetooth default input by itself (seen on the real headset).
@@ -338,8 +344,8 @@ public actor MicrophoneSource: AudioSource {
         guard let reason else {
             // Nothing wrong with the engine. Callbacks that carry nothing but exact zeros get a rebuild of their own
             // kind: no budget, no giving up (the headset's mute button looks the same).
-            if let zeroTimeout = policy.zeroTimeout, lastRecords > 0, now - lastNonZeroAt >= zeroTimeout,
-               now >= nextZeroRebuildAt, now >= nextRebuildAllowedAt {
+            if let zeroTimeout = policy.zeroTimeout, zeroRebuildsInStretch < policy.maxZeroRebuilds, lastRecords > 0,
+               now - lastNonZeroAt >= zeroTimeout, now >= nextZeroRebuildAt, now >= nextRebuildAllowedAt {
                 let zeros = "only zero samples for \(Self.seconds(now - lastNonZeroAt)) s"
                 rebuildTask = Task { await self.rebuild(reason: zeros, forZeros: true) }
             }
@@ -444,6 +450,9 @@ public actor MicrophoneSource: AudioSource {
             if forZeros {
                 zeroWait = min(zeroWait * 2, policy.zeroRetryMax)
                 nextZeroRebuildAt = .now + zeroWait
+                if zeroRebuildsInStretch >= policy.maxZeroRebuilds {
+                    Self.logger.notice("mic input still delivers only zeros after \(self.zeroRebuildsInStretch, privacy: .public) rebuild(s): taken as muted, no more rebuilds until a non-zero sample arrives")
+                }
             } else {
                 nextRebuildAllowedAt = .now + backoff
             }

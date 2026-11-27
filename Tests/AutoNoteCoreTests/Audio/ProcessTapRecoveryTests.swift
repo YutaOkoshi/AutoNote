@@ -113,6 +113,35 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
         #expect(creations(hw) == destructions(hw))
     }
 
+    /// Paused: nothing is being written, so zeros are nobody's loss. No rebuild, nothing told, and the wait starts
+    /// over at the resume.
+    @Test func whileTheRecordingIsPausedZerosCauseNoRebuild() async throws {
+        let host = FakeHostClock(); let hw = FakeTapHardware(); hw.othersPlaying = true
+        let src = source(hw, host)
+        let notArriving = Seconds()
+        src.health?.setNotArrivingObserver { notArriving.add($0) }
+        try await src.start { _ in }
+        await settle(src)
+        let feeder = feedTap(hw, host: host) { 0 }
+        await settle(src, fed: true)
+        defer { feeder.cancel() }
+        host.advance(2.0)
+        await settle(src, fed: true)
+        src.health?.setPaused(true)
+        await settle(src, fed: true)
+        for _ in 0..<20 { host.advance(10); await settle(src, fed: true) }   // 200 s of zeros while paused
+        #expect(await src.finishedRebuilds == 0)
+        #expect(notArriving.all.isEmpty)
+        src.health?.setPaused(false)
+        await settle(src, fed: true)
+        host.advance(4.0)
+        await settle(src, fed: true)
+        #expect(await src.finishedRebuilds == 0)                 // 4 s after the resume: not yet
+        host.advance(1.1)
+        #expect(await rebuilt(src, 1))
+        await src.stop()
+    }
+
     /// Plain silence: nobody plays, so zeros (or no callbacks at all, as an idle tap delivers) are what is expected.
     @Test func doesNotRebuildWhileNobodyPlays() async throws {
         let host = FakeHostClock(); let hw = FakeTapHardware(); hw.othersPlaying = false

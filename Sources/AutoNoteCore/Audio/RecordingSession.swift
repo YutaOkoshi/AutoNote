@@ -137,6 +137,7 @@ public actor RecordingSession {
             let at = clock.now()
             await waitUntilIdle()                       // chunks that arrived before the pause are still written
             state = .paused(id)
+            setSourcesPaused(true)
             let (changes, failures) = writers.transition { try $0.close(at: at) }
             await reportWriterFailures(failures)        // before the save, so a save failure cannot skip the report
             try await persist { $0.pauses.append(PauseInterval(start: at)); $0.apply(changes) }
@@ -153,6 +154,7 @@ public actor RecordingSession {
             let at = clock.now()
             let (changes, failures) = writers.transition(skippingFailed: true) { try $0.open(at: at) }
             state = .recording(id)
+            setSourcesPaused(false)
             // Reported before the save, so a save failure cannot skip it.
             await reportWriterFailures(failures)
             try await persist { m in
@@ -382,8 +384,13 @@ public actor RecordingSession {
         let (changes, failures) = writers.transition { try $0.close(at: end) }
         await reportWriterFailures(failures)
         routeMonitor?.stop()
-        let health = trackHealth(until: end, meeting: id)
-        let loss = AudioLossRule.evaluate(health: health, failedTracks: failedTracks, recordedSeconds: end.seconds)
+        // Paused time is nobody's loss: it is left out of the suspect seconds, of the microphone's missing seconds
+        // and of the length the threshold is taken from.
+        let pauses = saver.latest.pauses
+        let pausedSeconds = pauses.reduce(0.0) { $0 + max(0, ($1.end ?? end).seconds - $1.start.seconds) }
+        let health = trackHealth(until: end, pauses: pauses, meeting: id)
+        let loss = AudioLossRule.evaluate(health: health, failedTracks: failedTracks,
+                                          recordedSeconds: max(0, end.seconds - pausedSeconds))
         if let loss {
             let detail = loss.map { "\($0.track.rawValue) \($0.seconds) s\($0.sourceFailed ? " (source failed)" : "")" }.joined(separator: ", ")
             Self.logger.notice("\(id.rawValue, privacy: .public): audio loss: \(detail, privacy: .public)")
@@ -435,6 +442,7 @@ public actor RecordingSession {
     private func watchHealth(of source: any AudioSource, track: Track, meeting id: MeetingID) {
         guard let health = source.health else { return }
         healthSources[track, default: []].append(health)
+        if case .paused = state { health.setPaused(true) }   // a microphone attached during a pause
         health.setFailureObserver { [weak self] message in
             Task { await self?.sourceStoppedDelivering(track, message: message, meeting: id) }
         }
@@ -443,9 +451,14 @@ public actor RecordingSession {
         }
     }
 
+    /// Sources go on delivering through a pause; they only learn of it so they leave zeros alone meanwhile.
+    private func setSourcesPaused(_ paused: Bool) {
+        for list in healthSources.values { for h in list { h.setPaused(paused) } }
+    }
+
     /// The source keeps running and keeps trying; the listener (a notification) tells the user while it still helps.
     private func audioNotArriving(_ track: Track, seconds: Int, meeting id: MeetingID) {
-        guard meetingID == id, state != .idle, !failedTracks.contains(track) else { return }
+        guard meetingID == id, case .recording = state, !failedTracks.contains(track) else { return }
         Self.logger.notice("\(id.rawValue, privacy: .public): \(track.rawValue, privacy: .public) audio is not arriving (\(seconds, privacy: .public) s)")
         broadcaster.yield(.audioNotArriving(track, seconds: seconds))
     }
@@ -457,10 +470,10 @@ public actor RecordingSession {
 
     /// Per track with counters: seconds without callbacks, seconds of all-zero samples, rebuilds, dropped frames and
     /// (system audio) the seconds of both kinds in which another process was playing. Also logged.
-    private func trackHealth(until end: TimelineTime, meeting id: MeetingID) -> [TrackHealth]? {
+    private func trackHealth(until end: TimelineTime, pauses: [PauseInterval], meeting id: MeetingID) -> [TrackHealth]? {
         let result = [Track.mic, .system].compactMap { track -> TrackHealth? in
             guard let list = healthSources[track], !list.isEmpty else { return nil }
-            return SourceHealth.summary(track: track, sources: list, endSeconds: end.seconds)
+            return SourceHealth.summary(track: track, sources: list, endSeconds: end.seconds, pauses: pauses)
         }
         for h in result {
             let suspect = h.suspectZeroSeconds.map { ", while another process played: all zero \($0) s, no callbacks \(h.suspectNoCallbackSeconds ?? 0) s" } ?? ""
