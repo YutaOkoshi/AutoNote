@@ -154,6 +154,8 @@ public actor MicrophoneSource: AudioSource {
 
     /// Test hook: rebuilds so far in this recording.
     var rebuildCount: Int { rebuilds }
+    /// Test hook: a rebuild is under way (a configuration change that arrives meanwhile is taken as covered by it).
+    var isRebuilding: Bool { rebuildTask != nil }
 
     /// permission → UID → `engine.prepare` → ring → drain task → `engine.start` → watchdog.
     public func start(onBuffer: @Sendable @escaping (AudioChunk) -> Void) async throws {
