@@ -1,5 +1,7 @@
 import json
 import os
+import shutil
+import subprocess
 import unittest
 
 from helpers import STANDARD, STANDARD_ID, NO_TRANSCRIPT, SandboxTest, read, write
@@ -55,6 +57,8 @@ class PatrolTests(SandboxTest):
         asked = [t for t in self.texts() if "録画は消しましたか" in t]
         self.assertEqual(len(asked), 1)
         self.assertIn(REC, asked[0])
+        self.assertIn("--recording-deleted %s" % STANDARD_ID, asked[0])  # C-F7 / U-F2 (round 3): ready to paste
+        self.assertNotIn("<autonote_id>", asked[0])
         self.assertOk(self.sb.patrol(now="2026-12-10T09:00:00+09:00"))
         self.assertEqual(len([t for t in self.texts() if "録画は消しましたか" in t]), 1)
 
@@ -154,6 +158,8 @@ class PatrolTests(SandboxTest):
         self.share_customer()
         self.sb.set_config(AUTONOTE_CLI="/usr/bin/false")
         self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"), 1)
+        self.assertIn("autonote list", self.sb.state_file("todo.md"))  # C-F1 (round 3)
+        self.assertEqual(len([t for t in self.texts() if "見回りで失敗" in t]), 1)
 
     def test_push_failure_in_the_patrol_reaches_the_owner(self):
         # U-F2 (round 2): one todo line (not repeated) and at most one notice a day.
@@ -247,6 +253,134 @@ class PatrolTests(SandboxTest):
         self.assertEqual(len([t for t in self.texts() if "VAULT_ROOT" in t or "会議ファイルのフォルダ" in t]), 1)
         # the commit left by the failed push still went out
         self.assertIn("2026/2026-12-04_0930_社内定例.md", self.sb.remote_files())
+
+    def todo_lines(self, word):
+        return [l for l in self.sb.state_file("todo.md").splitlines() if word in l]
+
+    def test_git_failure_in_the_patrol_reaches_the_owner(self):
+        # C-F1 (round 3): it used to be one line in launchd's log and nothing else
+        self.share_customer()
+        path = self.sb.vault_file(STANDARD)
+        write(path, read(path).replace("一緒に見る。", "直した。"))
+        objects = os.path.join(self.sb.repo, ".git", "objects")
+        subprocess.run(["chmod", "-R", "a-w", objects], check=True)
+        try:
+            first = self.sb.patrol(now="2026-12-03T09:00:00+09:00")
+            second = self.sb.patrol(now="2026-12-04T09:00:00+09:00")
+        finally:
+            subprocess.run(["chmod", "-R", "u+w", objects], check=True)
+        self.assertOk(first, 1)
+        self.assertOk(second, 1)
+        self.assertEqual(len(self.todo_lines("git ")), 1)  # the same line is not written twice
+        self.assertEqual(len([t for t in self.texts() if "見回りで失敗" in t]), 2)  # one a day
+
+    def test_lock_that_cannot_be_taken_in_the_patrol_reaches_the_owner(self):
+        # C-F1 (round 3)
+        self.share_customer()
+        lock = os.path.join(self.sb.state, "lock")
+        os.makedirs(lock)
+        write(os.path.join(lock, "owner"), "%d\tnow\n" % os.getpid())  # a live process holds it
+        proc = self.sb.patrol(now="2026-12-03T09:00:00+09:00", env={"SHARE_LOCK_TIMEOUT_SEC": "0.3"})
+        self.assertOk(proc, 1)
+        self.assertEqual(len(self.todo_lines("ロック")), 1)
+        self.assertEqual(len([t for t in self.texts() if "見回りで失敗" in t]), 1)
+        shutil.rmtree(lock)
+        self.assertOk(self.sb.patrol(now="2026-12-04T09:00:00+09:00"))
+
+    def test_pending_meeting_whose_vault_file_is_gone_gets_its_row_once_it_is_pushed(self):
+        # C-F2 (round 3): the commit left in the clone went out, but shared.tsv never heard of the meeting
+        moved = self.sb.remote + ".away"
+        os.rename(self.sb.remote, moved)
+        self.assertOk(self.sb.share(self.sb.vault_file(STANDARD), "--kind", "customer", "--recording", REC,
+                                    now=DAY0), 1)
+        os.remove(self.sb.vault_file(STANDARD))
+        os.rename(moved, self.sb.remote)
+        self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"))
+        self.assertIn(MIN, self.sb.remote_files())
+        rows = self.sb.tsv("shared.tsv")
+        self.assertEqual([(r["autonote_id"], r["minutes_file"], r["kind"], r["customer"], r["recorded_by"],
+                           r["recording"], r["first_shared"]) for r in rows],
+                         [(STANDARD_ID, MIN, "customer", "サンプル商事", "営業担当", REC, "2026-12-02")])
+        self.assertTrue(rows[0]["transcript_file"].endswith("_文字起こし.md"))
+        self.assertEqual(self.sb.tsv("pending.tsv"), [])
+        self.assertEqual(len(self.todo_lines("会議ファイルが見つかりません")), 1)
+        self.assertIn(STANDARD_ID, self.todo_lines("会議ファイルが見つかりません")[0])
+        arrived = [t for t in self.texts() if "議事録が並びました" in t]
+        self.assertEqual(len(arrived), 1)
+        self.assertIn("12/9 までに消してください", arrived[0])
+        self.assertOk(self.sb.patrol(now="2026-12-04T09:00:00+09:00"))
+        self.assertEqual(len(self.todo_lines("会議ファイルが見つかりません")), 1)
+        self.assertEqual(len([t for t in self.texts() if "議事録が並びました" in t]), 1)
+        self.assertOk(self.sb.patrol(now="2026-12-09T09:00:00+09:00"))  # and the recording is followed up
+        self.assertTrue(any("録画は消しましたか" in t for t in self.texts()))
+
+    def test_pending_meeting_with_no_vault_file_and_no_commit_is_reported(self):
+        # C-F1 / C-F2 (round 3)
+        lock = os.path.join(self.sb.state, "lock")
+        os.makedirs(lock)
+        write(os.path.join(lock, "owner"), "%d\tnow\n" % os.getpid())
+        self.assertOk(self.sb.share(self.sb.vault_file(STANDARD), env={"SHARE_LOCK_TIMEOUT_SEC": "0.3"}), 1)
+        shutil.rmtree(lock)
+        os.remove(self.sb.vault_file(STANDARD))
+        self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"), 1)
+        self.assertEqual(len(self.todo_lines("会議ファイルが見つかりません")), 1)
+        self.assertIn(STANDARD_ID, self.todo_lines("会議ファイルが見つかりません")[0])
+        self.assertEqual(len([t for t in self.texts() if "見回りで失敗" in t]), 1)
+        self.assertEqual([r["autonote_id"] for r in self.sb.tsv("pending.tsv")], [STANDARD_ID])
+        self.assertEqual(self.sb.tsv("shared.tsv"), [])
+        self.assertOk(self.sb.share("--unshare", STANDARD_ID))  # the way out that the message names
+        self.assertEqual(self.sb.tsv("pending.tsv"), [])
+        self.assertOk(self.sb.patrol(now="2026-12-04T09:00:00+09:00"))
+
+    def test_reshare_finds_a_vault_file_moved_into_nested_folders(self):
+        # C-F5 (round 3): AutoNote walks the whole vault, so people file meetings into folders in Obsidian
+        self.share_customer()
+        old = self.sb.vault_file(STANDARD)
+        new = os.path.join(self.sb.vault, "顧客", "サンプル商事", STANDARD)
+        write(new, read(old).replace("一緒に見る。", "フォルダを動かした後に直した。"))
+        os.remove(old)
+        write(os.path.join(self.sb.vault, "_autonote", "控え", STANDARD), read(new).replace("動かした後", "読まれない"))
+        write(os.path.join(self.sb.vault, ".trash", STANDARD), read(new).replace("動かした後", "読まれない"))
+        self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"))
+        self.assertIn("フォルダを動かした後に直した。", self.sb.remote_show(MIN))
+        self.assertEqual(self.sb.state_file("todo.md"), "")
+
+    def test_shared_meeting_whose_vault_file_is_gone_is_written_to_todo_once(self):
+        # C-F5 (round 3): it used to be skipped without a word
+        self.share_customer()
+        os.remove(self.sb.vault_file(STANDARD))
+        self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"))
+        lines = self.todo_lines("会議ファイルが見つかりません")
+        self.assertEqual(len(lines), 1)
+        self.assertIn(STANDARD_ID, lines[0])
+        self.assertEqual(len([t for t in self.texts() if "会議ファイルが見つかりません" in t]), 1)
+        os.remove(os.path.join(self.sb.state, "todo.md"))  # the owner dealt with it
+        self.assertOk(self.sb.patrol(now="2026-12-04T09:00:00+09:00"))
+        self.assertEqual(self.todo_lines("会議ファイルが見つかりません"), [])
+        self.assertEqual(len([t for t in self.texts() if "会議ファイルが見つかりません" in t]), 1)
+        self.assertIn(MIN, self.sb.remote_files())  # never removed automatically
+
+    def test_missing_vault_folder_is_one_problem_not_one_line_per_meeting(self):
+        # round 3, with C-F5: an unmounted disk must not report every shared meeting as gone
+        self.share_customer()
+        self.assertOk(self.sb.share(self.sb.vault_file(NO_TRANSCRIPT), now=DAY0))
+        os.rename(self.sb.vault, self.sb.vault + ".away")
+        self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"), 1)
+        self.assertEqual(len(self.todo_lines("VAULT_ROOT")), 1)
+        self.assertEqual(self.todo_lines("会議ファイルが見つかりません"), [])
+
+    def test_undo_of_a_deleted_mark_set_by_the_patrol_stays_undone(self):
+        # C-F4 (round 3): renaming the file in the inbox looks like "seen, then gone"
+        inbox = self.inbox_with(REC, "2026-12-20_0900_別の録画.mp4")
+        self.share_customer()
+        os.remove(os.path.join(inbox, REC))
+        self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"))
+        self.assertIn("source_recording_deleted: はい\n", self.sb.remote_show(MIN))
+        self.assertOk(self.sb.share("--recording-deleted", STANDARD_ID, "--undo", now="2026-12-03T10:00:00+09:00"))
+        self.assertIn("source_recording_deleted: まだ\n", self.sb.remote_show(MIN))
+        self.assertOk(self.sb.patrol(now="2026-12-04T09:00:00+09:00"))
+        self.assertIn("source_recording_deleted: まだ\n", self.sb.remote_show(MIN))
+        self.assertNotIn("recording_deleted", self.sb.tsv("shared.tsv")[0]["flags"])
 
     def fake_cli(self, ids):
         path = os.path.join(self.sb.root, "fake-autonote")

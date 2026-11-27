@@ -45,10 +45,13 @@ class Patrol:
                 step()
             except LockTimeout as e:
                 print(e)
+                self.sharer.lock_problem(e)
                 self.rc = 1
             except Exception as e:  # one broken step must not stop the others
                 print("見回りの %s で止まりました: %s: %s" % (name, type(e).__name__, e))
                 self.state.log("patrol", name, "error", type(e).__name__)
+                self.sharer._problem("見回りの手順 %s が途中で止まりました（%s）。logs/launchd-patrol.out.log を見る"
+                                     % (name, type(e).__name__))
                 self.rc = 1
             try:
                 self.sharer.send_notices()  # e.g. "VAULT_ROOT を読めません" queued by a step
@@ -99,6 +102,7 @@ class Patrol:
                 self.rc |= self.sharer.apply_deleted_flags()
             except GitError as e:
                 print(e)
+                self.sharer._git_problem(e)
                 self.sharer._put_back()
                 self.rc = 1
 
@@ -112,17 +116,44 @@ class Patrol:
         return [r for r in self.state.shared() if "unshared" not in flags(r)]
 
     def reshare_changed(self):
-        for row in self.live_rows():
+        live = self.live_rows()
+        if live and self.sharer.vault_gone():
+            self.rc = 1
+            return
+        lost, back = [], []
+        for row in live:
+            mid, f = row["autonote_id"], flags(row)
             try:
-                path = find_vault_file(self.cfg, row["autonote_id"], row["source_path"] or None)
+                path = find_vault_file(self.cfg, mid, row["source_path"] or None)
             except VaultUnreadable as e:
                 self.sharer.report_vault_unreadable(e)
                 self.rc = 1
                 return
             if not path:
+                # Said once per meeting. "missing_notified" is the same news from `autonote list`.
+                if not f & {"vault_missing_notified", "missing_notified"}:
+                    lost.append(row)
                 continue
+            if "vault_missing_notified" in f:
+                back.append(mid)
             if sha256_file(path) != row["source_sha256"]:
                 self.rc |= self.sharer.share_file(path, trigger="patrol")
+        if lost or back:
+            lost_ids = set(r["autonote_id"] for r in lost)
+            with Lock(self.cfg):
+                rows = self.state.shared()
+                for row in rows:
+                    if row["autonote_id"] in lost_ids:
+                        set_flag(row, "vault_missing_notified")
+                    elif row["autonote_id"] in back:
+                        set_flag(row, "vault_missing_notified", False)
+                self.state.save_shared(rows)
+        for row in lost:
+            mid = row["autonote_id"]
+            self.notify("【%sへ】共有した会議の、AutoNote 側の会議ファイルが見つかりません: %s（%s）。AutoNote で直しても"
+                        "置き場には反映されません。VAULT_ROOT の外に動かしたのなら戻す。AutoNote から消したのなら、置き場に"
+                        "残すか share-meeting.sh --unshare %s で取り下げる"
+                        % (self.cfg.owner_name, mid, row["minutes_file"], mid), todo=True)
 
     def ask_after_keep_days(self):
         """No inbox folder to look at: ask once, KEEP_DAYS after sharing, whether the recording was deleted."""
@@ -137,12 +168,12 @@ class Patrol:
                 days = _days(row["first_shared"], today)
                 if days is not None and days >= self.cfg.keep_days:
                     set_flag(row, "reminded_keep")
-                    asked.append((row["recording"], days))
+                    asked.append((row["recording"], days, row["autonote_id"]))
             if asked:
                 self.state.save_shared(rows)
-        for rec, days in asked:
+        for rec, days, mid in asked:
             self.notify("録画は消しましたか: 受け取り箱の %s（共有から %d 日たちました。録画の道具の側の元とゴミ箱も）。"
-                        "消したら share-meeting.sh --recording-deleted <autonote_id> で記録する" % (rec, days))
+                        "消したら share-meeting.sh --recording-deleted %s で記録する" % (rec, days, mid))
 
     def check_inbox(self):
         """Reminders for recordings left in the inbox, and the recording_deleted flag when one is gone.
@@ -236,7 +267,9 @@ class Patrol:
         except (OSError, subprocess.TimeoutExpired, ValueError):
             data = None
         if data is None:
-            print("autonote list --json を読めませんでした（AUTONOTE_CLI のパスと、AutoNote が起動しているかを確かめる）")
+            msg = "autonote list --json を読めませんでした（AUTONOTE_CLI のパスと、AutoNote が起動しているかを確かめる）"
+            print(msg)
+            self.sharer._problem(msg)
             self.state.log("patrol", "autonote-list", "failed")
             self.rc = 1
             return
@@ -248,7 +281,9 @@ class Patrol:
             rows = self.state.shared()
             for row in rows:
                 f = flags(row)
-                if "unshared" in f or "missing_notified" in f or row["autonote_id"] in known:
+                if "unshared" in f or row["autonote_id"] in known:
+                    continue
+                if f & {"missing_notified", "vault_missing_notified"}:  # the second is the same news, already told
                     continue
                 set_flag(row, "missing_notified")
                 missing.append(row)

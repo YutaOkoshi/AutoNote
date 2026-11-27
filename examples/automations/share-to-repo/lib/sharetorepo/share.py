@@ -48,28 +48,41 @@ VAULT_UNREADABLE_TODO = ("会議ファイルのフォルダ（VAULT_ROOT）を�
                          "macOS がこのフォルダ（書類フォルダなど）の読み取りを許していない。README の「見回りを入れる」を見る")
 
 
+VAULT_MAX_DEPTH = 8
+
+
 def vault_files(vault_root):
+    """Every meeting file under VAULT_ROOT, at any depth: AutoNote itself walks the whole folder
+    (VaultScanner.meetingFiles), so meetings filed into sub-folders in Obsidian are still its meetings. Like
+    AutoNote, skips `_autonote`, folders and files starting with "." and `_index.md`. A folder that cannot be listed
+    raises VaultUnreadable at the top two levels (the whole vault is closed to us) and is skipped below that."""
     if not os.path.isdir(vault_root):
         return
-    try:
-        names = sorted(os.listdir(vault_root))
-    except OSError as e:
-        raise VaultUnreadable("%s (%s)" % (vault_root, e.strerror or type(e).__name__))
-    for d in names:
-        full = os.path.join(vault_root, d)
-        if d.startswith(".") or d.startswith("_") or not os.path.isdir(full):
-            continue
+    stack = [(vault_root, 0)]
+    while stack:
+        folder, depth = stack.pop(0)
         try:
-            inner = sorted(os.listdir(full))
+            names = sorted(os.listdir(folder))
         except OSError as e:
-            raise VaultUnreadable("%s (%s)" % (full, e.strerror or type(e).__name__))
-        for n in inner:
-            if n.endswith(".md") and not n.startswith("."):
-                yield os.path.join(full, n)
+            if depth <= 1:
+                raise VaultUnreadable("%s (%s)" % (folder, e.strerror or type(e).__name__))
+            continue
+        below = []
+        for n in names:
+            full = os.path.join(folder, n)
+            if n.startswith("."):
+                continue
+            if os.path.isdir(full):
+                if n != "_autonote" and depth < VAULT_MAX_DEPTH and not os.path.islink(full):
+                    below.append((full, depth + 1))
+            elif n.endswith(".md") and n != "_index.md":
+                yield full
+        stack = below + stack
 
 
 def find_vault_file(cfg, autonote_id, hint=None):
-    """The vault file of a meeting, found by `autonote_id` in VAULT_ROOT/*/*.md (titles, and so names, change)."""
+    """The vault file of a meeting, found by `autonote_id` anywhere under VAULT_ROOT (titles, and so names, change;
+    so do the folders people file them into)."""
     candidates = []
     if hint:
         candidates.append(hint if os.path.isabs(hint) else os.path.join(cfg.vault_root, hint))
@@ -176,6 +189,28 @@ class Sharer:
         if text not in self.problems:
             self.problems.append(text)
 
+    def lock_problem(self, e):
+        self._problem("%s（ほかの実行が終わっていない。何日も続くなら、落ちた実行のロックが残っている: README の"
+                      "「失敗したとき」）" % e)
+
+    def _git_problem(self, e):
+        # One line, so that the same failure on the next day is the same todo line.
+        self._problem("git のコマンドが失敗しました: %s" % (str(e).splitlines() or [""])[0][:200])
+
+    def vault_gone(self):
+        """True (and a problem for the owner) when VAULT_ROOT is not there at all, e.g. a disk that is not mounted.
+        Without this every shared meeting would be reported as "file not found", one line each."""
+        if os.path.isdir(self.cfg.vault_root):
+            return False
+        msg = ("会議ファイルのフォルダ（VAULT_ROOT）がありません: %s（外付けのディスクや同期フォルダに置いているなら、"
+               "つながっているかを確かめる）" % self.cfg.vault_root)
+        if "vault-gone" not in self._reported:
+            self._reported.add("vault-gone")
+            print(msg)
+            self.state.log("share", "-", "vault gone")
+        self._problem(msg)
+        return True
+
     def _offline(self, code, sentence, detail=""):
         """Remembers why the repository could not be reached, in words that say what to check."""
         self.offline_why = sentence + ("（git: %s）" % detail if detail else "")
@@ -259,9 +294,10 @@ class Sharer:
         self.state.log("share", "-", "vault unreadable")
         self._report_once("vault", VAULT_UNREADABLE_TODO % e)
 
-    def _pending(self, mid, path, trigger, kind, customer, recording, reason):
+    def _pending(self, mid, path, trigger, kind, customer, recording, reason, recorded_by=None):
         self.state.add_pending({"autonote_id": mid, "meeting_file": path or "", "trigger": trigger, "kind": kind or "",
-                                "customer": customer or "", "recording": recording or "", "reason": reason})
+                                "customer": customer or "", "recording": recording or "", "reason": reason,
+                                "recorded_by": recorded_by or ""})
 
     def send_notices(self):
         for text in self.notices:
@@ -274,9 +310,10 @@ class Sharer:
                 notify.flush_outbox(self.cfg, self.state)
         except LockTimeout as e:
             print(e)
+            self.lock_problem(e)
 
     # -- commands ------------------------------------------------------------------------------------------------
-    def share_file(self, path, kind=None, customer=None, recording=None, trigger="manual"):
+    def share_file(self, path, kind=None, customer=None, recording=None, trigger="manual", recorded_by=None):
         path = os.path.abspath(path)
         if not os.path.isfile(path):
             print("会議ファイルがありません: %s" % path)
@@ -292,32 +329,44 @@ class Sharer:
             with Lock(self.cfg):
                 self._began = False
                 try:
-                    rc = self._share_locked(path, meeting, kind, customer, recording, trigger)
+                    rc = self._share_locked(path, meeting, kind, customer, recording, trigger, recorded_by)
                 except GitError as e:
                     print(e)
+                    self._git_problem(e)
                     self._put_back()
                     self.state.log("share", mid, "git-error")
-                    self._pending(mid, path, trigger, kind, customer, recording, "git")
+                    self._pending(mid, path, trigger, kind, customer, recording, "git", recorded_by)
                     rc = 1
                 except Exception:
                     self._put_back()  # do not leave half-written files for the next run
                     raise
         except LockTimeout as e:
             print("%s（pending.tsv に入れました。--retry-pending か見回りで送り直す）" % e)
-            self._pending(mid, path, trigger, kind, customer, recording, "lock")
+            self.lock_problem(e)
+            self._pending(mid, path, trigger, kind, customer, recording, "lock", recorded_by)
             return 1
         self.send_notices()
         return rc
 
-    def _share_locked(self, path, m, kind, customer, recording, trigger):
+    def _share_locked(self, path, m, kind, customer, recording, trigger, recorded_by_arg=None):
         cfg, state = self.cfg, self.state
         mid = m.autonote_id
         rows = state.shared()
         prev = next((r for r in rows if r["autonote_id"] == mid), None)
         was_pending = any(r["autonote_id"] == mid for r in state.pending())
+        kind_given = bool(kind)
         kind = kind or (prev["kind"] if prev and prev["kind"] else "internal")
+        if (trigger == "manual" and not kind_given and kind == "internal"
+                and (recording is not None or customer is not None)):
+            # A recording or a customer usually means a customer meeting; as internal its bookmarks are published.
+            print("警告: --kind を省いたので internal（社内）として載せます。顧客の会議なら --kind customer を付けて"
+                  "載せ直す（internal の議事録にはブックマークの節も載る）")
+            state.log("share", mid, "warning", "kind left out")
+        prev_recording = recording_name(prev["recording"]) if prev and prev["recording"] else ""
         if recording is None:
-            recording = prev["recording"] if prev else ""
+            recording = prev_recording
+        # The marks about a recording belong to the recording that was named, not to the meeting.
+        rec_changed = prev is not None and recording != prev_recording
         parsed = split.parse_recording_name(recording) if recording else None
         if customer is None:
             customer = prev["customer"] if prev and prev["customer"] else ""
@@ -343,13 +392,17 @@ class Sharer:
                 print("警告: 受け取り箱にありません: %s（名前の打ち間違いなら --recording を直して載せ直す。同期が遅れて"
                       "いるだけなら気にしなくてよい）" % recording)
                 state.log("share", mid, "warning", "recording not in inbox")
-        recorded_by = cfg.default_recorded_by if kind == "customer" else cfg.owner_name
-        deleted = bool(prev) and "recording_deleted" in flags(prev)
+        recorded_by = (recorded_by_arg or "").strip()
+        if not recorded_by and prev and "recorded_by_given" in flags(prev):
+            recorded_by = prev["recorded_by"]  # a name given by hand stays with the meeting
+        if not recorded_by:
+            recorded_by = cfg.default_recorded_by if kind == "customer" else cfg.owner_name
+        deleted = bool(prev) and "recording_deleted" in flags(prev) and not rec_changed
         rec_state = "対象外" if not recording else ("はい" if deleted else "まだ")
 
         reason = self._check_repo()
         if reason:
-            self._pending(mid, path, trigger, kind, customer, recording, "clone")
+            self._pending(mid, path, trigger, kind, customer, recording, "clone", recorded_by_arg)
             return 1
         repo_dir = cfg.repo_dir
         pre = self._begin()
@@ -372,11 +425,11 @@ class Sharer:
         if status == "conflict":
             self._conflict(detail, mid)
             self._mirror()
-            self._pending(mid, path, trigger, kind, customer, recording, "conflict")
+            self._pending(mid, path, trigger, kind, customer, recording, "conflict", recorded_by_arg)
             return 1
         self._mirror()
         if status == "offline":
-            self._pending(mid, path, trigger, kind, customer, recording, detail)
+            self._pending(mid, path, trigger, kind, customer, recording, detail, recorded_by_arg)
             state.log("share", mid, "pending (%s)" % detail)
             print("push できませんでした: %s。clone に commit を残し、pending.tsv に入れました（--retry-pending で送り直す）"
                   % self.offline_why)
@@ -392,7 +445,13 @@ class Sharer:
                     "kind": kind, "customer": customer, "recorded_by": recorded_by, "recording": recording})
         set_flag(row, "unshared", False)
         set_flag(row, "missing_notified", False)
-        notice = self._share_notice(row, m, minutes_rel, stem, committed or was_pending or not prev)
+        set_flag(row, "vault_missing_notified", False)
+        if (recorded_by_arg or "").strip():
+            set_flag(row, "recorded_by_given")
+        if rec_changed:
+            for flag in ("recording_deleted", "inbox_missing_notified", "reminded_keep"):
+                set_flag(row, flag, False)
+        notice = self._share_notice(row, m, minutes_rel, stem, committed or was_pending or not prev, rec_changed)
         if notice:
             self.notices.append(notice)
         if prev is None:
@@ -400,10 +459,12 @@ class Sharer:
         state.save_shared(rows)
         state.remove_pending(mid)
         state.log("share", mid, "ok %s" % verb if committed else "ok unchanged")
-        print("共有しました: %s" % minutes_rel)
+        print("共有しました: %s（autonote_id: %s）" % (minutes_rel, mid))
         return 0
 
-    def _share_notice(self, row, m, minutes_rel, stem, changed):
+    def _share_notice(self, row, m, minutes_rel, stem, changed, rec_changed=False):
+        """The notice for a share, or None. The day by which the recording must be deleted goes into the first
+        notice, and into a later one when the recording was named (or renamed) on that share."""
         f = flags(row)
         dur = m.fm.get("duration_min", "").strip()
         when = "%s %s" % (short_date(m.date), m.start) + ("・%s 分" % dur if dur else "")
@@ -423,11 +484,13 @@ class Sharer:
                 return "文字起こしだけ並びました: %s（%s）%s%s" % (m.title, when, where, deadline)
             set_flag(row, "notified_minutes")
             return "議事録が並びました: %s（%s）%s%s" % (m.title, when, where, deadline)
+        if not rec_changed:
+            deadline = ""
         if m.status != "transcript_only" and "notified_minutes" not in f:
             set_flag(row, "notified_minutes")
-            return "議事録が並びました: %s（%s）%s" % (m.title, when, where)
-        if changed:
-            return "更新しました: %s（%s）%s" % (m.title, when, where)
+            return "議事録が並びました: %s（%s）%s%s" % (m.title, when, where, deadline)
+        if changed or deadline:
+            return "更新しました: %s（%s）%s%s" % (m.title, when, where, deadline)
         return None
 
     def unshare(self, mid):
@@ -438,6 +501,7 @@ class Sharer:
                     rc = self._unshare_locked(mid)
                 except GitError as e:
                     print(e)
+                    self._git_problem(e)
                     self._put_back()
                     self._pending(mid, "", "unshare", "", "", "", "git")
                     rc = 1
@@ -446,6 +510,7 @@ class Sharer:
                     raise
         except LockTimeout as e:
             print("%s（pending.tsv に入れました）" % e)
+            self.lock_problem(e)
             self._pending(mid, "", "unshare", "", "", "", "lock")
             return 1
         self.send_notices()
@@ -498,9 +563,10 @@ class Sharer:
         print("取り下げました: %s" % mid)
         return 0
 
-    def recording_deleted(self, mid):
+    def recording_deleted(self, mid, undo=False):
         """share-meeting.sh --recording-deleted <id>: the owner says the recording of this meeting is gone.
-        The way to reach `source_recording_deleted: はい` when there is no inbox folder for the patrol to watch."""
+        The way to reach `source_recording_deleted: はい` when there is no inbox folder for the patrol to watch.
+        With --undo the mark is taken back (a recording renamed in the inbox looks like "seen, then gone")."""
         try:
             with Lock(self.cfg):
                 self._began = False
@@ -513,52 +579,73 @@ class Sharer:
                     print("この会議は --recording なしで共有されています（録画の印は「対象外」）: %s。録画があるなら、"
                           "--recording <録画のファイル名> を付けて載せ直してから" % mid)
                     return 1
-                set_flag(row, "recording_deleted")
+                set_flag(row, "recording_deleted", not undo)
                 self.state.save_shared(rows)
-                self.state.log("share", mid, "recording deleted (by hand)")
+                if undo:
+                    # Forget that the inbox ever showed it: otherwise the next patrol sees "seen, then gone" again.
+                    name = recording_name(row["recording"])
+                    seen = self.state.inbox_seen()
+                    kept = [r for r in seen if recording_name(r["recording"]) != name]
+                    if len(kept) != len(seen):
+                        self.state.save_inbox_seen(kept)
+                self.state.log("share", mid, "recording deleted (by hand)" if not undo else "recording not deleted (undo)")
                 try:
                     rc = self.apply_deleted_flags()
                 except GitError as e:
                     print(e)
+                    self._git_problem(e)
                     self._put_back()
                     rc = 1
                 if rc == 0 and self.repo.ok() and self.repo.ahead() > 0:
                     rc = self.push_ahead()  # the line is already in a commit that has not gone out yet
         except LockTimeout as e:
             print(e)
+            self.lock_problem(e)
             return 1
         finally:
             self.send_notices()
-        print("録画を「消した」にしました: %s" % mid if rc == 0
-              else "録画を「消した」と記録しました。置き場への反映は次の送り直し（--retry-pending か見回り）で行います: %s" % mid)
+        word = "まだ" if undo else "消した"
+        print("録画を「%s」にしました: %s" % (word, mid) if rc == 0
+              else "録画を「%s」と記録しました。置き場への反映は次の送り直し（--retry-pending か見回り）で行います: %s" % (word, mid))
         return rc
 
-    def apply_deleted_flags(self):
-        """Under the lock: writes `source_recording_deleted: はい` into the minutes of every meeting whose row has
-        the recording_deleted flag, and pushes. The flag in shared.tsv is the truth and the repository follows it,
-        so a commit lost to a conflict or a failed push is simply made again on a later run. Needs no vault file
-        (launchd may not be allowed to read the vault)."""
-        cfg = self.cfg
-        todo = []
+    def _deleted_marks_to_fix(self):
+        """(row, path, text, frontmatter, wanted value) for every shared meeting whose minutes in the clone disagree
+        with the recording_deleted flag of its row."""
+        out = []
         for row in self.state.shared():
             f = flags(row)
             rel = nfc(row["minutes_file"])
-            path = os.path.join(cfg.repo_dir, rel)
-            if "recording_deleted" not in f or "unshared" in f or not rel or not os.path.isfile(path):
+            path = os.path.join(self.cfg.repo_dir, rel)
+            if "unshared" in f or not row["recording"] or not rel or not os.path.isfile(path):
                 continue
             with open(path, encoding="utf-8") as fh:
                 text = fh.read()
             fm = fmx.parse(fmx.split_document(text)[0])
-            if fm.get("source_recording_deleted") != "はい":
-                todo.append((row, path, text, fm))
-        if not todo:
+            want = "はい" if "recording_deleted" in f else "まだ"
+            have = fm.get("source_recording_deleted")
+            if have != want and "はい" in (have, want):
+                out.append((row, path, text, fm, want))
+        return out
+
+    def apply_deleted_flags(self):
+        """Under the lock: makes `source_recording_deleted` in the minutes of every shared meeting follow the
+        recording_deleted flag of its row (はい with the flag; back to まだ when the flag was taken away), and
+        pushes. The flag in shared.tsv is the truth and the repository follows it, so a commit lost to a conflict or
+        a failed push is simply made again on a later run. Needs no vault file (launchd may not be allowed to read
+        the vault)."""
+        if not self._deleted_marks_to_fix():
             return 0
         if self._check_repo():
             return 1
+        # Read again: _check_repo() has just put back whatever a dead run left half written in these files.
+        todo = self._deleted_marks_to_fix()
+        if not todo:
+            return 0
         pre = self._begin()
-        for row, path, text, fm in todo:
+        for row, path, text, fm, want in todo:
             with open(path, "w", encoding="utf-8") as fh:
-                fh.write(fmx.set_value(text, "source_recording_deleted", "はい"))
+                fh.write(fmx.set_value(text, "source_recording_deleted", want))
             self.repo.commit(("update: %s %s" % (fm.get("date", ""), fm.get("title", row["autonote_id"]))).strip())
         status, detail = self._sync(pre)
         if status == "conflict":
@@ -566,9 +653,9 @@ class Sharer:
             self._mirror()
             return 1
         self._mirror()
-        for row, _, _, _ in todo:
+        for row, _, _, _, want in todo:
             self.state.log("share", row["autonote_id"],
-                           "recording deleted" + ("" if status == "ok" else " (push later)"))
+                           "recording mark -> %s" % want + ("" if status == "ok" else " (push later)"))
         if status == "offline":
             print("push できませんでした: %s（clone に commit を残しました。次の実行で送り直す）" % self.offline_why)
             return 1
@@ -592,8 +679,13 @@ class Sharer:
                     return 1
                 self._mirror()
                 return 0
-        except (LockTimeout, GitError) as e:
+        except LockTimeout as e:
             print(e)
+            self.lock_problem(e)
+            return 1
+        except GitError as e:
+            print(e)
+            self._git_problem(e)
             return 1
         finally:
             self.send_notices()
@@ -605,19 +697,90 @@ class Sharer:
             if row["trigger"] == "unshare":
                 rc |= self.unshare(mid)
                 continue
+            if self.vault_gone():
+                rc = 1
+                continue
             try:
                 path = find_vault_file(self.cfg, mid, row["meeting_file"] or None)
             except VaultUnreadable as e:
                 self.report_vault_unreadable(e)
                 return 1
             if not path:
-                print("会議ファイルが見つかりません（pending のまま）: %s" % mid)
-                self.state.log("share", mid, "retry: vault file missing")
-                rc = 1
+                rc |= self._settle_without_vault_file(row)
                 continue
             rc |= self.share_file(path, kind=row["kind"] or None, customer=row["customer"] or None,
-                                  recording=row["recording"] or None, trigger=row["trigger"] or "retry")
+                                  recording=row["recording"] or None, trigger=row["trigger"] or "retry",
+                                  recorded_by=row["recorded_by"] or None)
+        self.send_notices()
         return rc
+
+    def _settle_without_vault_file(self, prow):
+        """A share waiting in pending.tsv whose vault file is gone (deleted or moved out of VAULT_ROOT).
+
+        If its commit already went out (push_ahead sent what an earlier run left in the clone), the meeting is in
+        the repository and readers see it, so it gets its row in shared.tsv, built from the clone and the pending
+        row, and leaves pending.tsv; otherwise the recording reminders, --recording-deleted and the "AutoNote no
+        longer has it" check would never hear of it. The owner is told either way. Returns the exit code."""
+        cfg, state = self.cfg, self.state
+        mid = prow["autonote_id"]
+        state.log("share", mid, "retry: vault file missing")
+        try:
+            with Lock(cfg):
+                settled = False
+                if self.repo.ok() and not self.repo.dirty():
+                    if self.repo.ahead() > 0:
+                        return 1  # not pushed yet: the push failure is already reported; decide after it goes out
+                    minutes, transcripts = repo_files_for(cfg.repo_dir, mid)
+                    if minutes:
+                        fm = fmx.read_file(os.path.join(cfg.repo_dir, minutes[0]))
+                        rows = state.shared()
+                        row = next((r for r in rows if r["autonote_id"] == mid), None)
+                        if row is None:
+                            row = {"autonote_id": mid, "flags": "", "source_sha256": "",
+                                   "source_path": prow["meeting_file"],
+                                   "first_shared": (prow["added_at"] or "")[:10] or cfg.today().isoformat()}
+                            rows.append(row)
+                        row.update({"minutes_file": nfc(minutes[0]),
+                                    "transcript_file": nfc(transcripts[0]) if transcripts else "",
+                                    "kind": fm.get("kind") or prow["kind"] or row.get("kind") or "internal",
+                                    "customer": fm.get("customer", ""), "recorded_by": fm.get("recorded_by", ""),
+                                    "recording": recording_name(prow["recording"] or row.get("recording") or "")})
+                        set_flag(row, "unshared", False)
+                        set_flag(row, "vault_missing_notified")  # said below; the patrol need not say it again
+                        if prow["recorded_by"]:
+                            set_flag(row, "recorded_by_given")
+                        if fm.get("source_recording_deleted") == "はい":
+                            set_flag(row, "recording_deleted")
+                        stem = os.path.basename(minutes[0])[:-len(".md")]
+                        notice = self._share_notice(row, _ClonedMeeting(fm), row["minutes_file"], stem, False)
+                        if notice:
+                            self.notices.append(notice)
+                        state.save_shared(rows)
+                        state.remove_pending(mid)
+                        state.log("share", mid, "settled from the clone")
+                        settled = True
+        except LockTimeout as e:
+            print(e)
+            self.lock_problem(e)
+            return 1
+        except GitError as e:
+            print(e)
+            self._git_problem(e)
+            return 1
+        if settled:
+            msg = ("【%sへ】送り直しを待っていた会議の、AutoNote 側の会議ファイルが見つかりません: %s（置き場には載っています: "
+                   "%s）。このままでよければ何もしない。取り下げるなら share-meeting.sh --unshare %s"
+                   % (cfg.owner_name, mid, row["minutes_file"], mid))
+            print(msg)
+            state.add_todo(msg)
+            self.notices.append(msg)
+            return 0
+        msg = ("送り直しを待っている会議の、AutoNote 側の会議ファイルが見つかりません: %s（%s）。置き場には載っていません。"
+               "VAULT_ROOT の外に動かしたのなら戻す。AutoNote から消したのなら share-meeting.sh --unshare %s で待ちから外す"
+               % (mid, prow["meeting_file"] or "場所の記録なし", mid))
+        print(msg)
+        self._problem(msg)
+        return 1
 
     def rebuild_index(self):
         try:
@@ -637,8 +800,13 @@ class Sharer:
                     return 1
                 print("INDEX.md を作り直しました")
                 return 0
-        except (LockTimeout, GitError) as e:
+        except LockTimeout as e:
             print(e)
+            self.lock_problem(e)
+            return 1
+        except GitError as e:
+            print(e)
+            self._git_problem(e)
             return 1
         finally:
             self.send_notices()
@@ -659,6 +827,18 @@ class Sharer:
             return 1
         print("読む人向けの写しを作り直しました: %s" % self.cfg.mirror_dir)
         return 0
+
+
+class _ClonedMeeting:
+    """What _share_notice() needs to know about a meeting, read from the minutes in the clone."""
+
+    def __init__(self, fm):
+        self.fm = fm
+        self.title = fm.get("title", "")
+        self.date = fm.get("date", "")
+        self.start = fm.get("start", "")
+        self.status = fm.get("status", "")
+        self.year = self.date[:4]
 
 
 def _write(path, text):

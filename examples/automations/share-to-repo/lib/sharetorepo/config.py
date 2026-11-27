@@ -9,6 +9,10 @@ PACKAGE_ROOT = os.path.dirname(LIB_DIR)
 _VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
 
 
+class ConfigError(Exception):
+    """A setting that cannot be used as written. The message names the setting and the value."""
+
+
 def _expand(value, known):
     def rep(m):
         name = m.group(1) or m.group(2)
@@ -95,18 +99,26 @@ class Config:
         self.slack_webhook_op_ref = g("SLACK_WEBHOOK_OP_REF")
         self.op_cmd = g("OP_CMD", "op")
         self.autonote_cli = g("AUTONOTE_CLI")
-        self.keep_days = int(g("RECORDING_KEEP_DAYS", "7"))
-        self.owner_days = int(g("RECORDING_OWNER_DAYS", "21"))
-        self.outbox_todo_days = int(g("OUTBOX_TODO_DAYS", "3"))
-        self.lock_timeout = float(g("SHARE_LOCK_TIMEOUT_SEC", "120"))
-        self.lock_poll = float(g("SHARE_LOCK_POLL_SEC", "2"))
-        self.git_timeout = float(g("SHARE_GIT_TIMEOUT_SEC", "120"))
+        n = self._number
+        self.keep_days = n("RECORDING_KEEP_DAYS", "7", int)
+        self.owner_days = n("RECORDING_OWNER_DAYS", "21", int)
+        self.outbox_todo_days = n("OUTBOX_TODO_DAYS", "3", int)
+        self.lock_timeout = n("SHARE_LOCK_TIMEOUT_SEC", "120", float)
+        self.lock_poll = n("SHARE_LOCK_POLL_SEC", "2", float)
+        self.git_timeout = n("SHARE_GIT_TIMEOUT_SEC", "120", float)
         self.templates_dir = g("SHARE_TEMPLATES_DIR", os.path.join(PACKAGE_ROOT, "templates"))
         self._now = g("SHARE_NOW")
 
     def get(self, key, default=None):
         v = self.values.get(key)
         return v if v not in (None, "") else default
+
+    def _number(self, key, default, cast):
+        raw = self.get(key, default)
+        try:
+            return cast(raw)
+        except ValueError:
+            raise ConfigError("%s は半角の数字で書く（いまの値: %s）" % (key, raw))
 
     def now(self):
         """Local time, or SHARE_NOW (ISO 8601) for tests."""

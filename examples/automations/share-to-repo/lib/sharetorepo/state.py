@@ -6,7 +6,8 @@ import time
 
 SHARED_COLUMNS = ["autonote_id", "minutes_file", "transcript_file", "source_sha256", "source_path", "first_shared",
                   "kind", "customer", "recorded_by", "recording", "flags"]
-PENDING_COLUMNS = ["autonote_id", "meeting_file", "trigger", "kind", "customer", "recording", "added_at", "reason"]
+PENDING_COLUMNS = ["autonote_id", "meeting_file", "trigger", "kind", "customer", "recording", "added_at", "reason",
+                   "recorded_by"]
 INBOX_SEEN_COLUMNS = ["recording", "first_seen", "flags"]
 
 

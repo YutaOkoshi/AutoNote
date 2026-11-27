@@ -395,6 +395,115 @@ class ShareTests(SandboxTest):
         self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"))
         self.assertIn("source_recording_deleted: はい\n", self.sb.remote_show(MIN))
 
+    def test_recording_given_on_a_later_share_puts_the_deadline_in_the_notice(self):
+        # C-F3 (round 3): the deadline used to be said only in the very first notice
+        path = self.sb.vault_file(STANDARD)
+        self.assertOk(self.sb.share(path, "--kind", "customer", now="2026-12-02T11:10:00+09:00"))
+        self.assertNotIn("までに消してください", self.sb.dry_messages()[-1]["text"])
+        self.assertOk(self.sb.share(path, "--recording", REC, now="2026-12-03T10:00:00+09:00"))
+        last = self.sb.dry_messages()[-1]["text"]
+        self.assertIn("更新しました", last)
+        self.assertIn("12/9 までに消してください", last)
+        write(path, read(path).replace("一緒に見る。", "一緒に見直す。"))
+        self.assertOk(self.sb.share(path, now="2026-12-04T10:00:00+09:00"))
+        self.assertIn("更新しました", self.sb.dry_messages()[-1]["text"])
+        self.assertNotIn("までに消してください", self.sb.dry_messages()[-1]["text"])  # said once
+
+    def test_new_recording_name_takes_back_the_deleted_mark(self):
+        # C-F4 (round 3): the mark belongs to the recording that was named, not to the meeting
+        self.assertOk(self.share_standard())
+        self.assertOk(self.sb.share("--recording-deleted", STANDARD_ID, now="2026-12-05T10:00:00+09:00"))
+        self.assertIn("source_recording_deleted: はい\n", self.sb.remote_show(MIN))
+        other = "2026-12-02_1000_サンプル商事_トライアル打合せ_後半.mp4"
+        self.assertOk(self.sb.share(self.sb.vault_file(STANDARD), "--recording", other,
+                                    now="2026-12-06T10:00:00+09:00"))
+        row = self.sb.tsv("shared.tsv")[0]
+        self.assertEqual(row["recording"], other)
+        self.assertNotIn("recording_deleted", row["flags"])
+        self.assertIn("source_recording_deleted: まだ\n", self.sb.remote_show(MIN))
+        self.assertOk(self.sb.patrol(now="2026-12-07T09:00:00+09:00"))
+        self.assertIn("source_recording_deleted: まだ\n", self.sb.remote_show(MIN))
+
+    def test_recording_deleted_can_be_undone(self):
+        # C-F4 (round 3)
+        self.assertOk(self.share_standard())
+        self.assertOk(self.sb.share("--recording-deleted", STANDARD_ID, now="2026-12-05T10:00:00+09:00"))
+        self.assertIn("source_recording_deleted: はい\n", self.sb.remote_show(MIN))
+        proc = self.sb.share("--recording-deleted", STANDARD_ID, "--undo", now="2026-12-05T11:00:00+09:00")
+        self.assertOk(proc)
+        self.assertIn("source_recording_deleted: まだ\n", self.sb.remote_show(MIN))
+        self.assertNotIn("recording_deleted", self.sb.tsv("shared.tsv")[0]["flags"])
+        self.assertOk(self.sb.patrol(now="2026-12-06T09:00:00+09:00"))
+        self.assertIn("source_recording_deleted: まだ\n", self.sb.remote_show(MIN))
+        self.assertOk(self.sb.share("--recording-deleted", STANDARD_ID, "--undo"))  # again: nothing to do
+        self.assertOk(self.sb.share("--recording-deleted", "--undo"), 2)
+        self.assertOk(self.sb.share("--recording-deleted", STANDARD_ID, "--oops"), 2)
+
+    def test_recording_deleted_does_not_publish_what_a_dead_run_left_half_written(self):
+        # C-F6 (round 3): it used to read the file first and put the clone back afterwards
+        self.assertOk(self.share_standard())
+        path = os.path.join(self.sb.repo, MIN)
+        write(path, read(path) + "\n書きかけの 1 行\n")
+        self.assertOk(self.sb.share("--recording-deleted", STANDARD_ID, now="2026-12-05T10:00:00+09:00"))
+        shown = self.sb.remote_show(MIN)
+        self.assertIn("source_recording_deleted: はい\n", shown)
+        self.assertNotIn("書きかけの 1 行", shown)
+
+    def test_kind_left_out_with_a_recording_or_a_customer_warns(self):
+        # U-F1 (round 3): the default stays internal, but a customer meeting shared that way shows its bookmarks
+        path = self.sb.vault_file(STANDARD)
+        proc = self.sb.share(path, "--recording", REC)
+        self.assertOk(proc)
+        self.assertIn("警告", proc.stdout)
+        self.assertIn("--kind customer", proc.stdout)
+        self.assertIn("kind: internal\n", self.sb.remote_show(MIN))
+        proc = self.sb.share(self.sb.vault_file(NO_TRANSCRIPT), "--customer", "見本食堂")
+        self.assertOk(proc)
+        self.assertIn("--kind customer", proc.stdout)
+        proc = self.sb.share(self.sb.vault_file(TRANSCRIPT_ONLY))
+        self.assertOk(proc)
+        self.assertNotIn("--kind customer", proc.stdout)
+        proc = self.sb.share(path, "--kind", "customer", "--recording", REC)
+        self.assertOk(proc)
+        self.assertNotIn("--kind customer", proc.stdout)
+        proc = self.sb.share(path, "--recording", REC)  # the kind is kept from the earlier share
+        self.assertOk(proc)
+        self.assertNotIn("--kind customer", proc.stdout)
+
+    def test_recorded_by_can_be_given_and_is_kept(self):
+        # U-F6 (round 3)
+        path = self.sb.vault_file(STANDARD)
+        self.assertOk(self.sb.share(path, "--kind", "internal"))
+        self.assertIn('recorded_by: "オーナー"\n', self.sb.remote_show(MIN))
+        self.assertOk(self.sb.share(path, "--recorded-by", "担当者 C"))
+        self.assertIn('recorded_by: "担当者 C"\n', self.sb.remote_show(MIN))
+        self.assertEqual(self.sb.tsv("shared.tsv")[0]["recorded_by"], "担当者 C")
+        write(path, read(path).replace("一緒に見る。", "一緒に見直す。"))
+        self.assertOk(self.sb.patrol())  # the patrol's re-share keeps the name
+        shown = self.sb.remote_show(MIN)
+        self.assertIn("一緒に見直す。", shown)
+        self.assertIn('recorded_by: "担当者 C"\n', shown)
+        self.assertOk(self.sb.share(path, "--kind", "customer"))  # so does a change of kind
+        self.assertIn('recorded_by: "担当者 C"\n', self.sb.remote_show(MIN))
+        moved = self.sb.remote + ".away"
+        os.rename(self.sb.remote, moved)
+        self.assertOk(self.sb.share(path, "--recorded-by", "担当者 D"), 1)
+        self.assertEqual(self.sb.tsv("pending.tsv")[0]["recorded_by"], "担当者 D")
+        os.rename(moved, self.sb.remote)
+        self.assertOk(self.sb.share("--retry-pending"))
+        self.assertIn('recorded_by: "担当者 D"\n', self.sb.remote_show(MIN))
+        self.assertOk(self.sb.share(path, "--recorded-by"), 2)
+        self.assertOk(self.sb.share(path, "--recorded-by", ""), 2)
+        # without the argument the name still follows the kind
+        self.assertOk(self.sb.share(self.sb.vault_file(NO_TRANSCRIPT), "--kind", "customer"))
+        self.assertIn('recorded_by: "営業担当"\n', self.sb.remote_show("2026/2026-12-04_0930_社内定例.md"))
+
+    def test_share_output_names_the_autonote_id(self):
+        # U-F11 (round 3): --unshare and --recording-deleted take it
+        proc = self.share_standard()
+        self.assertOk(proc)
+        self.assertIn("共有しました: %s（autonote_id: %s）" % (MIN, STANDARD_ID), proc.stdout)
+
     def test_wrong_branch_name_is_named_in_the_message(self):
         # U-F4 (round 2)
         self.sb.set_config(SHARE_BRANCH="master")

@@ -47,6 +47,32 @@ class ConfigFileTests(unittest.TestCase):
                 self.assertNotRegex(body, r'"\s+#', line)
 
 
+class ConfigMistakeTests(helpers.SandboxTest):
+    def test_missing_config_file_gets_one_warning_line(self):
+        # U-F7 (round 3): a mistyped SHARE_CONFIG used to run on defaults without a word
+        missing = os.path.join(self.sb.root, "nope.env")
+        proc = self.sb.share("--print-template", "README.md", env={"SHARE_CONFIG": missing})
+        self.assertOk(proc)
+        self.assertEqual(len([l for l in proc.stderr.splitlines() if "設定ファイルがありません" in l]), 1)
+        self.assertIn(missing, proc.stderr)
+        self.assertNotIn("設定ファイル", proc.stdout)  # stdout is the template, often redirected to a file
+        proc = self.sb.share("--print-template", "README.md")
+        self.assertOk(proc)
+        self.assertEqual(proc.stderr, "")
+
+    def test_days_that_are_not_a_number_say_which_setting_and_end_with_2(self):
+        # U-F8 (round 3): it used to be a Python traceback
+        for script, args in ((helpers.SHARE, ["--retry-pending"]), (helpers.PATROL, [])):
+            proc = self.sb.run(script, *args, env={"RECORDING_KEEP_DAYS": "七"})
+            self.assertOk(proc, 2)
+            self.assertIn("RECORDING_KEEP_DAYS", proc.stderr)
+            self.assertIn("七", proc.stderr)
+            self.assertNotIn("Traceback", proc.stderr)
+        proc = self.sb.share("--retry-pending", env={"SHARE_LOCK_TIMEOUT_SEC": "長め"})
+        self.assertOk(proc, 2)
+        self.assertIn("SHARE_LOCK_TIMEOUT_SEC", proc.stderr)
+
+
 class LaunchdTemplateTests(unittest.TestCase):
     def test_both_plists_are_valid_after_the_readme_substitution(self):
         # C-F18 / U-F6 (round 2): the shell form and the app form
