@@ -121,6 +121,18 @@ class State:
         stamp = self.cfg.now().strftime("%Y-%m-%d %H:%M")
         atomic_write(path, current + "- [ ] %s %s\n" % (stamp, text))
 
+    def add_notice(self, text):
+        """state/notices.md: plain announcements (macos mode), newest last. todo.md keeps only things to act on."""
+        path = self.path("notices.md")
+        current = ""
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                current = f.read()
+        if not current:
+            current = "# お知らせ（共有スクリプトが書く。読んだら消してよい。要対応は todo.md）\n\n"
+        stamp = self.cfg.now().strftime("%Y-%m-%d %H:%M")
+        atomic_write(path, current + "- %s %s\n" % (stamp, _clean(text)))
+
     # logs/<kind>-YYYY-MM.log
     def log(self, kind, *fields):
         now = self.cfg.now()

@@ -95,7 +95,7 @@ class NotifyTests(SandboxTest):
         self.assertEqual(len(Hook.received), 1)
         self.assertNotIn("SECRET-TOKEN", proc.stdout + proc.stderr + self.all_state_text())
 
-    def test_macos_mode_uses_notify_cmd_and_todo(self):
+    def test_macos_mode_uses_notify_cmd_and_notices_file(self):
         seen = os.path.join(self.sb.root, "notified.txt")
         fake = os.path.join(self.sb.root, "fake-notify")
         write(fake, '#!/bin/sh\nprintf "%%s|%%s\\n" "$1" "$2" >> "%s"\n' % seen)
@@ -105,7 +105,27 @@ class NotifyTests(SandboxTest):
         with open(seen, encoding="utf-8") as f:
             line = f.read()
         self.assertIn("議事録が並びました", line)
-        self.assertIn("議事録が並びました", self.sb.state_file("todo.md"))
+        # U-F7: a plain notice goes to notices.md; todo.md is only for things that need a hand
+        self.assertIn("議事録が並びました", self.sb.state_file("notices.md"))
+        self.assertNotIn("議事録が並びました", self.sb.state_file("todo.md"))
+
+    def test_op_read_runs_once_per_run(self):
+        # U-F5: each `op read` may ask for approval, so one run reads the webhook URL only once.
+        count = os.path.join(self.sb.root, "op-count")
+        fake_op = os.path.join(self.sb.root, "fake-op")
+        write(fake_op, "#!/bin/sh\necho x >> '%s'\necho '%s'\n" % (count, self.url))
+        os.chmod(fake_op, 0o755)
+        self.sb.set_config(NOTIFY_MODE="slack", SLACK_WEBHOOK_OP_REF="op://Vault/Item/url", OP_CMD=fake_op)
+        from helpers import NO_TRANSCRIPT, TRANSCRIPT_ONLY
+        self.assertOk(self.sb.share(self.sb.vault_file(STANDARD), now=DAY0))
+        self.assertOk(self.sb.share(self.sb.vault_file(NO_TRANSCRIPT), now=DAY0))
+        self.assertEqual(len(os.listdir(os.path.join(self.sb.state, "outbox"))), 2)
+        os.remove(count)
+        self.start_server()
+        self.assertOk(self.sb.share(self.sb.vault_file(TRANSCRIPT_ONLY), now=DAY0))  # 2 resent + 1 new
+        self.assertEqual(len(Hook.received), 3)
+        with open(count) as f:
+            self.assertEqual(len(f.read().split()), 1)
 
     def test_macos_mode_failure_goes_to_outbox(self):
         self.sb.set_config(NOTIFY_MODE="macos", NOTIFY_CMD="/usr/bin/false")

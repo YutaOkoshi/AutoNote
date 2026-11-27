@@ -1,5 +1,6 @@
-"""Notices. NOTIFY_MODE: dry-run (state/outbox-dry/ only), macos (NOTIFY_CMD or osascript, plus a todo.md line),
-slack (Incoming Webhook; the URL comes from SLACK_WEBHOOK_URL or `op read $SLACK_WEBHOOK_OP_REF`).
+"""Notices. NOTIFY_MODE: dry-run (state/outbox-dry/ only), macos (NOTIFY_CMD or osascript on this Mac only, plus a
+line in state/notices.md), slack (Incoming Webhook; the URL comes from SLACK_WEBHOOK_URL or
+`op read $SLACK_WEBHOOK_OP_REF`, read at most once per run and kept in memory only).
 
 The webhook URL is a secret: it is never written to logs, state files or stdout. A notice that cannot be sent is kept
 in state/outbox/ and sent again on the next run; after OUTBOX_TODO_DAYS it also goes to todo.md once.
@@ -41,7 +42,7 @@ def _deliver(cfg, state, msg):
             raise NotifyError("macos: %s" % type(e).__name__)
         if p.returncode != 0:
             raise NotifyError("macos: exit %d" % p.returncode)
-        state.add_todo("%s: %s" % (title, text))
+        state.add_notice("%s: %s" % (title, text))
         return
     if mode == "slack":
         url = _webhook_url(cfg)
@@ -59,19 +60,31 @@ def _deliver(cfg, state, msg):
     raise NotifyError("NOTIFY_MODE が分かりません: %s" % mode)
 
 
+_op_cache = {}  # op reference -> URL or NotifyError; one `op read` (one approval prompt) per run, memory only
+
+
 def _webhook_url(cfg):
     if cfg.slack_webhook_url:
         return cfg.slack_webhook_url
-    if cfg.slack_webhook_op_ref:
-        try:
-            p = subprocess.run([cfg.op_cmd, "read", cfg.slack_webhook_op_ref], capture_output=True, text=True,
-                               timeout=60)
-        except (OSError, subprocess.TimeoutExpired) as e:
-            raise NotifyError("op read: %s" % type(e).__name__)
-        if p.returncode != 0 or not p.stdout.strip():
-            raise NotifyError("op read: exit %d" % p.returncode)
-        return p.stdout.strip()
+    ref = cfg.slack_webhook_op_ref
+    if ref:
+        if ref not in _op_cache:
+            _op_cache[ref] = _op_read(cfg, ref)
+        got = _op_cache[ref]
+        if isinstance(got, NotifyError):
+            raise got
+        return got
     raise NotifyError("SLACK_WEBHOOK_URL も SLACK_WEBHOOK_OP_REF もありません")
+
+
+def _op_read(cfg, ref):
+    try:
+        p = subprocess.run([cfg.op_cmd, "read", ref], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return NotifyError("op read: %s" % type(e).__name__)
+    if p.returncode != 0 or not p.stdout.strip():
+        return NotifyError("op read: exit %d（1Password のロックを解くか、サービスアカウントで op を使う）" % p.returncode)
+    return p.stdout.strip()
 
 
 def send(cfg, state, title, text):

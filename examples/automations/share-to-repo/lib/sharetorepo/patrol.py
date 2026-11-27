@@ -5,7 +5,8 @@ import subprocess
 from datetime import date
 
 from . import frontmatter as fmx
-from .share import NOTICE_TITLE, Sharer, VaultUnreadable, find_vault_file, sha256_file
+from .share import (NOTICE_TITLE, Sharer, VaultUnreadable, find_vault_file, inbox_recordings, recording_name,
+                    sha256_file)
 from .state import Lock, LockTimeout, flags, set_flag
 from .gitrepo import GitError
 
@@ -47,6 +48,11 @@ class Patrol:
             except Exception as e:  # one broken step must not stop the others
                 print("見回りの %s で止まりました: %s: %s" % (name, type(e).__name__, e))
                 self.state.log("patrol", name, "error", type(e).__name__)
+                self.rc = 1
+            try:
+                self.sharer.send_notices()  # e.g. "VAULT_ROOT を読めません" queued by a step
+            except Exception as e:
+                print("知らせを送る途中で止まりました: %s: %s" % (type(e).__name__, e))
                 self.rc = 1
         self.state.log("patrol", "done", "rc=%d" % self.rc)
         return self.rc
@@ -101,11 +107,18 @@ class Patrol:
                         % (rec, self.cfg.keep_days))
 
     def check_inbox(self):
+        """Reminders for recordings left in the inbox, and `source_recording_deleted: はい` when one is gone.
+
+        Days count from the first share (or from the day the patrol first saw a file nobody shared), and a reminder
+        goes out on the due day (days >= KEEP_DAYS), like ask_after_keep_days. A shared recording counts as deleted
+        only once it has been seen in the inbox and then is not there; a name never seen gets one "見当たらない"
+        notice instead (a typo, or the synced folder is late). An inbox with no recordings at all skips both checks,
+        because a synced folder can look empty for a while.
+        """
         cfg = self.cfg
         today = cfg.today()
         try:
-            present = sorted(n for n in os.listdir(cfg.inbox_dir)
-                             if not n.startswith(".") and os.path.isfile(os.path.join(cfg.inbox_dir, n)))
+            present = inbox_recordings(cfg.inbox_dir)
         except OSError as e:
             print("受け取り箱を読めません: %s" % e)
             self.state.add_todo("受け取り箱（INBOX_DIR）を読めません: %s" % e)
@@ -114,30 +127,47 @@ class Patrol:
         messages = []
         gone = []
         with Lock(cfg):
-            seen = {r["recording"]: r for r in self.state.inbox_seen()}
+            seen = {}
+            for r in self.state.inbox_seen():
+                r["recording"] = recording_name(r["recording"])
+                seen.setdefault(r["recording"], r)
             rows = self.state.shared()
-            by_rec = {r["recording"]: r for r in rows if r["recording"] and "unshared" not in flags(r)}
+            by_rec = {recording_name(r["recording"]): r for r in rows
+                      if r["recording"] and "unshared" not in flags(r)}
             for name in present:
                 s = seen.get(name)
                 if s is None:
                     s = seen[name] = {"recording": name, "first_seen": today.isoformat(), "flags": ""}
-                start = by_rec[name]["first_shared"] if name in by_rec else s["first_seen"]
+                shared = name in by_rec
+                start = by_rec[name]["first_shared"] if shared else s["first_seen"]
+                since = "共有から" if shared else "置いてから"
                 days = _days(start, today)
                 if days is None:
                     continue
                 f = flags(s)
-                if days > cfg.keep_days and "notified_keep" not in f:
+                if days >= cfg.keep_days and "notified_keep" not in f:
                     set_flag(s, "notified_keep")
-                    messages.append(("受け取り箱の録画を消してください（置いてから %d 日を過ぎました）: %s"
-                                     % (cfg.keep_days, name), False))
-                if days > cfg.owner_days and "notified_owner" not in f:
+                    messages.append(("受け取り箱の録画を消してください（%s %d 日たちました）: %s"
+                                     % (since, cfg.keep_days, name), False))
+                if days >= cfg.owner_days and "notified_owner" not in f:
                     set_flag(s, "notified_owner")
-                    messages.append(("【%sへ】受け取り箱に %d 日を過ぎた録画が残っています: %s"
-                                     % (cfg.owner_name, cfg.owner_days, name), True))
+                    messages.append(("【%sへ】受け取り箱に、%s %d 日たった録画が残っています: %s"
+                                     % (cfg.owner_name, since, cfg.owner_days, name), True))
             self.state.save_inbox_seen(list(seen.values()))
-            for rec, row in by_rec.items():
-                if rec not in present and "recording_deleted" not in flags(row):
-                    gone.append(row)
+            missing = []
+            if present:
+                for rec, row in by_rec.items():
+                    if rec in present or "recording_deleted" in flags(row):
+                        continue
+                    if rec in seen:
+                        gone.append(row)
+                    elif "inbox_missing_notified" not in flags(row):
+                        set_flag(row, "inbox_missing_notified")
+                        missing.append(rec)
+                        messages.append(("受け取り箱に見当たらない録画があります: %s（名前の打ち間違いなら --recording を直して"
+                                         "載せ直す。同期が遅れているだけなら、置かれた後の見回りで数え始める）" % rec, False))
+            if missing and not gone:
+                self.state.save_shared(rows)
             if gone:
                 self.mark_deleted(rows, gone)
         for text, todo in messages:
@@ -146,7 +176,7 @@ class Patrol:
     def mark_deleted(self, rows, gone):
         """Under the lock: `source_recording_deleted: はい` in the shared minutes, then push."""
         sharer = self.sharer
-        if not sharer._check_repo():
+        if sharer._check_repo():
             self.rc = 1
             return
         pre = sharer.repo.head()
@@ -167,7 +197,7 @@ class Patrol:
             print(e)
             status, detail = "offline", "git"
         if status == "conflict":
-            sharer._conflict(detail, "-")
+            sharer._conflict(detail, "-")  # the commits were dropped; flags stay unsaved, so the next patrol redoes it
             self.rc = 1
             return
         self.state.save_shared(rows)  # the commits stay in the clone even when the push waits for the next run

@@ -1,6 +1,7 @@
 """share-meeting.sh: put one AutoNote meeting into the meeting-record repository as minutes + transcript."""
 import hashlib
 import os
+import unicodedata
 import urllib.parse
 from datetime import timedelta
 
@@ -13,6 +14,24 @@ from .gitrepo import GitError, Repo
 from .state import Lock, LockTimeout, State, flags, set_flag
 
 NOTICE_TITLE = "会議の記録"
+RECORDING_EXTS = (".mp4", ".m4a", ".mov", ".wav", ".mp3")
+
+
+def nfc(s):
+    return unicodedata.normalize("NFC", s or "")
+
+
+def recording_name(value):
+    """What --recording means: the file name in the inbox. A dragged-in path is cut to its name; the Unicode form is
+    made NFC so it compares equal to the name the synced folder lists (which may be NFD)."""
+    return nfc(os.path.basename((value or "").rstrip("/")))
+
+
+def inbox_recordings(inbox_dir):
+    """Recording file names in the inbox (NFC). Raises OSError when the folder cannot be read."""
+    return sorted(nfc(n) for n in os.listdir(inbox_dir)
+                  if not n.startswith(".") and n.lower().endswith(RECORDING_EXTS)
+                  and os.path.isfile(os.path.join(inbox_dir, n)))
 
 
 def sha256_file(path):
@@ -114,31 +133,43 @@ class Sharer:
         self.state = State(cfg)
         self.repo = Repo(cfg.repo_dir, cfg.remote, cfg.branch)
         self.notices = []
+        self._reported = set()  # notices already queued in this run (one per kind and subject)
+        self._pre = None
 
     # -- helpers -------------------------------------------------------------------------------------------------
     def _index(self):
         return indexmod.write(self.cfg.repo_dir, self.cfg.templates_dir)
 
     def _check_repo(self):
+        """None when the clone can be used, else the reason (already printed and written to todo.md)."""
+        msg = None
         if not self.repo.ok():
             msg = "会議記録の clone がありません: SHARE_REPO_DIR を確かめる（README の導入手順）"
+        else:
+            missing = self.repo.identity_missing()
+            if missing:
+                msg = ("git の %s が設定されていないので commit できません。`git -C \"%s\" config user.name \"<名前>\"` と "
+                       "`git -C \"%s\" config user.email \"<メール>\"` で設定してから --retry-pending する"
+                       % (" と ".join(missing), self.cfg.repo_dir, self.cfg.repo_dir))
+            elif self.repo.dirty():
+                msg = ("会議記録の clone に未コミットの変更があります（スクリプト専用の clone を人が触った？）: %s"
+                       % self.cfg.repo_dir)
+        if msg:
             print(msg)
             self.state.add_todo(msg)
-            return False
-        if self.repo.dirty():
-            msg = "会議記録の clone に未コミットの変更があります（スクリプト専用の clone を人が触った？）: %s" % self.cfg.repo_dir
-            print(msg)
-            self.state.add_todo(msg)
-            return False
-        return True
+        return msg
 
     def _sync(self, pre):
-        """fetch + rebase (= git pull --rebase) + push. Returns ("ok"|"conflict"|"offline", detail)."""
+        """fetch + rebase (= git pull --rebase) + push. Returns ("ok"|"conflict"|"offline", detail).
+
+        On a conflict every commit not yet pushed is dropped and the clone is set to the fetched branch, so one bad
+        commit cannot block later runs. What was dropped is made again from AutoNote's files (pending.tsv, and the
+        patrol's re-share, since source_sha256 only moves on success).
+        """
         if self.repo.fetch():
             files = self.repo.rebase(self._index)
             if files:
-                if pre:
-                    self.repo.reset_hard(pre)
+                self.repo.drop_unpushed()
                 return "conflict", files
             if self._index():
                 self.repo.commit("index: rebuild")
@@ -146,13 +177,20 @@ class Sharer:
             return ("ok", None) if pushed else ("offline", "push")
         return "offline", "fetch"
 
-    def _conflict(self, files, autonote_id):
-        msg = ("GitHub 側で直されています: %s。中身を AutoNote に反映してから載せ直す（スクリプトは上書きも --force の push もしない）"
-               % "、".join(files))
-        self.state.add_todo(msg)
-        self.state.log("share", autonote_id, "conflict")
+    def _report_once(self, key, msg, todo=True):
+        if key in self._reported:
+            return
+        self._reported.add(key)
+        if todo:
+            self.state.add_todo(msg)
         self.notices.append(msg)
         print(msg)
+
+    def _conflict(self, files, autonote_id):
+        msg = ("GitHub 側で直されています: %s。まだ送っていなかった変更を捨てて置き場にそろえました。捨てた分は AutoNote の中身で"
+               "載せ直すので、GitHub 側の直しは上書きされます（残したい直しは AutoNote に反映する）" % "、".join(files))
+        self.state.log("share", autonote_id, "conflict")
+        self._report_once(("conflict", tuple(files)), msg)
 
     def _mirror(self, full=False):
         if not self.cfg.mirror_dir:
@@ -175,6 +213,14 @@ class Sharer:
         if cfg.mirror_dir:
             return "（議事録/%s/%s）" % (year, stem)
         return "（%s）" % minutes_rel
+
+    def report_vault_unreadable(self, e):
+        self.state.log("share", "-", "vault unreadable")
+        self._report_once("vault", VAULT_UNREADABLE_TODO % e)
+
+    def _pending(self, mid, path, trigger, kind, customer, recording, reason):
+        self.state.add_pending({"autonote_id": mid, "meeting_file": path or "", "trigger": trigger, "kind": kind or "",
+                                "customer": customer or "", "recording": recording or "", "reason": reason})
 
     def send_notices(self):
         for text in self.notices:
@@ -199,18 +245,22 @@ class Sharer:
         if not mid:
             print("frontmatter に autonote_id がありません: %s" % path)
             return 1
+        if recording is not None:
+            recording = recording_name(recording)
         try:
             with Lock(self.cfg):
-                rc = self._share_locked(path, meeting, kind, customer, recording, trigger)
+                self._pre = None
+                try:
+                    rc = self._share_locked(path, meeting, kind, customer, recording, trigger)
+                except GitError as e:
+                    print(e)
+                    self.repo.put_back(self._pre)
+                    self.state.log("share", mid, "git-error")
+                    self._pending(mid, path, trigger, kind, customer, recording, "git")
+                    rc = 1
         except LockTimeout as e:
-            print(e)
-            return 1
-        except GitError as e:
-            print(e)
-            self.state.log("share", mid, "git-error")
-            self.state.add_pending({"autonote_id": mid, "meeting_file": path, "trigger": trigger,
-                                    "kind": kind or "", "customer": customer or "", "recording": recording or "",
-                                    "reason": "git"})
+            print("%s（pending.tsv に入れました。--retry-pending か見回りで送り直す）" % e)
+            self._pending(mid, path, trigger, kind, customer, recording, "lock")
             return 1
         self.send_notices()
         return rc
@@ -233,14 +283,25 @@ class Sharer:
             warn = "録画の名前の日時（%s %s）と会議の日時（%s %s）が違います" % (parsed[0], parsed[1], m.date, m.start)
             print("警告: " + warn)
             state.log("share", mid, "warning", warn)
+        if recording and cfg.inbox_dir:
+            try:
+                in_inbox = recording in inbox_recordings(cfg.inbox_dir)
+            except OSError:
+                in_inbox = True  # cannot tell; the patrol reports an unreadable inbox
+            if not in_inbox:
+                print("警告: 受け取り箱にありません: %s（名前の打ち間違いなら --recording を直して載せ直す。同期が遅れて"
+                      "いるだけなら気にしなくてよい）" % recording)
+                state.log("share", mid, "warning", "recording not in inbox")
         recorded_by = cfg.default_recorded_by if kind == "customer" else cfg.owner_name
         deleted = bool(prev) and "recording_deleted" in flags(prev)
         rec_state = "対象外" if not recording else ("はい" if deleted else "まだ")
 
-        if not self._check_repo():
+        reason = self._check_repo()
+        if reason:
+            self._pending(mid, path, trigger, kind, customer, recording, "clone")
             return 1
         repo_dir = cfg.repo_dir
-        pre = self.repo.head()
+        pre = self._pre = self.repo.head()
         old_minutes, old_transcripts = repo_files_for(repo_dir, mid)
         stem = unique_stem(repo_dir, m.year, m.stem, mid)
         minutes, transcript = split.render_pair(m, stem, kind=kind, customer=customer, recorded_by=recorded_by,
@@ -259,11 +320,12 @@ class Sharer:
         status, detail = self._sync(pre)
         if status == "conflict":
             self._conflict(detail, mid)
+            self._mirror()
+            self._pending(mid, path, trigger, kind, customer, recording, "conflict")
             return 1
         self._mirror()
         if status == "offline":
-            state.add_pending({"autonote_id": mid, "meeting_file": path, "trigger": trigger, "kind": kind,
-                               "customer": customer, "recording": recording, "reason": detail})
+            self._pending(mid, path, trigger, kind, customer, recording, detail)
             state.log("share", mid, "pending (%s)" % detail)
             print("push できませんでした。clone に commit を残し、pending.tsv に入れました（--retry-pending で送り直す）")
             return 1
@@ -319,13 +381,17 @@ class Sharer:
     def unshare(self, mid):
         try:
             with Lock(self.cfg):
-                rc = self._unshare_locked(mid)
+                self._pre = None
+                try:
+                    rc = self._unshare_locked(mid)
+                except GitError as e:
+                    print(e)
+                    self.repo.put_back(self._pre)
+                    self._pending(mid, "", "unshare", "", "", "", "git")
+                    rc = 1
         except LockTimeout as e:
-            print(e)
-            return 1
-        except GitError as e:
-            print(e)
-            self.state.add_pending({"autonote_id": mid, "trigger": "unshare", "reason": "git"})
+            print("%s（pending.tsv に入れました）" % e)
+            self._pending(mid, "", "unshare", "", "", "", "lock")
             return 1
         self.send_notices()
         return rc
@@ -334,18 +400,25 @@ class Sharer:
         state = self.state
         rows = state.shared()
         prev = next((r for r in rows if r["autonote_id"] == mid), None)
-        if not self._check_repo():
+        if self._check_repo():
+            self._pending(mid, "", "unshare", "", "", "", "clone")
             return 1
         repo_dir = self.cfg.repo_dir
         minutes, transcripts = repo_files_for(repo_dir, mid)
-        if not minutes and not transcripts and prev is None:
+        if not minutes and not transcripts and (prev is None or "unshared" in flags(prev)):
+            if any(r["autonote_id"] == mid for r in state.pending()):
+                # e.g. shared and taken back while offline: both commits went out with the earlier push
+                state.remove_pending(mid)
+                state.log("share", mid, "unshare settled")
+                print("取り下げは済んでいます: %s" % mid)
+                return 0
             print("共有した記録がありません: %s" % mid)
             return 1
         title, date = mid, ""
         if minutes:
             fm = fmx.read_file(os.path.join(repo_dir, minutes[0]))
             title, date = fm.get("title", mid), fm.get("date", "")
-        pre = self.repo.head()
+        pre = self._pre = self.repo.head()
         for rel in minutes + transcripts:
             os.remove(os.path.join(repo_dir, rel))
         self._index()
@@ -353,10 +426,12 @@ class Sharer:
         status, detail = self._sync(pre)
         if status == "conflict":
             self._conflict(detail, mid)
+            self._mirror()
+            self._pending(mid, "", "unshare", "", "", "", "conflict")
             return 1
         self._mirror()
         if status == "offline":
-            state.add_pending({"autonote_id": mid, "trigger": "unshare", "reason": detail})
+            self._pending(mid, "", "unshare", "", "", "", detail)
             state.log("share", mid, "unshare pending (%s)" % detail)
             print("push できませんでした。pending.tsv に入れました")
             return 1
@@ -380,6 +455,7 @@ class Sharer:
                 status, detail = self._sync(self.repo.head())
                 if status == "conflict":
                     self._conflict(detail, "-")
+                    self._mirror()
                     return 1
                 if status == "offline":
                     return 1
@@ -390,12 +466,6 @@ class Sharer:
             return 1
         finally:
             self.send_notices()
-
-    def report_vault_unreadable(self, e):
-        msg = VAULT_UNREADABLE_TODO % e
-        print(msg)
-        self.state.add_todo(msg)
-        self.state.log("share", "-", "vault unreadable")
 
     def retry_pending(self):
         rc = self.push_ahead()
@@ -421,7 +491,7 @@ class Sharer:
     def rebuild_index(self):
         try:
             with Lock(self.cfg):
-                if not self._check_repo():
+                if self._check_repo():
                     return 1
                 pre = self.repo.head()
                 self.repo.fetch()

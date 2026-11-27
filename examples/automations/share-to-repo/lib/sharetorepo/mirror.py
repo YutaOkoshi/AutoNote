@@ -17,6 +17,7 @@ import tempfile
 from . import frontmatter as fmx
 from . import index as indexmod
 from . import mdhtml
+from . import templates
 from . import split
 from .state import read_tsv, write_tsv
 
@@ -107,10 +108,9 @@ def convert_docx(cfg, html_path, out_path):
 def desired(cfg, repo_dir):
     """{relative path without extension: (markdown text, title)} for everything the mirror should hold."""
     docs = {}
-    readme = os.path.join(cfg.templates_dir, "mirror-readme.md")
-    if os.path.isfile(readme):
-        with open(readme, encoding="utf-8") as f:
-            docs["はじめに"] = (f.read(), "はじめに")
+    readme = templates.load(cfg, "mirror-readme.md")
+    if readme is not None:
+        docs["はじめに"] = (readme, "はじめに")
     entries = indexmod.entries(repo_dir)
     docs["会議の一覧"] = (index_doc(entries), "会議の一覧")
     for e in entries:

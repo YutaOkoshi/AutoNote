@@ -5,10 +5,12 @@ from .config import Config
 
 SHARE_USAGE = """使い方:
   share-meeting.sh <会議ファイル> [--kind internal|customer] [--customer <相手先>] [--recording <録画のファイル名>]
+      --recording は受け取り箱でのファイル名（パスを付けても名前だけを使う）
   share-meeting.sh --unshare <autonote_id>
   share-meeting.sh --retry-pending
   share-meeting.sh --rebuild-index
-  share-meeting.sh --rebuild-mirror"""
+  share-meeting.sh --rebuild-mirror
+  share-meeting.sh --print-template README.md|CLAUDE.md|mirror-readme.md   （日数を差し込んだ雛形を出す）"""
 
 
 def _usage(msg=None):
@@ -31,6 +33,15 @@ def main_share(argv):
             return _usage("%s は単独で使う" % argv[0])
         sharer.flush_outbox()
         return getattr(sharer, single[argv[0]])()
+    if argv[0] == "--print-template":
+        from . import templates
+        if len(argv) != 2 or "/" in argv[1]:
+            return _usage("--print-template には templates/ のファイル名を 1 つ渡す")
+        text = templates.load(cfg, argv[1])
+        if text is None:
+            return _usage("雛形がありません: %s" % argv[1])
+        sys.stdout.write(text)
+        return 0
     if argv[0] == "--unshare":
         if len(argv) != 2:
             return _usage("--unshare には autonote_id を 1 つ渡す")

@@ -63,20 +63,23 @@ class PatrolTests(SandboxTest):
         write(os.path.join(inbox, REC), "video")
         write(os.path.join(inbox, "2026-11-01_0900_見本食堂_初回.mp4"), "video")  # never shared
         write(os.path.join(inbox, ".hidden"), "x")
+        write(os.path.join(inbox, "置き方のメモ.txt"), "録画以外")  # not a recording: never reminded
         self.sb.set_config(INBOX_DIR=inbox)
         self.assertOk(self.sb.patrol(now="2026-11-20T09:00:00+09:00"))  # first sight of the unshared one
         self.share_customer()
-        self.assertOk(self.sb.patrol(now="2026-12-09T09:00:00+09:00"))
+        self.assertOk(self.sb.patrol(now="2026-12-08T09:00:00+09:00"))
         self.assertFalse(any(REC in t for t in self.texts() if "受け取り箱" in t and "消して" in t))
-        self.assertOk(self.sb.patrol(now="2026-12-10T09:00:00+09:00"))
+        self.assertOk(self.sb.patrol(now="2026-12-09T09:00:00+09:00"))  # the deadline day (shared + 7)
         seven = [t for t in self.texts() if REC in t and "7 日" in t]
         self.assertEqual(len(seven), 1)
-        # the unshared one was first seen on 11-20: already past 7 days, and past 21 days on 12-12
-        self.assertTrue(any("見本食堂" in t and "7 日" in t for t in self.texts()))
-        self.assertOk(self.sb.patrol(now="2026-12-12T09:00:00+09:00"))
+        self.assertIn("共有から 7 日", seven[0])
+        # the unshared one was first seen on 11-20: already 7 days, and 21 days on 12-11
+        self.assertTrue(any("見本食堂" in t and "置いてから 7 日" in t for t in self.texts()))
+        self.assertOk(self.sb.patrol(now="2026-12-11T09:00:00+09:00"))
         self.assertTrue(any("見本食堂" in t and "21 日" in t for t in self.texts()))
+        self.assertFalse(any("置き方のメモ" in t for t in self.texts()))
         self.assertIn("見本食堂", self.sb.state_file("todo.md"))
-        self.assertOk(self.sb.patrol(now="2026-12-24T09:00:00+09:00"))
+        self.assertOk(self.sb.patrol(now="2026-12-23T09:00:00+09:00"))
         self.assertEqual(len([t for t in self.texts() if REC in t and "21 日" in t]), 1)
         self.assertEqual(len([t for t in self.texts() if REC in t and "7 日" in t]), 1)
         os.remove(os.path.join(inbox, REC))
@@ -88,6 +91,72 @@ class PatrolTests(SandboxTest):
         write(path, read(path).replace("一緒に見る。", "一緒に見直す。"))
         self.assertOk(self.sb.share(path, now="2026-12-26T09:00:00+09:00"))
         self.assertIn("source_recording_deleted: はい\n", self.sb.remote_show(MIN))
+
+    def inbox_with(self, *names):
+        inbox = os.path.join(self.sb.root, "inbox")
+        os.makedirs(inbox, exist_ok=True)
+        for n in names:
+            write(os.path.join(inbox, n), "video")
+        self.sb.set_config(INBOX_DIR=inbox)
+        return inbox
+
+    def test_recording_not_synced_yet_is_not_marked_deleted(self):
+        # C-F2: the recording has not reached the synced folder when the patrol runs.
+        inbox = self.inbox_with("2026-11-30_1500_見本食堂_定例.mp4")
+        self.share_customer()
+        self.assertOk(self.sb.patrol(now="2026-12-02T12:00:00+09:00"))
+        self.assertIn("source_recording_deleted: まだ\n", self.sb.remote_show(MIN))
+        self.assertNotIn("recording_deleted", self.sb.tsv("shared.tsv")[0]["flags"])
+        missing = [t for t in self.texts() if "見当たらない" in t]
+        self.assertEqual(len(missing), 1)
+        self.assertIn(REC, missing[0])
+        self.assertOk(self.sb.patrol(now="2026-12-03T12:00:00+09:00"))
+        self.assertEqual(len([t for t in self.texts() if "見当たらない" in t]), 1)
+        # it arrives, is seen, then is deleted: now it counts
+        write(os.path.join(inbox, REC), "video")
+        self.assertOk(self.sb.patrol(now="2026-12-04T12:00:00+09:00"))
+        self.assertIn("source_recording_deleted: まだ\n", self.sb.remote_show(MIN))
+        os.remove(os.path.join(inbox, REC))
+        self.assertOk(self.sb.patrol(now="2026-12-05T12:00:00+09:00"))
+        self.assertIn("source_recording_deleted: はい\n", self.sb.remote_show(MIN))
+
+    def test_misspelt_recording_name_is_never_marked_deleted(self):
+        self.inbox_with(REC)
+        typo = REC.replace("打合せ", "打ち合わせ")
+        proc = self.sb.share(self.sb.vault_file(STANDARD), "--kind", "customer", "--recording", typo, now=DAY0)
+        self.assertOk(proc)
+        self.assertIn("受け取り箱にありません", proc.stdout)
+        for day in ("2026-12-03", "2026-12-04"):
+            self.assertOk(self.sb.patrol(now=day + "T12:00:00+09:00"))
+        self.assertIn("source_recording_deleted: まだ\n", self.sb.remote_show(MIN))
+        self.assertEqual(len([t for t in self.texts() if "見当たらない" in t and typo in t]), 1)
+
+    def test_empty_inbox_skips_the_deleted_check(self):
+        inbox = self.inbox_with(REC)
+        self.share_customer()
+        self.assertOk(self.sb.patrol(now="2026-12-02T12:00:00+09:00"))  # seen
+        os.remove(os.path.join(inbox, REC))  # the sync app shows an empty folder for a day
+        self.assertOk(self.sb.patrol(now="2026-12-03T12:00:00+09:00"))
+        self.assertIn("source_recording_deleted: まだ\n", self.sb.remote_show(MIN))
+
+    def test_full_path_and_unicode_form_of_recording_match_the_inbox(self):
+        # U-F1: a path dragged from Finder, and a decomposed (NFD) name from the synced folder.
+        import unicodedata
+        name = "2026-12-02_1000_サンプル商事_ガイド打合せ.mp4"  # ガ/ド decompose under NFD
+        inbox = self.inbox_with(unicodedata.normalize("NFD", name))
+        self.assertOk(self.sb.share(self.sb.vault_file(STANDARD), "--kind", "customer",
+                                    "--recording", os.path.join(inbox, name), now=DAY0))
+        row = self.sb.tsv("shared.tsv")[0]
+        self.assertEqual(row["recording"], name)
+        self.assertOk(self.sb.patrol(now="2026-12-03T12:00:00+09:00"))
+        self.assertIn("source_recording_deleted: まだ\n", self.sb.remote_show(MIN))
+        self.assertFalse(any("見当たらない" in t for t in self.texts()))
+
+    def test_share_warns_when_recording_is_not_in_inbox(self):
+        self.inbox_with(REC)
+        proc = self.sb.share(self.sb.vault_file(STANDARD), "--recording", "2026-12-02_1000_別_名前.mp4", now=DAY0)
+        self.assertOk(proc)
+        self.assertIn("受け取り箱にありません", proc.stdout)
 
     def test_unreadable_vault_is_reported_and_other_steps_still_run(self):
         # launchd without the Documents permission: listing the vault fails with "Operation not permitted".
@@ -105,6 +174,7 @@ class PatrolTests(SandboxTest):
         self.assertOk(proc, 1)
         self.assertNotIn("Traceback", proc.stderr)
         self.assertIn("会議ファイルのフォルダ（VAULT_ROOT）を読めません", self.sb.state_file("todo.md"))
+        self.assertEqual(len([t for t in self.texts() if "VAULT_ROOT" in t or "会議ファイルのフォルダ" in t]), 1)
         # the commit left by the failed push still went out
         self.assertIn("2026/2026-12-04_0930_社内定例.md", self.sb.remote_files())
 

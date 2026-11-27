@@ -1,4 +1,8 @@
-"""git in the script-only clone. Never force-pushes; never prompts (GIT_TERMINAL_PROMPT=0)."""
+"""git in the script-only clone. Never force-pushes; never prompts (GIT_TERMINAL_PROMPT=0).
+
+Every call runs with hooks and commit signing off: a global pre-commit hook or commit.gpgsign is the user's setting
+for their own work, and must not make the script's commits fail half way.
+"""
 import os
 import subprocess
 
@@ -16,12 +20,37 @@ class Repo:
         self.env.update({"GIT_TERMINAL_PROMPT": "0", "GIT_EDITOR": "true", "GIT_SEQUENCE_EDITOR": "true",
                          "GIT_MERGE_AUTOEDIT": "no"})
 
+    PREFIX = ["git", "-c", "core.quotePath=false", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
+              "-c", "tag.gpgsign=false"]
+
     def run(self, *args, check=True):
-        p = subprocess.run(["git", "-c", "core.quotePath=false"] + list(args), cwd=self.path, env=self.env,
-                           capture_output=True, text=True)
+        p = subprocess.run(self.PREFIX + list(args), cwd=self.path, env=self.env, capture_output=True, text=True)
         if check and p.returncode != 0:
-            raise GitError("git %s: %s" % (args[0], (p.stderr or p.stdout).strip()[:500]))
+            detail = (p.stderr or "").strip() or (p.stdout or "").strip() or "(出力なし)"
+            raise GitError("git %s が失敗しました（終了コード %d）: %s" % (args[0], p.returncode, detail[:500]))
         return p
+
+    def identity_missing(self):
+        """Names of the missing settings among user.name / user.email (environment variables count too)."""
+        missing = []
+        for key, envs in (("user.name", ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME")),
+                          ("user.email", ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"))):
+            if all(self.env.get(e) for e in envs):
+                continue
+            if not self.run("config", key, check=False).stdout.strip():
+                missing.append(key)
+        return missing
+
+    def put_back(self, sha):
+        """Undoes what a failed run left: an unfinished rebase, commits after sha, and files it wrote."""
+        git_dir = os.path.join(self.path, ".git")
+        if os.path.isdir(os.path.join(git_dir, "rebase-merge")) or os.path.isdir(os.path.join(git_dir, "rebase-apply")):
+            self.run("rebase", "--abort", check=False)
+        if sha:
+            self.run("reset", "-q", "--hard", sha, check=False)
+        else:
+            self.run("read-tree", "--empty", check=False)
+        self.run("clean", "-fdq", check=False)
 
     def ok(self):
         return os.path.isdir(os.path.join(self.path, ".git")) or os.path.isfile(os.path.join(self.path, ".git"))
@@ -94,3 +123,10 @@ class Repo:
 
     def reset_hard(self, sha):
         self.run("reset", "-q", "--hard", sha)
+
+    def drop_unpushed(self):
+        """Throws away every commit not on the fetched branch (they are made again from AutoNote's files)."""
+        ref = self.remote_ref()
+        if ref:
+            self.run("reset", "-q", "--hard", ref)
+            self.run("clean", "-fdq", check=False)

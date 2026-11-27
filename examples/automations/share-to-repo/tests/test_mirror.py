@@ -105,6 +105,16 @@ class MirrorTests(SandboxTest):
         self.assertTrue(md.startswith("# サンプル商事 トライアル打合せ\n"))
         self.assertNotIn("---\ntitle", md)
 
+    def test_readme_gets_the_configured_days(self):
+        # C-F7 / U-F6: the reader's guide shows RECORDING_KEEP_DAYS and the file types, like the repository README
+        self.enable(MIRROR_FORMAT="md", RECORDING_KEEP_DAYS="14")
+        self.share_customer()
+        readme = read(os.path.join(self.mirror, "はじめに.md"))
+        self.assertIn("14 日", readme)
+        self.assertNotIn("7 日", readme)
+        self.assertNotIn("{{", readme)
+        self.assertIn("mp4", readme)
+
     def test_title_change_replaces_old_copy(self):
         self.enable()
         self.share_customer()
