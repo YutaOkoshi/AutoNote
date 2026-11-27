@@ -43,6 +43,14 @@ public struct SilenceMonitor: Sendable {
     /// general warning stays away for the rest of the recording.
     public mutating func systemAudioWasToldAbout() { systemWarned = true }
 
+    /// The same for a track that failed (`RecordingEvent.sourceFailed`): one notice per cause.
+    public mutating func wasToldAbout(_ track: Track) {
+        switch track {
+        case .mic: micJudged = true
+        case .system: systemWarned = true
+        }
+    }
+
     public mutating func tick(now: TimelineTime, paused: Bool) -> [SilenceWarning] {
         let delta = max(0, now.seconds - lastTick.seconds)
         lastTick = now

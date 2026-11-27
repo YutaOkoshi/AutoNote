@@ -252,8 +252,12 @@ import AutoNoteTestSupport
         model.noticePosted(notArriving)
         model.noticePosted(notArriving)
         #expect(model.prompts == [notArriving])
+        // The menu bar says it too while the band is up, and stops with it.
+        #expect(model.menuBar(now: Date()).symbol == MenuBarPresentation.lossSymbol)
+        #expect(model.menuBar(now: Date()).items.contains(.status("⚠ システム音声が録音に入っていません")))
         model.noticeWithdrawn(id: notArriving.id)
         #expect(model.prompts.isEmpty)
+        #expect(model.menuBar(now: Date()).symbol == "record.circle")
         model.noticePosted(.recordingLoss(.mic, reason: .sourceFailed))
         model.noticePosted(.interruptedRecordingFound(m1))
         await fakes.recorder.send(.idle(language: .ja))

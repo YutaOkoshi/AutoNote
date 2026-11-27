@@ -77,7 +77,8 @@ private final class IOCounters: Sendable {
 /// - no callback for `stallTimeout`: rebuild with back-off, and after `maxConsecutiveFailures` in a row (or
 ///   `maxRebuilds`) stop rebuilding and report through `health` (`MicrophoneRecoveryPolicy`'s budget);
 /// - only zeros for `zeroTimeout` (`zeroTimeoutAfterRouteChange` right after the default output device changed):
-///   rebuild, wait twice as long before the next one (up to `zeroRetryMax`), never give up.
+///   rebuild, wait twice as long before the next one (up to `zeroRetryMax`), never give up, not even when such a
+///   rebuild leaves the tap down (it is then brought up again at the next wait).
 /// Neither while the recording is paused (`SourceHealth.setPaused`).
 /// Chunks keep their host-time stamps, so a rebuild's gap is silence on the track's timeline, not a shift.
 public actor ProcessTapSource: AudioSource {
@@ -161,6 +162,8 @@ public actor ProcessTapSource: AudioSource {
     /// The default output device as last seen, and when it was seen to change (until a rebuild or a non-zero sample).
     private var lastRoute: String?
     private var routeChangedAt: Double?
+    /// The tap is down because a rebuild for zeros could not bring it up again.
+    private var downAfterZeroRebuild = false
     private var gaveUp = false
 
     public init(clock: MeetingClock, hardware: any TapHardware = CoreAudioTapHardware(),
@@ -288,6 +291,7 @@ public actor ProcessTapSource: AudioSource {
         zeroRebuildsInStretch = 0
         lastRoute = nil
         routeChangedAt = nil
+        downAfterZeroRebuild = false
         gaveUp = false
     }
 
@@ -306,9 +310,12 @@ public actor ProcessTapSource: AudioSource {
     /// only keeps recording whether another process plays, so the manifest still counts the seconds that went missing.
     private func check() async {
         guard case .running = state, rebuildTask == nil else { return }
-        let hardware = self.hardware, exclude = excludeBundleIDs
-        let answer: (playing: Bool?, route: String?)? = await probeQueue.runAwaiting(timeout: policy.probeTimeout, {
-            (hardware.otherProcessIsPlayingAudio(excludingBundleIDs: exclude), hardware.outputRouteToken())
+        let hardware = self.hardware, exclude = excludeBundleIDs, knownRoute = lastRoute
+        // Every hardware call stays off the actor, the route's description (read only when the route changed) too.
+        let answer: (playing: Bool?, route: String?, description: String?)? = await probeQueue.runAwaiting(timeout: policy.probeTimeout, {
+            let route = hardware.outputRouteToken()
+            let changed = if let route, let knownRoute { route != knownRoute } else { false }
+            return (hardware.otherProcessIsPlayingAudio(excludingBundleIDs: exclude), route, changed ? hardware.routeDescription() : nil)
         }, abandoned: { _ in })
         // `stop()` may have run while this look waited on the probe queue.
         guard case .running = state, rebuildTask == nil else { return }
@@ -317,13 +324,22 @@ public actor ProcessTapSource: AudioSource {
         // Unknown (no answer in time, or the system does not tell) counts as "nobody plays": never a reason to rebuild.
         let playing = answer?.playing == true
         counts.recordOutputPoll(at: now, othersPlaying: playing)
-        guard !gaveUp else { return }
+        if gaveUp {
+            // The last tap stayed up. Sound on it means the track is being recorded after all: the failure is taken
+            // back and the watch goes on with a fresh budget.
+            guard pipeline != nil, counts.nonZeroCallbacks != lastNonZeroCallbacks else { return }
+            gaveUp = false
+            consecutiveFailures = 0; rebuildsInBudget = 0; healthySince = now
+            lastCallbackAt = now; nextStallRebuildAt = now
+            Self.logger.notice("system audio is heard again on the tap that was given up on: recording it")
+            counts.reportRecovered()
+        }
         if let at = routeChangedAt, now - at > policy.routeChangeWindow { routeChangedAt = nil }
         if let route = answer?.route {
             if let last = lastRoute, last != route {
                 // The usual moment for a tap to go deaf: zeros get a shorter wait once, and the back-off starts over.
                 // Zeros that were already going on wait the shorter time too, so the new output can settle.
-                Self.logger.notice("system tap: default output device changed \(self.hardware.routeDescription(), privacy: .public)")
+                Self.logger.notice("system tap: default output device changed \(answer?.description ?? "", privacy: .public)")
                 routeChangedAt = now
                 zeroWait = policy.zeroTimeout
                 nextZeroRebuildAt = now + policy.zeroTimeoutAfterRouteChange
@@ -363,6 +379,13 @@ public actor ProcessTapSource: AudioSource {
 
         // A tap that could not be brought up again is down, whoever plays.
         if pipeline == nil {
+            if downAfterZeroRebuild {
+                // It was delivering until a rebuild for zeros took it down, and those zeros may have been plain
+                // silence: bring it up again at the next zero wait, outside the budget and without ever giving up.
+                guard now >= nextZeroRebuildAt else { return }
+                rebuildTask = Task { await self.rebuild(reason: "tap is down after a rebuild for zeros", stall: false) }
+                return
+            }
             await rebuildForStall(reason: "tap is not running", now: now)
             return
         }
@@ -419,7 +442,9 @@ public actor ProcessTapSource: AudioSource {
             zeroRebuildsInStretch += 1
         }
         counts.noteRestart()
-        Self.logger.notice("system tap rebuild #\(attempt, privacy: .public) (\(reason, privacy: .public)) \(self.hardware.routeDescription(), privacy: .public)")
+        let hardware = self.hardware
+        let route = await probeQueue.runAwaiting(timeout: policy.probeTimeout, { hardware.routeDescription() }, abandoned: { _ in }) ?? ""
+        Self.logger.notice("system tap rebuild #\(attempt, privacy: .public) (\(reason, privacy: .public)) \(route, privacy: .public)")
 
         if let old = pipeline {
             pipeline = nil
@@ -434,19 +459,20 @@ public actor ProcessTapSource: AudioSource {
         let stopping: Bool = if case .running = state { false } else { true }
         let after = clock.now().seconds
         guard let result else {
-            if !stopping { fail(attempt, AudioSourceError.timedOut(call: "AudioDeviceStart"), backoff: backoff, now: after) }
+            if !stopping { fail(attempt, AudioSourceError.timedOut(call: "AudioDeviceStart"), stall: stall, backoff: backoff, now: after) }
             return
         }
         switch result {
         case .failure(let error):
-            if !stopping { fail(attempt, error, backoff: backoff, now: after) }
+            if !stopping { fail(attempt, error, stall: stall, backoff: backoff, now: after) }
         case .success(let up):
             guard let made = makePipeline(up, onBuffer: onBuffer) else {
                 await teardown(up.objects)
-                if !stopping { fail(attempt, AudioSourceError.unsupportedFormat, backoff: backoff, now: after) }
+                if !stopping { fail(attempt, AudioSourceError.unsupportedFormat, stall: stall, backoff: backoff, now: after) }
                 return
             }
             pipeline = made
+            downAfterZeroRebuild = false
             lastRecords = 0
             lastCallbackAt = after
             pipelineSince = after
@@ -460,13 +486,21 @@ public actor ProcessTapSource: AudioSource {
         }
     }
 
-    private func fail(_ attempt: Int, _ error: any Error, backoff: Double, now: Double) {
-        nextStallRebuildAt = now + max(backoff, policy.retryDelay)
+    /// `stall` false: the rebuild was for zeros, on a tap that was calling back. Its failure never counts towards
+    /// giving up (see `check()`); the tap is brought up again after the next zero wait.
+    private func fail(_ attempt: Int, _ error: any Error, stall: Bool, backoff: Double, now: Double) {
+        if stall {
+            nextStallRebuildAt = now + max(backoff, policy.retryDelay)
+        } else {
+            downAfterZeroRebuild = true
+            zeroWait = min(zeroWait * 2, policy.zeroRetryMax)
+            nextZeroRebuildAt = now + zeroWait
+        }
         Self.logger.error("system tap rebuild #\(attempt, privacy: .public) failed: \(String(describing: error), privacy: .public)")
     }
 
     /// Stops rebuilding and tells the owner. The last tap stays up until `stop()`: should the system start calling it
-    /// again, that audio is still recorded.
+    /// again, that audio is still recorded, and non-zero samples on it take the failure back (`check()`).
     private func giveUp(reason: String) async {
         guard case .running = state, !gaveUp else { return }
         gaveUp = true

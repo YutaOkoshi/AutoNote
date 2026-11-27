@@ -33,10 +33,26 @@ public enum AudioLossPresentation {
         losses.allSatisfy { $0.track == .system && !$0.sourceFailed }
     }
 
-    /// The meeting list row: 「録音の欠損の可能性: システム音声 約 12 分」, 「録音の欠損: マイク 45 秒」.
+    /// The meeting list row: 「録音の欠損の可能性: システム音声 約 12 分」, 「録音の欠損: マイク 45 秒」. Next to a
+    /// loss that is a fact, the suspect seconds of system audio keep their own 「（可能性）」.
     public static func rowLabel(_ losses: [TrackLoss]?) -> String? {
-        guard let losses, let detail = detail(losses) else { return nil }
-        return "\(isOnlyPossible(losses) ? "録音の欠損の可能性" : "録音の欠損"): \(detail)"
+        guard let losses, let all = detail(losses) else { return nil }
+        if isOnlyPossible(losses) { return "録音の欠損の可能性: \(all)" }
+        let parts = losses.map { loss in
+            (detail([loss]) ?? "") + (loss.track == .system && !loss.sourceFailed ? "（可能性）" : "")
+        }
+        return "録音の欠損: \(parts.joined(separator: "、"))"
+    }
+
+    /// 「マイクが約 20 分、完全な無音でした（ミュートしていたなら問題ありません）」 for the meeting list row, when the
+    /// microphone delivered nothing but zeros for as long as would count as a loss (`AudioLossRule.threshold`).
+    /// Not a loss: a muted headset looks the same. So it is said in the row only, never in the note or a notification.
+    public static func micSilentLabel(health: [TrackHealth]?, losses: [TrackLoss]?, recordedSeconds: Double?) -> String? {
+        guard let recordedSeconds, let mic = health?.first(where: { $0.track == .mic }),
+              mic.zeroSeconds >= AudioLossRule.threshold(recordedSeconds: recordedSeconds),
+              !(losses ?? []).contains(where: { $0.track == .mic && $0.sourceFailed }) else { return nil }
+        let length = mic.zeroSeconds >= 60 ? duration(mic.zeroSeconds) : " \(duration(mic.zeroSeconds))"
+        return "マイクが\(length)、完全な無音でした（ミュートしていたなら問題ありません）"
     }
 
     /// Per lossy track: whose voice, how sure, and what is missing from the transcript and the minutes.

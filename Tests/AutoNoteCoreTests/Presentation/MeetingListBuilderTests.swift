@@ -136,7 +136,15 @@ import AutoNoteTestSupport
         #expect(!row.silenceWarning)
         // An older client's row (no such key) still decodes, and a row without a loss does not send the key.
         let json = String(decoding: try AutoNoteJSON.compactEncoder().encode(MeetingRow(id: "x")), as: UTF8.self)
-        #expect(!json.contains("audio_loss_label") && !json.contains("audio_loss_help"))
+        #expect(!json.contains("audio_loss_label") && !json.contains("audio_loss_help") && !json.contains("mic_silent_label"))
+        #expect(row.micSilentLabel == nil)
+        // A microphone that was all zeros for long: its own, weaker line, and no loss.
+        m.audioLoss = nil
+        m.endedAt = m.startedAt.addingTimeInterval(4140)
+        m.audioHealth = [TrackHealth(track: .mic, noCallbackSeconds: 0, zeroSeconds: 1186, restarts: 0, callbacks: 1, droppedFrames: 0)]
+        let silent = try #require(MeetingListBuilder.build(index: [], manifests: [m], queue: .empty, outputFolder: nil).first)
+        #expect(silent.micSilentLabel == "マイクが約 20 分、完全な無音でした（ミュートしていたなら問題ありません）")
+        #expect(silent.audioLossLabel == nil)
         #expect(try AutoNoteJSON.decoder().decode(MeetingRow.self, from: Data(json.utf8)).audioLossLabel == nil)
     }
 

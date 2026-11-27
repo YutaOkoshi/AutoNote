@@ -15,6 +15,12 @@ public enum PrivacyPane {
 /// The wording of `UserNotice.recordingLoss`. "Not arriving" may be a false alarm (an app that keeps its output open
 /// in silence looks the same), so it says how to tell and what to do. A failure may also be the disk (a writer).
 public enum RecordingLossCopy {
+    /// The short line for the menu bar's menu while the notice is up.
+    public static func menuLine(_ track: Track, _ reason: RecordingLossReason) -> String {
+        let name = AudioLossPresentation.trackName(track)
+        return reason == .sourceFailed ? "⚠ \(name)を録音できていません" : "⚠ \(name)が録音に入っていません"
+    }
+
     public static func body(_ track: Track, _ reason: RecordingLossReason) -> String {
         let name = AudioLossPresentation.trackName(track)
         switch reason {
@@ -24,6 +30,14 @@ public enum RecordingLossCopy {
                 return "\(name)が 1 分以上録音に入っていません（ほかのアプリは音を出しています）。相手が話しているのにこの通知が出たときは、録音を止めて始め直してください。相手が黙っている・ミュート中なら問題ありません"
             case .mic:
                 return "\(name)が 1 分以上録音に入っていません。話しているのにこの通知が出たときは、録音を止めて始め直してください。ミュート中なら問題ありません"
+            }
+        case .nothingArrived:
+            // Nothing was heard on the track since the recording began: the permission may be what is missing.
+            switch track {
+            case .system:
+                return "\(name)がこの録音でまだ一度も入っていません（ほかのアプリは音を出しています）。相手が話しているのにこの通知が出たときは、システム音声の録音許可を確認し、録音を止めて始め直してください。相手が黙っている・ミュート中なら問題ありません"
+            case .mic:
+                return "\(name)がこの録音でまだ一度も入っていません。話しているのにこの通知が出たときは、マイクの許可と機材を確認し、録音を止めて始め直してください。ミュート中なら問題ありません"
             }
         case .sourceFailed:
             let voice = track == .mic ? "自分の声" : "相手の声"
@@ -110,6 +124,9 @@ public struct NoticeContent: Equatable, Sendable {
         case .recordingLoss(let t, .notArriving):
             // Its own category: the permission is not in doubt here, so no button to the settings.
             return c("recordingNotArriving", RecordingLossCopy.body(t, .notArriving), [], ["track": t.rawValue])
+        case .recordingLoss(let t, .nothingArrived):
+            // Never heard in this recording: the permission is in doubt too, so the way to the settings stays.
+            return c("recordingLoss", RecordingLossCopy.body(t, .nothingArrived), [("openPrivacy", "システム設定を開く")], ["track": t.rawValue])
         }
     }
 

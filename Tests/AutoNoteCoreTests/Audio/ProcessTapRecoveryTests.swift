@@ -364,23 +364,83 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
         #expect(creations(hw) == destructions(hw))
     }
 
-    /// A rebuild that cannot create the tap is a failure of the track, whoever is or is not playing.
-    @Test func aRebuildThatCannotBringTheTapUpEndsInAFailure() async throws {
+    /// Zeros while another app plays may be plain silence. A rebuild for them that cannot bring the tap up again must
+    /// not cost the track: it never counts towards giving up, and the tap is brought up again at a later zero wait.
+    @Test func aRebuildForZerosThatLeavesTheTapDownNeverGivesUp() async throws {
         let host = FakeHostClock(); let hw = FakeTapHardware(); hw.othersPlaying = true
         let src = source(hw, host) { $0.maxConsecutiveFailures = 2 }
         let failure = FailureMessage()
         src.health?.setFailureObserver { failure.set($0) }
         try await src.start { _ in }
         await settle(src)
-        let feeder = feedTap(hw, host: host) { 0 }
+        let feeder = feedTap(hw, host: host) { 0.25 }
         await settle(src, fed: true)                             // callbacks flow before the clock moves
-        defer { feeder.cancel() }
+        feeder.cancel(); await feeder.value
+        let zeros = feedTap(hw, host: host) { 0 }
+        defer { zeros.cancel() }
+        await settle(src, fed: true)
         hw.failOn = "createAggregate"
-        hw.othersPlaying = true
         host.advance(5.1)                                        // a zero rebuild tears the tap down; bring-up fails
+        for _ in 0..<40 { host.advance(3); await settle(src) }   // two minutes of failed attempts
+        #expect(failure.message == nil)                          // far beyond two failures in a row: still no giving up
+        let attempts = creations(hw)
+        #expect(attempts >= 4)                                   // …and it kept trying (5 s, then 10, 20, 40, 60 s apart)
+        #expect(hw.calls.filter { $0 == "start" }.count == 1)
+
+        hw.failOn = nil
+        var steps = 0
+        while hw.calls.filter({ $0 == "start" }).count < 2, steps < 40 { host.advance(3); await settle(src); steps += 1 }
+        #expect(hw.calls.filter { $0 == "start" }.count == 2)    // the tap is up again
+        #expect(failure.message == nil)
+        await src.stop()
+        #expect(creations(hw) == destructions(hw))
+    }
+
+    /// The tap that was given up on stays up. Sound on it means the track is recorded after all: the failure is taken
+    /// back, and a later stop of the callbacks is handled like the first one.
+    @Test func soundOnTheTapThatWasGivenUpOnTakesTheFailureBack() async throws {
+        let host = FakeHostClock(); let hw = FakeTapHardware(); hw.othersPlaying = true
+        let src = source(hw, host) { $0.maxConsecutiveFailures = 3 }
+        let failure = FailureMessage(), recovered = FailureMessage()
+        src.health?.setFailureObserver { failure.set($0) }
+        src.health?.setRecoveryObserver { recovered.set("recovered") }
+        try await src.start { _ in }
+        await settle(src)
         var steps = 0
         while failure.message == nil, steps < 60 { host.advance(3); await settle(src, or: { failure.message != nil }); steps += 1 }
         #expect(failure.message != nil)
+        let givenUpAt = creations(hw)
+
+        hw.fire(frames: 480, hostTime: host.hostTime(), sampleTime: 0, value: 0)        // zeros are not sound
+        await settle(src)
+        #expect(recovered.message == nil)
+        hw.fire(frames: 480, hostTime: host.hostTime(), sampleTime: 480, value: 0.25)
+        #expect(await eventuallyTrue { recovered.message != nil })
+        #expect(creations(hw) == givenUpAt)                      // the tap that delivers is kept
+
+        host.advance(3)                                          // the callbacks stop again while another app plays
+        #expect(await eventuallyTrue { creations(hw) > givenUpAt })   // watched again, with a fresh budget
+        await src.stop()
+        #expect(creations(hw) == destructions(hw))
+    }
+
+    /// Paused: a tap that stops calling back is nobody's loss either. No rebuild until the resume.
+    @Test func whileTheRecordingIsPausedStoppedCallbacksCauseNoRebuild() async throws {
+        let host = FakeHostClock(); let hw = FakeTapHardware(); hw.othersPlaying = true
+        let src = source(hw, host)
+        try await src.start { _ in }
+        await settle(src)
+        hw.fire(frames: 480, hostTime: host.hostTime(), sampleTime: 0, value: 0.25)
+        await settle(src)
+        src.health?.setPaused(true)
+        await settle(src)
+        for _ in 0..<20 { host.advance(10); await settle(src) }   // 200 s without a callback while paused
+        #expect(await src.finishedRebuilds == 0 && creations(hw) == 1)
+        src.health?.setPaused(false)
+        await settle(src)
+        #expect(creations(hw) == 1)                               // the wait starts over at the resume
+        host.advance(3)
+        #expect(await eventuallyTrue { creations(hw) == 2 })      // resumed: the stall is acted on
         await src.stop()
         #expect(creations(hw) == destructions(hw))
     }

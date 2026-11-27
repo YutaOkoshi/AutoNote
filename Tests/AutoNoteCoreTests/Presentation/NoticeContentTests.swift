@@ -76,7 +76,9 @@ import AutoNoteCore
     @Test func everyNoticeHasTheButtonsItsCategoryIsRegisteredWith() throws {
         let samples = NoticeContent.categorySamples.map(NoticeContent.make)
         #expect(samples.map(\.category).sorted() == NoticeContent.allCategories.sorted())
-        for (n, _, _) in Self.table + [(.recordingLoss(.mic, reason: .notArriving), "", [])] {
+        let more: [UserNotice] = [.recordingLoss(.mic, reason: .notArriving), .recordingLoss(.system, reason: .nothingArrived),
+                                  .recordingLoss(.mic, reason: .nothingArrived)]
+        for (n, _, _) in Self.table + more.map({ ($0, "", []) }) {
             let c = NoticeContent.make(n)
             let sample = try #require(samples.first { $0.category == c.category })
             #expect(sample.buttons == c.buttons, "\(c.category)")
@@ -108,9 +110,22 @@ import AutoNoteCore
     /// One notice about system audio at a time: the specific one (another app plays, yet nothing arrives) takes the
     /// place of the general silence warning, and is taken back once audio is heard again.
     @Test func relayTakesNoticesBack() {
-        #expect(NoticeRelay.withdrawals(for: .audioNotArriving(.system, seconds: 61)) == [UserNotice.silence(.system).id])
-        #expect(NoticeRelay.withdrawals(for: .audioArrivingAgain(.system)) == [UserNotice.recordingLoss(.system, reason: .notArriving).id])
-        #expect(NoticeRelay.withdrawals(for: .sourceFailed(.system, message: "gave up")).isEmpty)
+        let notArriving = ["recording.loss.system.notArriving", "recording.loss.system.nothingArrived"]
+        #expect(NoticeRelay.withdrawals(for: .audioNotArriving(.system, seconds: 61, heardBefore: true)) == [UserNotice.silence(.system).id])
+        #expect(NoticeRelay.withdrawals(for: .audioArrivingAgain(.system)) == notArriving)
+        // A failure says more than "not arriving" or "silent": only the failure stays.
+        #expect(NoticeRelay.withdrawals(for: .sourceFailed(.system, message: "gave up")) == notArriving + ["silence.system"])
+        // The track records again: the failure is taken back.
+        #expect(NoticeRelay.withdrawals(for: .sourceRecovered(.mic)) == ["recording.loss.mic.sourceFailed"])
+        #expect(NoticeRelay.notices(for: .sourceRecovered(.mic)).isEmpty)
+        // Nothing about lost audio outlives the recording (the row and the note say it from then on).
+        let m = Manifest(id: Self.mid, title: nil, startedAt: Date(timeIntervalSince1970: 0), endedAt: nil, source: .live, device: nil, language: .ja, tracks: [], pauses: [], bookmarks: [], status: .recorded, silenceWarning: false, autonoteVersion: "test")
+        let stopped = NoticeRelay.withdrawals(for: .stopped(m, .manual))
+        for track in [Track.mic, .system] {
+            for reason in [RecordingLossReason.sourceFailed, .notArriving, .nothingArrived] {
+                #expect(stopped.contains(UserNotice.recordingLoss(track, reason: reason).id))
+            }
+        }
         #expect(NoticeRelay.withdrawals(for: .diskSpaceLow(availableBytes: 1)).isEmpty)
     }
 
@@ -118,7 +133,17 @@ import AutoNoteCore
     @Test func relayLostAudio() {
         #expect(NoticeRelay.notices(for: .sourceFailed(.system, message: "gave up")) == [.recordingLoss(.system, reason: .sourceFailed)])
         #expect(NoticeRelay.notices(for: .sourceFailed(.mic, message: "denied")) == [.recordingLoss(.mic, reason: .sourceFailed)])
-        #expect(NoticeRelay.notices(for: .audioNotArriving(.system, seconds: 61)) == [.recordingLoss(.system, reason: .notArriving)])
+        #expect(NoticeRelay.notices(for: .audioNotArriving(.system, seconds: 61, heardBefore: true)) == [.recordingLoss(.system, reason: .notArriving)])
+        // Not one sample heard in this recording: the permission may be what is missing, so the notice says so and
+        // keeps the button to the settings. Once sound was heard, the permission is fine: no such advice, no button.
+        #expect(NoticeRelay.notices(for: .audioNotArriving(.system, seconds: 61, heardBefore: false)) == [.recordingLoss(.system, reason: .nothingArrived)])
+        let never = NoticeContent.make(.recordingLoss(.system, reason: .nothingArrived))
+        #expect(never.body.contains("システム音声の録音許可を確認") && never.body.contains("ミュート中なら問題ありません"))
+        #expect(never.buttons.map(\.title) == ["システム設定を開く"] && never.userInfo["track"] == "system")
+        #expect(NoticeContent.needsAttention(category: never.category))
+        let heard = NoticeContent.make(.recordingLoss(.system, reason: .notArriving))
+        #expect(!heard.body.contains("許可") && heard.buttons.isEmpty)
+        #expect(UserNotice.recordingLoss(.system, reason: .nothingArrived).id != UserNotice.recordingLoss(.system, reason: .notArriving).id)
         #expect(NoticeRelay.notices(for: .audioArrivingAgain(.system)).isEmpty)
         for reason in [RecordingLossReason.notArriving, .sourceFailed] {
             #expect(NoticeContent.needsAttention(category: NoticeContent.make(.recordingLoss(.system, reason: reason)).category))

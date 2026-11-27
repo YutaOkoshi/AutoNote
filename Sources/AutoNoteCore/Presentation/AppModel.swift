@@ -195,7 +195,7 @@ public enum UserAction: Equatable, Sendable {
                                  readiness: readiness,
                                  latestMinutesAvailable: meetings.contains { $0.filePath != nil }, rows: meetings,
                                  automationFailures: automationFailures, shortcuts: shortcuts, update: updateMenuItem,
-                                 now: now, timeZone: timeZone)
+                                 recordingLoss: prompts, now: now, timeZone: timeZone)
     }
 
     /// `origin` is where the person asked (the recorder logs it with the transition). The main window's views use the

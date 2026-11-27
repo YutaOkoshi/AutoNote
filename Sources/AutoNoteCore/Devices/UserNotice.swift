@@ -50,6 +50,9 @@ public enum RecordingLossReason: String, Equatable, Sendable {
     /// Audio that should be arriving has not for a minute although the source was rebuilt
     /// (`RecordingEvent.audioNotArriving`); the source keeps trying, and the notice is withdrawn when audio is back.
     case notArriving
+    /// The same, on a track that has not delivered one non-zero sample in this recording: the permission to record
+    /// it may be what is missing, so this one keeps the way to the settings.
+    case nothingArrived
 }
 
 public enum UserNoticeAction: Equatable, Sendable {

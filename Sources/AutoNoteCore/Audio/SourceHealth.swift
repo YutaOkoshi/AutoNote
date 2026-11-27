@@ -61,6 +61,7 @@ public final class SourceHealth: Sendable {
         var windowCallbacks = 0
         var windowNonZero = false
         var failureObserver: (@Sendable (String) -> Void)?
+        var recoveryObserver: (@Sendable () -> Void)?
         var failure: String?
         var notArrivingObserver: (@Sendable (Int?) -> Void)?
         var notArriving: Int?
@@ -150,6 +151,19 @@ public final class SourceHealth: Sendable {
             return s.failureObserver
         }
         observer?(message)
+    }
+
+    /// Called when a source that had reported a failure delivers audio after all (the tap it kept is heard again).
+    public func setRecoveryObserver(_ observer: (@Sendable () -> Void)?) { state.withLock { $0.recoveryObserver = observer } }
+
+    /// Takes the reported failure back; a later one is reported again.
+    func reportRecovered() {
+        let observer = state.withLock { s -> (@Sendable () -> Void)? in
+            guard s.failure != nil else { return nil }
+            s.failure = nil
+            return s.recoveryObserver
+        }
+        observer?()
     }
 
     /// Called with the seconds so far when the source keeps running but, for a long stretch, received nothing while

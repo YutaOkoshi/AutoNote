@@ -250,9 +250,33 @@ import AutoNoteTestSupport
     @Test func theRowSaysPossiblyOnlyWhenNothingIsCertain() {
         #expect(AudioLossPresentation.rowLabel([Self.system12]) == "録音の欠損の可能性: システム音声 約 12 分")
         #expect(AudioLossPresentation.rowLabel([Self.mic45]) == "録音の欠損: マイク 45 秒")
-        #expect(AudioLossPresentation.rowLabel([Self.mic45, Self.system12]) == "録音の欠損: マイク 45 秒、システム音声 約 12 分")
+        // Next to a loss that is a fact, the suspect seconds keep their own "possibly".
+        #expect(AudioLossPresentation.rowLabel([Self.mic45, Self.system12]) == "録音の欠損: マイク 45 秒、システム音声 約 12 分（可能性）")
+        #expect(AudioLossPresentation.rowLabel([TrackLoss(track: .mic, seconds: 0, sourceFailed: true), Self.system12])
+                == "録音の欠損: マイク（録音に失敗）、システム音声 約 12 分（可能性）")
         #expect(AudioLossPresentation.rowLabel([TrackLoss(track: .system, seconds: 0, sourceFailed: true)]) == "録音の欠損: システム音声（録音に失敗）")
         #expect(AudioLossPresentation.rowLabel(nil) == nil && AudioLossPresentation.rowLabel([]) == nil)
+    }
+
+    /// A microphone that delivered only zeros for long is not a loss (a muted headset looks the same), but it is
+    /// worth a look: said in the row from the same length a loss would be told from.
+    @Test func aMicrophoneThatWasAllZerosForLongIsSaidInTheRowOnly() {
+        func mic(zero: Int) -> [TrackHealth] {
+            [TrackHealth(track: .mic, noCallbackSeconds: 0, zeroSeconds: zero, restarts: 0, callbacks: 1, droppedFrames: 0)]
+        }
+        let hour = 4140.0   // threshold 180 s
+        #expect(AudioLossPresentation.micSilentLabel(health: mic(zero: 1186), losses: nil, recordedSeconds: hour)
+                == "マイクが約 20 分、完全な無音でした（ミュートしていたなら問題ありません）")
+        #expect(AudioLossPresentation.micSilentLabel(health: mic(zero: 179), losses: nil, recordedSeconds: hour) == nil)
+        #expect(AudioLossPresentation.micSilentLabel(health: mic(zero: 45), losses: nil, recordedSeconds: 300)
+                == "マイクが 45 秒、完全な無音でした（ミュートしていたなら問題ありません）")
+        // A failed microphone is already said as a loss; an unfinished or older recording says nothing.
+        #expect(AudioLossPresentation.micSilentLabel(health: mic(zero: 1186), losses: [TrackLoss(track: .mic, seconds: 0, sourceFailed: true)],
+                                                     recordedSeconds: hour) == nil)
+        #expect(AudioLossPresentation.micSilentLabel(health: mic(zero: 1186), losses: nil, recordedSeconds: nil) == nil)
+        #expect(AudioLossPresentation.micSilentLabel(health: nil, losses: nil, recordedSeconds: hour) == nil)
+        // It is not a loss: neither the rule nor the note mention it.
+        #expect(AudioLossRule.evaluate(health: mic(zero: 1186), failedTracks: [], recordedSeconds: hour) == nil)
     }
 
     /// One sentence pair per track: whose voice, how sure, and what is missing from the note.

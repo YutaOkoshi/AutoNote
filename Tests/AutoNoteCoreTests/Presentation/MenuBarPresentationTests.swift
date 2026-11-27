@@ -16,14 +16,34 @@ import AutoNoteTestSupport
                       startedAt: Date? = nil, deadline: Date? = nil, deviceName: String? = nil,
                       elapsedSeconds: Int? = nil, queue: QueueStatus = .empty, readiness: Readiness = .assumedReady,
                       latestMinutesAvailable: Bool = true, rows: [MeetingRow] = [],
-                      automationFailures: [AutomationRunRecord] = [], shortcuts: Shortcuts = Shortcuts()) -> MenuBarPresentation {
+                      automationFailures: [AutomationRunRecord] = [], shortcuts: Shortcuts = Shortcuts(),
+                      recordingLoss: [UserNotice] = []) -> MenuBarPresentation {
         let id: MeetingID? = state == .idle || state == .countdown ? nil : meetingID
         let snapshot = RecorderSnapshot(state: state, meetingID: id, startedAt: startedAt, deviceName: deviceName,
                                         deadline: deadline, language: .ja)
         return MenuBarPresentation.make(recorder: snapshot, elapsedSeconds: elapsedSeconds, queue: queue,
                                         readiness: readiness,
                                         latestMinutesAvailable: latestMinutesAvailable, rows: rows,
-                                        automationFailures: automationFailures, shortcuts: shortcuts, now: now, timeZone: Samples.tokyo)
+                                        automationFailures: automationFailures, shortcuts: shortcuts,
+                                        recordingLoss: recordingLoss, now: now, timeZone: Samples.tokyo)
+    }
+
+    /// A track that is not being recorded shows in the menu and on the icon while its notice is up: the menu bar is
+    /// what stays in sight while another app's window is shared.
+    @Test func aTrackThatIsNotRecordedShowsInTheMenuAndOnTheIcon() {
+        let losses: [UserNotice] = [.recordingLoss(.system, reason: .notArriving), .recordingLoss(.mic, reason: .sourceFailed),
+                                    .interruptedRecordingFound(MeetingID(rawValue: "20261024-1400-a1b2"))]
+        let p = make(state: .recording, elapsedSeconds: 65, recordingLoss: losses)
+        #expect(p.symbol == "exclamationmark.triangle" && p.title == "1:05")
+        #expect(Array(p.items.prefix(2)) == [.status("⚠ システム音声が録音に入っていません"), .status("⚠ マイクを録音できていません")])
+        #expect(make(state: .recording, recordingLoss: [.recordingLoss(.system, reason: .nothingArrived)]).items.first
+                == .status("⚠ システム音声が録音に入っていません"))
+        // Taken back: the icon and the menu are as before. Paused keeps saying it; idle never does.
+        let back = make(state: .recording, elapsedSeconds: 65)
+        #expect(back.symbol == "record.circle" && !back.items.contains(.status("⚠ システム音声が録音に入っていません")))
+        #expect(make(state: .paused, recordingLoss: losses).symbol == "exclamationmark.triangle")
+        let idle = make(state: .idle, recordingLoss: losses)
+        #expect(idle.symbol == "waveform" && idle.items.first == start)
     }
 
     @Test func idle() {

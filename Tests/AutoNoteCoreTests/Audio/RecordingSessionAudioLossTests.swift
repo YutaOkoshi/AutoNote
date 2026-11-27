@@ -44,7 +44,9 @@ private final class SystemAudioLog: Sendable {
         Task {
             for await event in events {
                 let word: String? = switch event {
-                case .audioNotArriving(.system, _): "notArriving"
+                case .audioNotArriving(.system, _, let heardBefore): heardBefore ? "notArriving" : "nothingArrived"
+                case .sourceFailed(.system, _): "failed"
+                case .sourceRecovered(.system): "recovered"
                 case .audioArrivingAgain(.system): "again"
                 case .silenceWarning(let w) where w.track == .system: "silence"
                 default: nil
@@ -57,7 +59,7 @@ private final class SystemAudioLog: Sendable {
 }
 
 private func notArriving(_ events: [RecordingEvent]) -> [Int] {
-    events.compactMap { if case .audioNotArriving(.system, let seconds) = $0 { seconds } else { nil } }
+    events.compactMap { if case .audioNotArriving(.system, let seconds, _) = $0 { seconds } else { nil } }
 }
 
 private func failed(_ events: [RecordingEvent], _ track: Track) -> Bool {
@@ -90,6 +92,8 @@ private func failed(_ events: [RecordingEvent], _ track: Track) -> Bool {
         let received = await eventsUntilStopped(events)
         #expect(notArriving(received).count == 1)           // told once while recording
         #expect((notArriving(received).first ?? 0) >= 60)
+        // Not one sample was heard in this recording, which is said too (the permission is then in doubt as well).
+        #expect(received.contains { if case .audioNotArriving(.system, _, heardBefore: false) = $0 { true } else { false } })
         #expect(!failed(received, .system))                 // zeros never fail the track
         #expect(try await t.manifests.load(m.id) == m)
     }
@@ -181,10 +185,10 @@ private func failed(_ events: [RecordingEvent], _ track: Track) -> Bool {
         let feeder = feedTap(t.factory.hardware, host: t.host) { level.withLock { $0 } }
         await settle(tap, fed: true)
         for _ in 0..<70 { t.host.advance(1); await settle(tap, fed: true) }      // 70 s of zeros
-        #expect(await eventuallyTrue(.seconds(30)) { log.all == ["notArriving"] })
+        #expect(await eventuallyTrue(.seconds(30)) { log.all == ["nothingArrived"] })    // not one sample so far
         await t.session.tick()                                                   // 70 s without a non-zero sample
         level.withLock { $0 = 0.25 }
-        #expect(await eventuallyTrue(.seconds(30)) { log.all == ["notArriving", "again"] })
+        #expect(await eventuallyTrue(.seconds(30)) { log.all == ["nothingArrived", "again"] })
         level.withLock { $0 = 0 }
         let fired = await tap.statistics().callbacks
         #expect(await eventuallyTrue(.seconds(10)) { (tap.health?.callbacks ?? 0) >= fired + 2 })
@@ -194,7 +198,7 @@ private func failed(_ events: [RecordingEvent], _ track: Track) -> Bool {
         feeder.cancel(); await feeder.value
         let m = try await t.session.stop()
         await collector.value
-        #expect(log.all == ["notArriving", "again", "notArriving"])
+        #expect(log.all == ["nothingArrived", "again", "notArriving"])                   // heard before: said so
         #expect(m.silenceWarning)
     }
 
@@ -218,5 +222,73 @@ private func failed(_ events: [RecordingEvent], _ track: Track) -> Bool {
         let received = await eventsUntilStopped(events)
         #expect(failed(received, .system))
         #expect(notArriving(received).isEmpty)              // the failure is the message; not both
+    }
+
+    /// The tap was given up on (no callbacks, rebuilds did not help) and then the system calls it again with sound:
+    /// the track is being recorded, so the failure is taken back while recording and is not in the manifest.
+    @Test func systemAudioHeardAgainAfterGivingUpIsNotAFailedTrack() async throws {
+        var policy = tapRecoveryTestPolicy; policy.maxConsecutiveFailures = 3
+        let t = try TapSession(policy: policy); t.factory.hardware.othersPlaying = true
+        let log = SystemAudioLog()
+        let collecting = log.collect(await t.session.events())
+        _ = try await t.session.start(.init(language: .ja))
+        let tap = try #require(t.factory.tap)
+        await settle(tap)
+        var steps = 0
+        while !log.all.contains("failed"), steps < 60 { t.host.advance(3); await settle(tap, or: { log.all.contains("failed") }); steps += 1 }
+        #expect(log.all.contains("failed"))
+        let feeder = feedTap(t.factory.hardware, host: t.host) { 0.25 }
+        #expect(await eventuallyTrue { log.all.contains("recovered") })
+        for _ in 0..<5 { t.host.advance(1); await settle(tap, fed: true) }
+        feeder.cancel(); await feeder.value
+        let m = try await t.session.stop()
+        await collecting.value
+
+        #expect(log.all.filter { $0 == "failed" || $0 == "recovered" } == ["failed", "recovered"])
+        #expect(m.audioLoss?.contains { $0.sourceFailed } != true)
+    }
+
+    /// A microphone that could not be opened at the start and is attached later records from then on: the failure is
+    /// taken back. No silence warning comes on top of the failure meanwhile.
+    @Test func aMicrophoneAttachedAfterItsFailureIsNotAFailedTrack() async throws {
+        let h = try await SessionHarness.make(mic: FakeAudioSource(track: .mic, startError: FakeError(message: "boom")))
+        let events = await h.session.events()
+        _ = try await h.session.start(.init(language: .ja))
+        h.clock.advance(20)
+        await h.session.tick()                               // 15 s of "silence" on a track already said to have failed
+        let newMic = FakeAudioSource(track: .mic)
+        h.factory.nextMicrophone = newMic
+        try await h.session.attachMicrophone(deviceUID: nil)
+        await newMic.emit(AudioFixtures.tone(start: 20, seconds: 5))
+        h.clock.advance(5)
+        let m = try await h.session.stop()
+
+        let received = await eventsUntilStopped(events)
+        let words = received.compactMap { event -> String? in
+            switch event {
+            case .sourceFailed(.mic, _): "failed"
+            case .sourceRecovered(.mic): "recovered"
+            case .silenceWarning(let w) where w.track == .mic: "silence"
+            default: nil
+            }
+        }
+        #expect(words == ["failed", "recovered"])
+        #expect(m.audioLoss == nil)
+    }
+
+    /// A writer's failure is not taken back by a new microphone: that track drops every later chunk.
+    @Test func aWriterFailureStaysWhateverTheSourceDoes() async throws {
+        let h = try await SessionHarness.make()
+        let events = await h.session.events()
+        _ = try await h.session.start(.init(language: .ja))
+        await h.session.reportWriterFailures([(.mic, FakeError(message: "boom"))])
+        h.factory.nextMicrophone = FakeAudioSource(track: .mic)
+        try await h.session.attachMicrophone(deviceUID: nil)
+        h.clock.advance(5)
+        let m = try await h.session.stop()
+
+        let received = await eventsUntilStopped(events)
+        #expect(!received.contains { if case .sourceRecovered = $0 { true } else { false } })
+        #expect(m.audioLoss?.first == TrackLoss(track: .mic, seconds: 0, sourceFailed: true))
     }
 }

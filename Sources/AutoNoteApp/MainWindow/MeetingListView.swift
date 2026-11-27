@@ -105,6 +105,13 @@ private struct MeetingListRow: View {
                     .lineLimit(2)
                     .help(row.audioLossHelp ?? "")
             }
+            // Not a loss (a muted headset looks the same), so in the row's ordinary colour.
+            if let silent = row.micSilentLabel {
+                Label(silent, systemImage: "mic.slash")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
             ForEach(failures, id: \.self) { name in
                 Label("Automation 失敗: \(name)", systemImage: "exclamationmark.octagon")
                     .font(.caption)
