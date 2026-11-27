@@ -12,18 +12,22 @@ public enum PrivacyPane {
     public static let systemAudio = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture")!
 }
 
-/// The wording of `UserNotice.recordingLoss`. "May": an app that keeps its output open in silence looks the same as
-/// audio that does not arrive.
+/// The wording of `UserNotice.recordingLoss`. "Not arriving" may be a false alarm (an app that keeps its output open
+/// in silence looks the same), so it says how to tell and what to do. A failure may also be the disk (a writer).
 public enum RecordingLossCopy {
     public static func body(_ track: Track, _ reason: RecordingLossReason) -> String {
         let name = AudioLossPresentation.trackName(track)
-        let voice = track == .mic ? "自分の声" : "相手の声"
         switch reason {
         case .notArriving:
-            let others = track == .system ? "（ほかのアプリは音を出しています）" : ""
-            return "\(name)が 1 分以上録音に入っていません\(others)。\(voice)が録れていない可能性があります。録音は続けています"
+            switch track {
+            case .system:
+                return "\(name)が 1 分以上録音に入っていません（ほかのアプリは音を出しています）。相手が話しているのにこの通知が出たときは、録音を止めて始め直してください。相手が黙っている・ミュート中なら問題ありません"
+            case .mic:
+                return "\(name)が 1 分以上録音に入っていません。話しているのにこの通知が出たときは、録音を止めて始め直してください。ミュート中なら問題ありません"
+            }
         case .sourceFailed:
-            let check = track == .mic ? "マイクの許可と機材" : "システム音声の録音許可"
+            let voice = track == .mic ? "自分の声" : "相手の声"
+            let check = track == .mic ? "マイクの許可と機材、ディスクの空き" : "システム音声の録音許可とディスクの空き"
             return "\(name)を録音できていません。この先の\(voice)は録音に入りません。\(check)を確認し、録音を止めて始め直してください"
         }
     }
@@ -34,8 +38,20 @@ public struct NoticeContent: Equatable, Sendable {
     public static let allCategories = [
         "deviceConnectedCountdown", "deviceSeenFirstTime", "deviceAlreadyConnected", "deviceGoneGrace", "silence", "diskLow",
         "recordingTooShort", "interruptedRecordingFound", "minutesGenerated", "transcriptOnly", "claudeNotLoggedIn",
-        "overwriteConfirmation", "outputFolderMissing", "automationFailed", "recordingLoss",
+        "overwriteConfirmation", "outputFolderMissing", "automationFailed", "recordingLoss", "recordingNotArriving",
     ]
+
+    /// One notice per category. A system notification gets its buttons from its category, so every notice of a
+    /// category must have the buttons of its sample here (the app registers the categories from these).
+    public static var categorySamples: [UserNotice] {
+        let d = DeviceRef(name: "", uid: "", transport: "")
+        let m = MeetingID(rawValue: "")
+        return [.deviceConnectedCountdown(d, seconds: 0), .deviceSeenFirstTime(d), .deviceAlreadyConnected(d), .deviceGoneGrace(d, seconds: 0),
+                .silence(.mic), .diskLow(availableBytes: 0), .recordingTooShort(m), .interruptedRecordingFound(m),
+                .minutesGenerated(m, title: ""), .transcriptOnly(m), .claudeNotLoggedIn(m), .overwriteConfirmation(m),
+                .outputFolderMissing, .automationFailed(name: "", m), .recordingLoss(.system, reason: .sourceFailed),
+                .recordingLoss(.system, reason: .notArriving)]
+    }
 
     /// `UserNotice.id`.
     public var id: String
@@ -53,7 +69,8 @@ public struct NoticeContent: Equatable, Sendable {
 
     /// Notices that need attention rather than a passing banner (the App gives them a time-sensitive interruption level).
     public static func needsAttention(category: String) -> Bool {
-        ["recordingTooShort", "interruptedRecordingFound", "overwriteConfirmation", "claudeNotLoggedIn", "recordingLoss"].contains(category)
+        ["recordingTooShort", "interruptedRecordingFound", "overwriteConfirmation", "claudeNotLoggedIn", "recordingLoss",
+         "recordingNotArriving"].contains(category)
     }
 
     public static func make(_ n: UserNotice) -> NoticeContent {
@@ -88,9 +105,11 @@ public struct NoticeContent: Equatable, Sendable {
             return c("outputFolderMissing", "保存先が見つかりません")
         case .automationFailed(let name, let m):
             return c("automationFailed", "Automation 失敗: \(name)", [("open", "開く")], meeting(m).merging(["name": name]) { $1 })
-        case .recordingLoss(let t, let reason):
-            return c("recordingLoss", RecordingLossCopy.body(t, reason),
-                     reason == .sourceFailed ? [("openPrivacy", "システム設定を開く")] : [], ["track": t.rawValue])
+        case .recordingLoss(let t, .sourceFailed):
+            return c("recordingLoss", RecordingLossCopy.body(t, .sourceFailed), [("openPrivacy", "システム設定を開く")], ["track": t.rawValue])
+        case .recordingLoss(let t, .notArriving):
+            // Its own category: the permission is not in doubt here, so no button to the settings.
+            return c("recordingNotArriving", RecordingLossCopy.body(t, .notArriving), [], ["track": t.rawValue])
         }
     }
 

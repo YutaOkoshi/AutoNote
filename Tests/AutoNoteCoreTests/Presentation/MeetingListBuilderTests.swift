@@ -122,7 +122,7 @@ import AutoNoteTestSupport
         let row = try #require(MeetingListBuilder.build(index: [], manifests: [m], queue: .empty, outputFolder: nil).first)
         #expect(row.state == .tooShort)
         #expect(row.silenceWarning)
-        #expect(row.audioLossLabel == nil)
+        #expect(row.audioLossLabel == nil && row.audioLossHelp == nil)
     }
 
     /// Lost audio is its own line on the row (which track, how long), apart from the silence mark.
@@ -130,11 +130,13 @@ import AutoNoteTestSupport
         var m = manifest("20261024-1400-a1b2", status: .recorded)
         m.audioLoss = [TrackLoss(track: .system, seconds: 720, sourceFailed: false)]
         let row = try #require(MeetingListBuilder.build(index: [], manifests: [m], queue: .empty, outputFolder: nil).first)
-        #expect(row.audioLossLabel == "録音の欠損: システム音声 約 12 分")
+        #expect(row.audioLossLabel == "録音の欠損の可能性: システム音声 約 12 分")
+        #expect(row.audioLossHelp == AudioLossPresentation.help(m.audioLoss))
+        #expect(row.audioLossHelp?.hasPrefix("システム音声（相手の声）が約 12 分、") == true)
         #expect(!row.silenceWarning)
         // An older client's row (no such key) still decodes, and a row without a loss does not send the key.
         let json = String(decoding: try AutoNoteJSON.compactEncoder().encode(MeetingRow(id: "x")), as: UTF8.self)
-        #expect(!json.contains("audio_loss_label"))
+        #expect(!json.contains("audio_loss_label") && !json.contains("audio_loss_help"))
         #expect(try AutoNoteJSON.decoder().decode(MeetingRow.self, from: Data(json.utf8)).audioLossLabel == nil)
     }
 

@@ -211,7 +211,9 @@ public enum UserAction: Equatable, Sendable {
 
     public func noticePosted(_ n: UserNotice) {
         switch n {
-        case .recordingTooShort, .interruptedRecordingFound, .overwriteConfirmation:
+        // A loss while recording too: a system notification is hidden while the screen is shared or when
+        // notifications are off, and this is the moment something can still be done about it.
+        case .recordingTooShort, .interruptedRecordingFound, .overwriteConfirmation, .recordingLoss:
             if !prompts.contains(where: { $0.id == n.id }) { prompts.append(n) }
         default:
             break
@@ -406,6 +408,8 @@ public enum UserAction: Equatable, Sendable {
 
     private func apply(_ s: RecorderSnapshot) async {
         recorder = s
+        // A loss band is about the recording under way; afterwards the meeting's row and note say it.
+        if s.state == .idle { prompts.removeAll { if case .recordingLoss = $0 { true } else { false } } }
         await updateElapsed()
     }
 

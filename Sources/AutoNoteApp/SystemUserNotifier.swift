@@ -41,22 +41,12 @@ final class SystemUserNotifier: NSObject, UserNotifier, UNUserNotificationCenter
 
     /// One category per notice case, with the buttons that case has. Buttons for the device cases depend only on the case.
     private func registerCategories() {
-        let samples = Self.sampleNotices()
-        let categories = samples.map { n -> UNNotificationCategory in
+        let categories = NoticeContent.categorySamples.map { n -> UNNotificationCategory in
             let content = NoticeContent.make(n)
             let actions = content.buttons.map { UNNotificationAction(identifier: $0.id, title: $0.title, options: [.foreground]) }
             return UNNotificationCategory(identifier: content.category, actions: actions, intentIdentifiers: [], options: [])
         }
         center.setNotificationCategories(Set(categories))
-    }
-
-    private static func sampleNotices() -> [UserNotice] {
-        let d = DeviceRef(name: "", uid: "", transport: "")
-        let m = MeetingID(rawValue: "")
-        return [.deviceConnectedCountdown(d, seconds: 0), .deviceSeenFirstTime(d), .deviceAlreadyConnected(d), .deviceGoneGrace(d, seconds: 0),
-                .silence(.mic), .diskLow(availableBytes: 0), .recordingTooShort(m), .interruptedRecordingFound(m),
-                .minutesGenerated(m, title: ""), .transcriptOnly(m), .claudeNotLoggedIn(m), .overwriteConfirmation(m),
-                .outputFolderMissing, .automationFailed(name: "", m), .recordingLoss(.system, reason: .sourceFailed)]
     }
 
     /// Asks for alerts only (no sound, no badge). A denial is logged, not thrown: the window band is the fallback surface.

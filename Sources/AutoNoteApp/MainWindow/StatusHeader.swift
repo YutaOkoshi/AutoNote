@@ -45,6 +45,9 @@ struct StatusHeader: View {
             ForEach(model.prompts, id: \.id) { notice in
                 if case .recordingTooShort(let id) = notice {
                     shortRecordingBand(id)
+                } else if case .recordingLoss = notice {
+                    // Text only: the settings button of the notification is opened by the notification's own handler.
+                    Band(systemImage: "waveform.slash", tint: .orange) { Text(NoticeContent.make(notice).body) }
                 } else {
                     promptBand(NoticeContent.make(notice))
                 }

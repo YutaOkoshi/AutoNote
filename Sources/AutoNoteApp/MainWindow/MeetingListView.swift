@@ -103,7 +103,7 @@ private struct MeetingListRow: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .lineLimit(2)
-                    .help("ほかのアプリが音を出していた間、録音に音が入っていませんでした。その間の発言は文字起こしと議事録に入っていません")
+                    .help(row.audioLossHelp ?? "")
             }
             ForEach(failures, id: \.self) { name in
                 Label("Automation 失敗: \(name)", systemImage: "exclamationmark.octagon")

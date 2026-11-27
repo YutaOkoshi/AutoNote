@@ -13,6 +13,16 @@ public enum NoticeRelay {
         }
     }
 
+    /// Notices (by id) that an event makes untrue. Only one notice about system audio at a time: "not arriving"
+    /// takes the place of the general silence warning, and is itself taken back when audio is heard again.
+    public static func withdrawals(for e: RecordingEvent) -> [String] {
+        switch e {
+        case .audioNotArriving(.system, _): [UserNotice.silence(.system).id]
+        case .audioArrivingAgain(let track): [UserNotice.recordingLoss(track, reason: .notArriving).id]
+        default: []
+        }
+    }
+
     public static func notices(previous: QueueStatus, current: QueueStatus, rows: [MeetingRow]) -> [UserNotice] {
         var out: [UserNotice] = []
         let currentIDs = Set(current.items.map(\.meetingID))

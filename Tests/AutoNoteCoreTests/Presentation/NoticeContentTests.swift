@@ -26,12 +26,12 @@ import AutoNoteCore
         (.outputFolderMissing, "保存先が見つかりません", []),
         (.automationFailed(name: "weekly", mid), "Automation 失敗: weekly", [("開く", .openMeeting(mid))]),
         (.recordingLoss(.system, reason: .notArriving),
-         "システム音声が 1 分以上録音に入っていません（ほかのアプリは音を出しています）。相手の声が録れていない可能性があります。録音は続けています", []),
+         "システム音声が 1 分以上録音に入っていません（ほかのアプリは音を出しています）。相手が話しているのにこの通知が出たときは、録音を止めて始め直してください。相手が黙っている・ミュート中なら問題ありません", []),
         (.recordingLoss(.system, reason: .sourceFailed),
-         "システム音声を録音できていません。この先の相手の声は録音に入りません。システム音声の録音許可を確認し、録音を止めて始め直してください",
+         "システム音声を録音できていません。この先の相手の声は録音に入りません。システム音声の録音許可とディスクの空きを確認し、録音を止めて始め直してください",
          [("システム設定を開く", .openPrivacySettings)]),
         (.recordingLoss(.mic, reason: .sourceFailed),
-         "マイクを録音できていません。この先の自分の声は録音に入りません。マイクの許可と機材を確認し、録音を止めて始め直してください",
+         "マイクを録音できていません。この先の自分の声は録音に入りません。マイクの許可と機材、ディスクの空きを確認し、録音を止めて始め直してください",
          [("システム設定を開く", .openPrivacySettings)]),
     ]
 
@@ -57,7 +57,8 @@ import AutoNoteCore
         }
     }
 
-    // All 15 cases (18 notices) round-trip each button through action(category:buttonID:userInfo:) to the table's action.
+    // All 15 cases (18 notices, 16 categories: a recording loss has one per reason) round-trip each button through
+    // action(category:buttonID:userInfo:) to the table's action.
     @Test func buttonsMapBackToActions() {
         #expect(Self.table.count == 18)  // 15 cases, silence in both tracks, recording loss in three forms
         for (n, _, buttons) in Self.table {
@@ -67,7 +68,19 @@ import AutoNoteCore
                 #expect(NoticeContent.action(category: c.category, buttonID: b.id, userInfo: c.userInfo) == expected.1)
             }
         }
-        #expect(Set(Self.table.map { NoticeContent.make($0.0).category }).count == 15)
+        #expect(Set(Self.table.map { NoticeContent.make($0.0).category }).count == 16)
+    }
+
+    /// A system notification gets its buttons from its category, and a category is registered from one sample:
+    /// every notice must have exactly the buttons of its category's sample.
+    @Test func everyNoticeHasTheButtonsItsCategoryIsRegisteredWith() throws {
+        let samples = NoticeContent.categorySamples.map(NoticeContent.make)
+        #expect(samples.map(\.category).sorted() == NoticeContent.allCategories.sorted())
+        for (n, _, _) in Self.table + [(.recordingLoss(.mic, reason: .notArriving), "", [])] {
+            let c = NoticeContent.make(n)
+            let sample = try #require(samples.first { $0.category == c.category })
+            #expect(sample.buttons == c.buttons, "\(c.category)")
+        }
     }
 
     // The content id is the UserNotice id so a re-post replaces and withdraw finds it.
@@ -92,12 +105,24 @@ import AutoNoteCore
         #expect(NoticeRelay.notices(for: .bookmarked(b)).isEmpty && NoticeRelay.notices(for: .stopped(m, .manual)).isEmpty)
     }
 
+    /// One notice about system audio at a time: the specific one (another app plays, yet nothing arrives) takes the
+    /// place of the general silence warning, and is taken back once audio is heard again.
+    @Test func relayTakesNoticesBack() {
+        #expect(NoticeRelay.withdrawals(for: .audioNotArriving(.system, seconds: 61)) == [UserNotice.silence(.system).id])
+        #expect(NoticeRelay.withdrawals(for: .audioArrivingAgain(.system)) == [UserNotice.recordingLoss(.system, reason: .notArriving).id])
+        #expect(NoticeRelay.withdrawals(for: .sourceFailed(.system, message: "gave up")).isEmpty)
+        #expect(NoticeRelay.withdrawals(for: .diskSpaceLow(availableBytes: 1)).isEmpty)
+    }
+
     // A track that failed, or audio that keeps not arriving, is told while the recording still runs.
     @Test func relayLostAudio() {
         #expect(NoticeRelay.notices(for: .sourceFailed(.system, message: "gave up")) == [.recordingLoss(.system, reason: .sourceFailed)])
         #expect(NoticeRelay.notices(for: .sourceFailed(.mic, message: "denied")) == [.recordingLoss(.mic, reason: .sourceFailed)])
         #expect(NoticeRelay.notices(for: .audioNotArriving(.system, seconds: 61)) == [.recordingLoss(.system, reason: .notArriving)])
-        #expect(NoticeContent.needsAttention(category: NoticeContent.make(.recordingLoss(.system, reason: .notArriving)).category))
+        #expect(NoticeRelay.notices(for: .audioArrivingAgain(.system)).isEmpty)
+        for reason in [RecordingLossReason.notArriving, .sourceFailed] {
+            #expect(NoticeContent.needsAttention(category: NoticeContent.make(.recordingLoss(.system, reason: reason)).category))
+        }
         // The settings button opens the pane of the track.
         #expect(NoticeContent.make(.recordingLoss(.system, reason: .sourceFailed)).userInfo["track"] == "system")
         #expect(NoticeContent.make(.recordingLoss(.mic, reason: .sourceFailed)).userInfo["track"] == "mic")

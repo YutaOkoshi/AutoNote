@@ -237,7 +237,10 @@ final class AppEnvironment {
                 { await live.handle($0) },
                 { await liveSummary.handle($0) },
                 { await trigger.handle($0) },
-                { e in for n in NoticeRelay.notices(for: e) { await notifier.post(n) } },
+                { e in
+                    for id in NoticeRelay.withdrawals(for: e) { await notifier.withdraw(id: id) }
+                    for n in NoticeRelay.notices(for: e) { await notifier.post(n) }
+                },
             ],
             onQueueInputsChanged: { new in
                 await Self.rebuildQueue(new, output: output, stages: stages, queue: queue, registry: registry)

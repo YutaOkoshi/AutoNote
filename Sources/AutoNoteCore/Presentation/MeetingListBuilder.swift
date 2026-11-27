@@ -36,6 +36,7 @@ public enum MeetingListBuilder {
             }
             row.silenceWarning = manifest?.silenceWarning ?? false
             row.audioLossLabel = AudioLossPresentation.rowLabel(manifest?.audioLoss)
+            row.audioLossHelp = AudioLossPresentation.help(manifest?.audioLoss)
             row.summaryFirstLine = entry.flatMap { $0.firstLine.isEmpty ? nil : $0.firstLine }
             if let job = jobs[id.rawValue] { apply(job, to: &row) }
             return row

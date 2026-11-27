@@ -48,7 +48,7 @@ public enum RecordingLossReason: String, Equatable, Sendable {
     /// The track's source or writer failed (`RecordingEvent.sourceFailed`): nothing more is recorded on it.
     case sourceFailed
     /// Audio that should be arriving has not for a minute although the source was rebuilt
-    /// (`RecordingEvent.audioNotArriving`); the source keeps trying.
+    /// (`RecordingEvent.audioNotArriving`); the source keeps trying, and the notice is withdrawn when audio is back.
     case notArriving
 }
 

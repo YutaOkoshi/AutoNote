@@ -24,13 +24,13 @@ private func doc(_ minutes: MinutesOutput?, status: MeetingStatus = .minutesGene
 
 /// A recording that lost audio says so in one line right under the title; everything else is as usual.
 @Test func aLossyRecordingIsNotedUnderTheTitle() throws {
-    #expect(!doc(Samples.minutes).render().contains("録音が一部欠けている"))
+    #expect(!doc(Samples.minutes).render().contains("録音に入っていない"))
     var m = Samples.manifest; m.status = .minutesGenerated
     m.audioLoss = [TrackLoss(track: .system, seconds: 720, sourceFailed: false)]
     let d = MeetingDocument(manifest: m, transcript: Transcript(utterances: [u(5, .me, "はじめます")], engine: "whisper.cpp large-v3-turbo", language: .ja),
                             minutes: Samples.minutes, frontmatter: .init(text: FrontmatterTemplate.defaultText), appVersion: "0.1.0", timeZone: Samples.tokyo)
     let s = d.render()
-    let note = "> 録音が一部欠けている可能性があります（システム音声 約 12 分）。その間の発言は文字起こしと議事録に入っていません。"
+    let note = "> システム音声（相手の声）が約 12 分、録音に入っていない可能性があります。その間に相手が話していた場合、その発言は文字起こしと議事録に入っていません。"
     #expect(s.contains("\n# プロジェクト定例\n\n\(note)\n\n"))
     #expect(s.contains("\n## 要約\n") && s.contains("\n## 文字起こし\n"))
 }
