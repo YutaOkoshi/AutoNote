@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  毎日の見回りの LaunchAgent の雛形。__LABEL__ と __SHARE_HOME__ を置き換えて
+  ~/Library/LaunchAgents/__LABEL__.plist に置く（README の「見回りを入れる」）。
+  __SHARE_HOME__ は ~/Library/Application Support/AutoNoteShare のような絶対パス（~ は使えない）。
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>__SHARE_HOME__/bin/daily-patrol.sh</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SHARE_CONFIG</key>
+    <string>__SHARE_HOME__/config.env</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__SHARE_HOME__/logs/launchd-patrol.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__SHARE_HOME__/logs/launchd-patrol.err.log</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

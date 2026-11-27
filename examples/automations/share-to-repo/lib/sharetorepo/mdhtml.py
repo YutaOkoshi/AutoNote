@@ -2,19 +2,25 @@
 
 Headings, paragraphs, bullet lists (nested by two spaces, `- [ ]` / `- [x]`), numbered lists, tables (with `\\|` in
 cells), bold, italic (`*x*` only: `_` is common in file names), inline code, fenced code (mermaid stays as text),
-block quotes, links and horizontal rules. The output is plain HTML that /usr/bin/textutil turns into docx.
+block quotes, links and horizontal rules.
+
+mode="docx" writes the same content in a shape that survives /usr/bin/textutil's docx writer, which drops tables
+entirely and has no hanging indent for list items (checked on macOS 26): a table row becomes one indented paragraph
+"・見出し: 値 ／ 見出し: 値", and a list item becomes an indented paragraph with its marker.
 """
 import html
 import re
 
 STYLE = """body { font-family: 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', sans-serif; font-size: 11pt; line-height: 1.5; }
+h1, h2, h3, h4 { margin-top: 10pt; }
 h1 { font-size: 18pt; } h2 { font-size: 15pt; } h3 { font-size: 13pt; } h4, h5, h6 { font-size: 11pt; }
 table { border-collapse: collapse; }
 th, td { border: 1px solid #888888; padding: 3pt 5pt; vertical-align: top; }
 th { background-color: #eeeeee; }
 pre { font-family: Menlo, monospace; font-size: 9pt; background-color: #f4f4f4; }
 code { font-family: Menlo, monospace; }
-blockquote { color: #444444; margin-left: 12pt; }"""
+blockquote { color: #444444; margin-left: 12pt; }
+p.item { margin-top: 0; margin-bottom: 2pt; }"""
 
 _TOKEN = re.compile(r"`([^`]+)`|\*\*(.+?)\*\*|(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])|\[([^\]\[]+)\]\(([^)\s]+)\)")
 
@@ -65,6 +71,43 @@ _SEP = re.compile(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$")
 _BULLET = re.compile(r"^( *)([-*+]|\d+[.)]) (.*)$")
 
 
+def _para(depth, marker, body):
+    return '<p class="item" style="margin-left: %dpt">%s%s</p>' % (14 + 18 * depth, marker, body)
+
+
+def _list_paras(items):
+    out = []
+    levels = []  # indents seen, to turn indents into depths
+    counters = {}
+    for indent, ordered, text, extra in items:
+        while levels and levels[-1] > indent:
+            counters.pop(levels.pop(), None)
+        if not levels or levels[-1] < indent:
+            levels.append(indent)
+        depth = len(levels) - 1
+        m = re.match(r"^\[( |x|X)\] (.*)$", text)
+        if m:
+            marker, text = ("☑ " if m.group(1) != " " else "☐ "), m.group(2)
+        elif ordered:
+            counters[indent] = counters.get(indent, 0) + 1
+            marker = "%d. " % counters[indent]
+        else:
+            marker = "・"
+        body = inline(text)
+        for e in extra:
+            body += "<br>" + inline(e.strip())
+        out.append(_para(depth, marker, body))
+    return "\n".join(out)
+
+
+def _table_paras(head, rows):
+    out = []
+    for r in rows:
+        pairs = ["<b>%s</b>: %s" % (inline(h), inline(c)) for h, c in zip(head, r) if c and c not in ("—", "-")]
+        out.append(_para(0, "・", " ／ ".join(pairs)))
+    return "\n".join(out)
+
+
 def _list_html(items):
     """items: [(indent, ordered, text, extra_lines)] → nested <ul>/<ol>."""
     out = []
@@ -98,7 +141,7 @@ def _list_html(items):
     return "".join(out)
 
 
-def to_html(md, title=""):
+def to_html(md, title="", mode="html"):
     lines = md.replace("\r\n", "\n").split("\n")
     out = []
     i = 0
@@ -135,6 +178,9 @@ def to_html(md, title=""):
             while i < n and lines[i].strip().startswith("|"):
                 rows.append(split_cells(lines[i]))
                 i += 1
+            if mode == "docx":
+                out.append(_table_paras(head, rows))
+                continue
             t = ['<table border="1" cellspacing="0" cellpadding="4">', "<tr>"]
             t += ["<th>%s</th>" % inline(c) for c in head]
             t.append("</tr>")
@@ -149,7 +195,7 @@ def to_html(md, title=""):
             while i < n and lines[i].strip().startswith(">"):
                 quoted.append(re.sub(r"^\s*> ?", "", lines[i]))
                 i += 1
-            out.append("<blockquote>%s</blockquote>" % to_html_body("\n".join(quoted)))
+            out.append("<blockquote>%s</blockquote>" % to_html_body("\n".join(quoted), mode))
             continue
         if _BULLET.match(line):
             items = []
@@ -165,7 +211,7 @@ def to_html(md, title=""):
                     i += 1
                     continue
                 break
-            out.append(_list_html(items))
+            out.append(_list_paras(items) if mode == "docx" else _list_html(items))
             continue
         para = []
         while i < n and lines[i].strip() and not _starts_block(lines, i):
@@ -177,8 +223,8 @@ def to_html(md, title=""):
             "<style>\n%s\n</style>\n</head>\n<body>\n%s\n</body>\n</html>\n" % (html.escape(title), STYLE, body))
 
 
-def to_html_body(md):
-    full = to_html(md)
+def to_html_body(md, mode="html"):
+    full = to_html(md, mode=mode)
     return full[full.index("<body>\n") + 7:full.index("\n</body>")]
 
 

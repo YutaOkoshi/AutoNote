@@ -25,6 +25,14 @@ class MarkdownToHtmlTests(unittest.TestCase):
         src = read(os.path.join(GOLDEN, "mdhtml-input.md"))
         self.assertEqual(mdhtml.to_html(src, title="見本"), read(os.path.join(GOLDEN, "mdhtml-output.html")))
 
+    def test_golden_docx_mode(self):
+        # textutil's docx writer drops <table> and hanging indents, so the docx mode writes rows and items as paragraphs.
+        src = read(os.path.join(GOLDEN, "mdhtml-input.md"))
+        html = mdhtml.to_html(src, title="見本", mode="docx")
+        self.assertEqual(html, read(os.path.join(GOLDEN, "mdhtml-output-docx.html")))
+        self.assertNotIn("<table", html)
+        self.assertNotIn("<li>", html)
+
     def test_inline(self):
         self.assertEqual(mdhtml.inline("**太字** と *斜体* と `a<b>` と [リンク](https://example.invalid/?a=1&b=2)"),
                          '<b>太字</b> と <i>斜体</i> と <code>a&lt;b&gt;</code> と '
@@ -75,7 +83,7 @@ class MirrorTests(SandboxTest):
         self.assertNotIn(".md", minutes)
         self.assertNotIn("GitHub", minutes)
         index = read(os.path.join(self.mirror, "会議の一覧.docx"))
-        self.assertIn("<td>%s</td>" % NAME, index)
+        self.assertIn("<b>議事録</b>: %s" % NAME, index)
         self.assertNotIn("<a ", index)
         readme = read(os.path.join(self.mirror, "はじめに.docx"))
         for word in ("GitHub", "git", ".md", "docx", "Markdown"):

@@ -86,7 +86,7 @@ def index_doc(entries):
             indexmod.cell(e.fm.get("date")), indexmod.cell(e.fm.get("start")), indexmod.cell(e.fm.get("customer")),
             e.kind_label, indexmod.cell(e.fm.get("title")), indexmod.cell(e.summary), indexmod.cell(e.stem),
             indexmod.cell(e.stem + "_文字起こし" if e.transcript_rel else "")))
-    return ("# 会議の一覧\n\n新しい順です。まずこの表で会議を絞り、「議事録」フォルダの同じ名前のものを読みます。"
+    return ("# 会議の一覧\n\n新しい順です。まずこの一覧で会議を絞り、「議事録」フォルダの同じ名前のものを読みます。"
             "言い回しまで知りたいときだけ「文字起こし」フォルダを読みます。\n\n" + "\n".join(rows) + "\n")
 
 
@@ -153,7 +153,7 @@ def sync(cfg, state, repo_dir, full=False):
                 else:
                     src = os.path.join(work, "in.html")
                     with open(src, "w", encoding="utf-8") as f:
-                        f.write(mdhtml.to_html(text, title=title))
+                        f.write(mdhtml.to_html(text, title=title, mode="docx"))
                     convert_docx(cfg, src, built)
                 _place(built, target)
                 new_manifest[rel] = sha

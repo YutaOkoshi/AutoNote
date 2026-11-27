@@ -114,8 +114,7 @@ class State:
         if os.path.exists(path):
             with open(path, encoding="utf-8") as f:
                 current = f.read()
-        if ("] " in current) and any(line.startswith("- [ ]") and line.endswith(" " + text)
-                                     for line in current.splitlines()):
+        if any(line.startswith("- [ ] ") and line.endswith(" " + text) for line in current.splitlines()):
             return
         if not current:
             current = "# 要対応（共有スクリプトが書く。済んだら [x] にするか行を消す）\n\n"

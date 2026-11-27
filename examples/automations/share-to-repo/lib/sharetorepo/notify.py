@@ -11,7 +11,6 @@ import subprocess
 import urllib.error
 import urllib.request
 import uuid
-from datetime import datetime
 
 from .state import atomic_write
 

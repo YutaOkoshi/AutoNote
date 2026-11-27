@@ -38,3 +38,6 @@ jobs:
 
       - name: Test (retry once on failure)
         run: .github/scripts/swift-test-retry.sh
+
+      - name: Test the share-to-repo example scripts
+        run: examples/automations/share-to-repo/tests/run-tests.sh
