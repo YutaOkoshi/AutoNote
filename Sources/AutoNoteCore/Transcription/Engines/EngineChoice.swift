@@ -26,10 +26,26 @@ public struct EngineChoice: Codable, Hashable, Sendable {
         }
     }
 
+    /// The `settings.json` key that names the engine of `role`.
+    static func settingsKey(_ role: EngineRole) -> String { role == .live ? "live_engine" : "final_engine" }
+
+    /// The kinds that can run as `role`: only whisper transcribes a finished recording (`EngineCatalog.entries`).
+    static func kinds(for role: EngineRole) -> [EngineKind] { role == .live ? EngineKind.allCases : [.whisper] }
+
     /// Parses `Settings.liveEngine/liveModel` (live) or `finalEngine/finalModel` (batch).
-    /// Returns nil for a missing or unknown kind. A whisper choice without a model gets the machine's default for the role.
-    public static func fromSettings(kind: String?, model: String?, role: EngineRole, machine: MachineKind) -> EngineChoice? {
-        guard let kind, let parsed = EngineKind(rawValue: kind) else { return nil }
+    /// Returns nil for a missing or unknown kind, so the caller resolves the machine's default (`EngineCatalog.resolve`);
+    /// an unknown kind (`system` is a track, not an engine) is reported to `diagnostics` under the role's key.
+    /// A known kind that cannot run as `role` (`final_engine: "speech"`) is returned as written: `EngineCatalog.resolve`
+    /// drops and reports it. A whisper choice without a model gets the machine's default for the role.
+    public static func fromSettings(kind: String?, model: String?, role: EngineRole, machine: MachineKind,
+                                    diagnostics: SettingsDiagnostics = .shared) -> EngineChoice? {
+        guard let kind else { return nil }
+        guard let parsed = EngineKind(rawValue: kind) else {
+            diagnostics.report(SettingsDiagnostics.ignoredValue(
+                key: settingsKey(role), value: kind,
+                known: kinds(for: role).map(\.rawValue), using: "this Mac's default engine"))
+            return nil
+        }
         switch parsed {
         case .dictation: return .dictation
         case .speech: return .speech
