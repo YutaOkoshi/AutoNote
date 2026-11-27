@@ -1,0 +1,116 @@
+import json
+import os
+import unittest
+
+from helpers import STANDARD, STANDARD_ID, NO_TRANSCRIPT, SandboxTest, read, write
+
+MIN = "2026/2026-12-02_1000_サンプル商事 トライアル打合せ.md"
+REC = "2026-12-02_1000_サンプル商事_トライアル打合せ.mp4"
+DAY0 = "2026-12-02T11:00:00+09:00"
+
+
+class PatrolTests(SandboxTest):
+    def share_customer(self):
+        self.assertOk(self.sb.share(self.sb.vault_file(STANDARD), "--kind", "customer", "--recording", REC, now=DAY0))
+
+    def texts(self):
+        return [m["text"] for m in self.sb.dry_messages()]
+
+    def test_reshares_when_vault_file_changes(self):
+        self.share_customer()
+        self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"))
+        self.assertEqual(len(self.sb.dry_messages()), 1)  # nothing changed, nothing sent
+        path = self.sb.vault_file(STANDARD)
+        write(path, read(path).replace("一緒に見る。", "画面の編集で直した。"))
+        self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"))
+        self.assertIn("画面の編集で直した。", self.sb.remote_show(MIN))
+        self.assertIn("kind: customer", self.sb.remote_show(MIN))
+        self.assertIn("更新しました", self.texts()[-1])
+
+    def test_reshare_finds_renamed_vault_file_by_id(self):
+        self.share_customer()
+        old = self.sb.vault_file(STANDARD)
+        new = self.sb.vault_file("2026-12-02_1000_改題.md")
+        write(new, read(old).replace("title: サンプル商事 トライアル打合せ", "title: 改題"))
+        os.remove(old)
+        self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"))
+        self.assertIn("2026/2026-12-02_1000_改題.md", self.sb.remote_files())
+        self.assertNotIn(MIN, self.sb.remote_files())
+
+    def test_patrol_retries_pending(self):
+        moved = self.sb.remote + ".away"
+        os.rename(self.sb.remote, moved)
+        self.assertOk(self.sb.share(self.sb.vault_file(STANDARD), now=DAY0), 1)
+        os.rename(moved, self.sb.remote)
+        self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"))
+        self.assertIn(MIN, self.sb.remote_files())
+        self.assertEqual(self.sb.tsv("pending.tsv"), [])
+
+    def test_without_inbox_asks_once_after_seven_days(self):
+        self.share_customer()
+        self.assertOk(self.sb.share(self.sb.vault_file(NO_TRANSCRIPT), now=DAY0))  # no recording: never asked
+        self.assertOk(self.sb.patrol(now="2026-12-08T09:00:00+09:00"))
+        self.assertFalse(any("録画は消しましたか" in t for t in self.texts()))
+        self.assertOk(self.sb.patrol(now="2026-12-09T09:00:00+09:00"))
+        asked = [t for t in self.texts() if "録画は消しましたか" in t]
+        self.assertEqual(len(asked), 1)
+        self.assertIn(REC, asked[0])
+        self.assertOk(self.sb.patrol(now="2026-12-10T09:00:00+09:00"))
+        self.assertEqual(len([t for t in self.texts() if "録画は消しましたか" in t]), 1)
+
+    def test_with_inbox_reminds_at_7_and_21_days_and_marks_deleted(self):
+        inbox = os.path.join(self.sb.root, "inbox")
+        write(os.path.join(inbox, REC), "video")
+        write(os.path.join(inbox, "2026-11-01_0900_見本食堂_初回.mp4"), "video")  # never shared
+        write(os.path.join(inbox, ".hidden"), "x")
+        self.sb.set_config(INBOX_DIR=inbox)
+        self.assertOk(self.sb.patrol(now="2026-11-20T09:00:00+09:00"))  # first sight of the unshared one
+        self.share_customer()
+        self.assertOk(self.sb.patrol(now="2026-12-09T09:00:00+09:00"))
+        self.assertFalse(any(REC in t for t in self.texts() if "受け取り箱" in t and "消して" in t))
+        self.assertOk(self.sb.patrol(now="2026-12-10T09:00:00+09:00"))
+        seven = [t for t in self.texts() if REC in t and "7 日" in t]
+        self.assertEqual(len(seven), 1)
+        # the unshared one was first seen on 11-20: already past 7 days, and past 21 days on 12-12
+        self.assertTrue(any("見本食堂" in t and "7 日" in t for t in self.texts()))
+        self.assertOk(self.sb.patrol(now="2026-12-12T09:00:00+09:00"))
+        self.assertTrue(any("見本食堂" in t and "21 日" in t for t in self.texts()))
+        self.assertIn("見本食堂", self.sb.state_file("todo.md"))
+        self.assertOk(self.sb.patrol(now="2026-12-24T09:00:00+09:00"))
+        self.assertEqual(len([t for t in self.texts() if REC in t and "21 日" in t]), 1)
+        self.assertEqual(len([t for t in self.texts() if REC in t and "7 日" in t]), 1)
+        os.remove(os.path.join(inbox, REC))
+        self.assertOk(self.sb.patrol(now="2026-12-25T09:00:00+09:00"))
+        self.assertIn("source_recording_deleted: はい\n", self.sb.remote_show(MIN))
+        self.assertIn("recording_deleted", self.sb.tsv("shared.tsv")[0]["flags"])
+        # a later re-share keeps はい
+        path = self.sb.vault_file(STANDARD)
+        write(path, read(path).replace("一緒に見る。", "一緒に見直す。"))
+        self.assertOk(self.sb.share(path, now="2026-12-26T09:00:00+09:00"))
+        self.assertIn("source_recording_deleted: はい\n", self.sb.remote_show(MIN))
+
+    def fake_cli(self, ids):
+        path = os.path.join(self.sb.root, "fake-autonote")
+        rows = [{"id": i, "title": "x", "startedAt": "2026-12-02T01:00:00Z", "state": "minutes_generated"} for i in ids]
+        write(path, "#!/bin/sh\n[ \"$1 $2\" = \"list --json\" ] || exit 2\ncat <<'EOF'\n%s\nEOF\n" % json.dumps(rows))
+        os.chmod(path, 0o755)
+        return path
+
+    def test_reports_shared_meeting_missing_from_autonote(self):
+        self.share_customer()
+        self.sb.set_config(AUTONOTE_CLI=self.fake_cli([STANDARD_ID]))
+        self.assertOk(self.sb.patrol(now="2026-12-03T09:00:00+09:00"))
+        self.assertFalse(any("AutoNote に無い" in t for t in self.texts()))
+        self.sb.set_config(AUTONOTE_CLI=self.fake_cli(["20990101-0000-0000"]))
+        self.assertOk(self.sb.patrol(now="2026-12-04T09:00:00+09:00"))
+        missing = [t for t in self.texts() if "AutoNote に無い" in t]
+        self.assertEqual(len(missing), 1)
+        self.assertIn(STANDARD_ID, missing[0])
+        self.assertIn(STANDARD_ID, self.sb.state_file("todo.md"))
+        self.assertOk(self.sb.patrol(now="2026-12-05T09:00:00+09:00"))
+        self.assertEqual(len([t for t in self.texts() if "AutoNote に無い" in t]), 1)
+        self.assertIn(MIN, self.sb.remote_files())  # never removed automatically
+
+
+if __name__ == "__main__":
+    unittest.main()
