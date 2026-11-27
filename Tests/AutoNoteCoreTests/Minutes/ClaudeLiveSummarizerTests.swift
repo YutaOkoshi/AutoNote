@@ -166,6 +166,74 @@ import AutoNoteTestSupport
         #expect(logs.withLock { $0 }.count == 1)
     }
 
+    /// The classifier cuts its message to 500 characters; a `claude_env` value across that cut must not leave its
+    /// first half in the log, so the line is masked at full length and cut afterwards.
+    @Test func aValueAcrossTheClassifiersCutIsStillMasked() async throws {
+        let dir = try TemporaryDirectory.make(), paths = AppPaths(root: dir.appending(path: "root"))
+        let value = "made-up-value-0123456789"
+        // 490 characters of mostly blanks, then the value: it starts before character 500 and ends after it.
+        let text = "rejected" + String(repeating: " ", count: 482) + value + " end"
+        let envelope = String(decoding: try JSONSerialization.data(withJSONObject: [
+            "type": "result", "subtype": "success", "is_error": true, "result": text,
+        ]), as: UTF8.self)
+        let claude = try FakeClaude.make(in: dir.appending(path: "fake"), responses: [envelope], exitCode: 1)
+        let logs = LockedBox<[String]>([])
+        let live = ClaudeLiveSummarizer(claudePath: claude.path(percentEncoded: false), model: "haiku",
+                                        workingDirectory: paths.liveSummaryWorkingDirectory,
+                                        environmentOverrides: ["MADE_UP_NAME": value],
+                                        log: { line in logs.withLock { $0.append(line) } })
+        let e = await failure { _ = try await live.summarize(request()) }
+        guard case .failed(_, let message) = e else {
+            Issue.record("expected failed, got \(String(describing: e))")
+            return
+        }
+        #expect(message.count == ClaudeResultClassifier.messageLimit)
+        #expect(message.hasSuffix("made-up-va"))     // the cut the minutes side stores
+        #expect(logs.withLock { $0 } == ["live claude -p failed: failed (exit 1): rejected *** end"])
+    }
+
+    /// A recording whose live summary never starts says why: the scheduler shows nothing and makes no call after
+    /// a failed check, so this is the only line.
+    @Test func aFailedReadinessCheckLogsWhyTheSummaryIsOff() async throws {
+        let dir = try TemporaryDirectory.make(), paths = AppPaths(root: dir.appending(path: "root"))
+        let logs = LockedBox<[String]>([])
+        func live(_ path: String, runner: any ProcessRunning = FoundationProcessRunner()) -> ClaudeLiveSummarizer {
+            ClaudeLiveSummarizer(claudePath: path, model: "haiku", workingDirectory: paths.liveSummaryWorkingDirectory,
+                                 runner: runner, environmentOverrides: ["MADE_UP_NAME": "made-up-value-0123456789"],
+                                 log: { line in logs.withLock { $0.append(line) } })
+        }
+        // Not there.
+        #expect(await failure { try await live("/Fictional/bin/claude").checkReady() } == .claudeNotFound(path: "/Fictional/bin/claude"))
+        #expect(logs.withLock { $0 } == ["live claude -p unavailable: claudeNotFound (the configured claude command is missing or not executable)"])
+
+        // Logged out: the JSON says so. Its other keys (the account) stay out of the line.
+        logs.withLock { $0 = [] }
+        let out = try FakeClaude.make(in: dir.appending(path: "out"), auth: #"{"loggedIn":false,"email":"someone@example.com"}"#, responses: [])
+        #expect(await failure { try await live(out.path(percentEncoded: false)).checkReady() } == .notLoggedIn)
+        #expect(logs.withLock { $0 } == ["live claude -p unavailable: notLoggedIn (claude auth status: exit 0, loggedIn false)"])
+
+        // The check itself failed: exit code and stderr, with the claude_env value masked.
+        logs.withLock { $0 = [] }
+        let there = try FakeClaude.make(in: dir.appending(path: "there"), responses: [])
+        let broken = FixedRunner(result: ProcessResult(exitCode: 1, stdout: Data(),
+                                                       stderr: Data("error: unknown option\n  made-up-value-0123456789\n".utf8), timedOut: false))
+        #expect(await failure { try await live(there.path(percentEncoded: false), runner: broken).checkReady() } == .notLoggedIn)
+        #expect(logs.withLock { $0 } == [
+            "live claude -p unavailable: notLoggedIn (claude auth status: exit 1, stdout 0 bytes without loggedIn, stderr: error: unknown option ***)",
+        ])
+
+        // Logged in: nothing.
+        logs.withLock { $0 = [] }
+        try await live(there.path(percentEncoded: false)).checkReady()
+        #expect(logs.withLock { $0 }.isEmpty)
+    }
+
+    private struct FixedRunner: ProcessRunning {
+        var result: ProcessResult
+        func run(executable: URL, arguments: [String], stdin: Data, workingDirectory: URL,
+                 environment: [String: String], timeout: Duration) async throws -> ProcessResult { result }
+    }
+
     @Test func aSuccessfulCallLogsNoFailure() async throws {
         let dir = try TemporaryDirectory.make(), paths = AppPaths(root: dir.appending(path: "root"))
         let claude = try FakeClaude.make(in: dir.appending(path: "fake"), responses: [Self.ok])
@@ -180,11 +248,11 @@ import AutoNoteTestSupport
     @Test func failureLogLineIsOneShortLineWithoutSecrets() {
         // Nothing to add: the line is as it was.
         #expect(ClaudeLiveSummarizer.failureLogLine(.timedOut, exitCode: -1) == "live claude -p failed: timedOut (exit -1)")
-        #expect(ClaudeLiveSummarizer.failureLogLine(.timedOut, exitCode: -1, otherwise: "no error text") == "live claude -p failed: timedOut (exit -1)")
+        #expect(ClaudeLiveSummarizer.failureLogLine(.timedOut, exitCode: -1, said: "no error text") == "live claude -p failed: timedOut (exit -1)")
         // A class without a message, or an empty one, takes what the caller found instead.
-        #expect(ClaudeLiveSummarizer.failureLogLine(.notLoggedIn, exitCode: 1, otherwise: "authentication_error")
+        #expect(ClaudeLiveSummarizer.failureLogLine(.notLoggedIn, exitCode: 1, said: "authentication_error")
                 == "live claude -p failed: notLoggedIn (exit 1): authentication_error")
-        #expect(ClaudeLiveSummarizer.failureLogLine(.failed(exitCode: 1, message: " \n"), exitCode: 1, otherwise: "no error text")
+        #expect(ClaudeLiveSummarizer.failureLogLine(.failed(exitCode: 1, message: " \n"), exitCode: 1, said: "no error text")
                 == "live claude -p failed: failed (exit 1): no error text")
         #expect(ClaudeLiveSummarizer.failureLogLine(.failed(exitCode: 1, message: ""), exitCode: 1)
                 == "live claude -p failed: failed (exit 1)")
@@ -252,8 +320,13 @@ import AutoNoteTestSupport
         #expect(live.workingDirectory == paths.liveSummaryWorkingDirectory)
 
         settings.claudePath = nil
-        let e = await failure { _ = try await LiveSummarizerFactory.make(settings: settings, paths: paths, locate: { nil }) }
+        let logs = LockedBox<[String]>([])
+        let e = await failure {
+            _ = try await LiveSummarizerFactory.make(settings: settings, paths: paths, locate: { nil },
+                                                     log: { line in logs.withLock { $0.append(line) } })
+        }
         #expect(e == .claudeNotFound(path: ""))
+        #expect(logs.withLock { $0 } == ["live claude -p unavailable: claudeNotFound (no claude command was found)"])
     }
 
     @Test func stepAppliesTheOutput() async throws {

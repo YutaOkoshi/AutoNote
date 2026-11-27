@@ -92,10 +92,11 @@ public enum ClaudeResultClassifier {
         if let envelope, envelope.isError != true {
             return .failure(.invalidOutput(message: "subtype=\(envelope.subtype ?? "missing"): no is_error"))
         }
-        return .failure(.failed(exitCode: result.exitCode, message: failureText(envelope, stderr: stderr)))
+        return .failure(.failed(exitCode: result.exitCode,
+                                message: String(failureText(envelope, stderr: stderr).prefix(messageLimit))))
     }
 
-    /// What claude itself said about a run that did not succeed, cut to `messageLimit`: the subtype of an error
+    /// What claude itself said about a run that did not succeed, at full length: the subtype of an error
     /// envelope that is not an API error (`error_max_turns`, `error_during_execution`; these often have no `result`
     /// and nothing on stderr), then the envelope's `result`, its `errors` and stderr. Empty when it said nothing.
     /// Never a successful envelope's `result` (the model's prose about the meeting).
@@ -104,12 +105,12 @@ public enum ClaudeResultClassifier {
         let kind = failed ? envelope?.subtype.flatMap { $0 == "success" ? nil : "subtype=\($0)" } ?? "" : ""
         let errorText = failed ? (envelope?.result ?? "").trimmingCharacters(in: .whitespacesAndNewlines) : ""
         let errors = failed ? (envelope?.errors ?? []).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines) : ""
-        let combined = [kind, errorText, errors, stderr].filter { !$0.isEmpty }.joined(separator: "\n")
-        return String(combined.prefix(messageLimit))
+        return [kind, errorText, errors, stderr].filter { !$0.isEmpty }.joined(separator: "\n")
     }
 
-    /// `failureText` of a finished run, for the log line of a failure whose class carries no message (`notLoggedIn`
-    /// stands for four different errors).
+    /// `failureText` of a finished run, not cut: the live summary's log line masks values in it before it cuts (a
+    /// value cut in half no longer matches), and a class without a message needs it (`notLoggedIn` stands for four
+    /// different errors).
     static func failureText(_ result: ProcessResult) -> String {
         let isObject = (try? JSONSerialization.jsonObject(with: result.stdout)) is [String: Any]
         let envelope = isObject ? try? AutoNoteJSON.decoder().decode(Envelope.self, from: result.stdout) : nil

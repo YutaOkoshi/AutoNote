@@ -27,12 +27,24 @@ enum ClaudeProcess {
     /// `"loggedIn": true`.
     static func checkLoggedIn(claudePath: String, runner: any ProcessRunning, workingDirectory: URL,
                               environmentOverrides: [String: String] = [:]) async throws {
-        let result = try await runner.run(executable: URL(fileURLWithPath: claudePath), arguments: ["auth", "status", "--json"],
-                                          stdin: Data(), workingDirectory: workingDirectory,
-                                          environment: environment(claudePath: claudePath, overrides: environmentOverrides),
-                                          timeout: ClaudeCodeSummarizer.authTimeout)
-        guard ClaudeResultClassifier.isLoggedIn(result) else {
-            logger.error("claude auth status: not logged in (exit \(result.exitCode, privacy: .public))")
+        try requireLoggedIn(try await authStatus(claudePath: claudePath, runner: runner, workingDirectory: workingDirectory,
+                                                 environmentOverrides: environmentOverrides))
+    }
+
+    /// The finished `claude auth status --json` run (the first half of `checkLoggedIn`), for a caller that wants to
+    /// say why the check failed.
+    static func authStatus(claudePath: String, runner: any ProcessRunning, workingDirectory: URL,
+                           environmentOverrides: [String: String] = [:]) async throws -> ProcessResult {
+        try await runner.run(executable: URL(fileURLWithPath: claudePath), arguments: ["auth", "status", "--json"],
+                             stdin: Data(), workingDirectory: workingDirectory,
+                             environment: environment(claudePath: claudePath, overrides: environmentOverrides),
+                             timeout: ClaudeCodeSummarizer.authTimeout)
+    }
+
+    /// Throws `.notLoggedIn` unless `status` (an `authStatus` run) reports `"loggedIn": true`.
+    static func requireLoggedIn(_ status: ProcessResult) throws {
+        guard ClaudeResultClassifier.isLoggedIn(status) else {
+            logger.error("claude auth status: not logged in (exit \(status.exitCode, privacy: .public))")
             throw SummarizerError.notLoggedIn
         }
     }

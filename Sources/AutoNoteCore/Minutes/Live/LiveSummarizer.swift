@@ -30,7 +30,7 @@ public struct ClaudeLiveSummarizer: LiveSummarizer {
     public let extraArguments: [String]
     /// `Settings.claudeEnv`, over the child environment on every launch (the login check included).
     public let environmentOverrides: [String: String]
-    /// Gets one `failureLogLine` per failed call.
+    /// Gets one line per failed call (`failureLogLine`, `launchFailureLogLine`) or failed check (`unavailableLogLine`).
     let log: @Sendable (String) -> Void
 
     public init(claudePath: String, model: String, workingDirectory: URL,
@@ -49,10 +49,22 @@ public struct ClaudeLiveSummarizer: LiveSummarizer {
     }
 
     public func checkReady() async throws {
-        try ClaudeProcess.checkExecutable(claudePath)
-        try FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
-        try await ClaudeProcess.checkLoggedIn(claudePath: claudePath, runner: runner, workingDirectory: workingDirectory,
-                                              environmentOverrides: environmentOverrides)
+        var status: ProcessResult?
+        do {
+            try ClaudeProcess.checkExecutable(claudePath)
+            try FileManager.default.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
+            let finished = try await ClaudeProcess.authStatus(claudePath: claudePath, runner: runner, workingDirectory: workingDirectory,
+                                                              environmentOverrides: environmentOverrides)
+            status = finished
+            try ClaudeProcess.requireLoggedIn(finished)
+        } catch {
+            // The scheduler turns the live summary off for the rest of the recording and shows nothing: this line is
+            // the only place that says why no summary ever came.
+            if !(error is CancellationError) {
+                log(Self.unavailableLogLine(error, authStatus: status, secrets: Array(environmentOverrides.values)))
+            }
+            throw error
+        }
     }
 
     /// Does not check the login (`checkReady` does that once per recording).
@@ -76,48 +88,57 @@ public struct ClaudeLiveSummarizer: LiveSummarizer {
             return output
         case .failure(let error):
             log(Self.failureLogLine(error, exitCode: result.exitCode, secrets: Array(environmentOverrides.values),
-                                    otherwise: Self.unexplained(result)))
+                                    said: Self.unexplained(result)))
             throw error
         }
     }
 
-    /// The log line of a failed call: the failure class, the exit code and the message `ClaudeResultClassifier` kept
-    /// (an error envelope's subtype, `result` and `errors`, stderr, or which part of the output did not decode). The
-    /// minutes side stores the same message in `Job.summaryFailure` (`SummarizeStage.classify`); a live call has no
-    /// job, so the log is the only place it can go. A class without a message (`notLoggedIn`, `timedOut`) or with an
-    /// empty one gets `otherwise` instead. The classifier never copies the prompt or a successful envelope's `result`
-    /// (the model's prose about the meeting) into a message. Here the text loses every value of `secrets` (the
-    /// `claude_env` values) and anything shaped like an API key, becomes one line and is cut to `failureDetailLimit`.
-    static func failureLogLine(_ error: SummarizerError, exitCode: Int32, secrets: [String] = [], otherwise: String = "") -> String {
+    /// The log line of a failed call: the failure class, the exit code and what claude said about it (an error
+    /// envelope's subtype, `result` and `errors`, stderr), or which part of the output did not decode. The minutes
+    /// side stores the same text in `Job.summaryFailure` (`SummarizeStage.classify`); a live call has no job, so the
+    /// log is the only place it can go. `said` is that text at full length (`unexplained`): the message a class
+    /// carries is already cut to `ClaudeResultClassifier.messageLimit`, and a value cut in half would not be masked;
+    /// it also serves the class without a message (`notLoggedIn`). Without `said` the class's own message is used.
+    /// Neither holds the prompt or a successful envelope's `result` (the model's prose about the meeting). The text
+    /// goes through `oneLine`.
+    static func failureLogLine(_ error: SummarizerError, exitCode: Int32, secrets: [String] = [], said: String? = nil) -> String {
         let head = "live claude -p failed: \(ClaudeCodeSummarizer.className(error)) (exit \(exitCode))"
-        var message: String
+        let message: String
         switch error {
-        case .rateLimited(let m), .contextExceeded(let m), .invalidOutput(let m), .failed(_, let m): message = m
-        case .claudeNotFound, .notLoggedIn: message = ""     // a path is not a message
-        case .timedOut: return head                          // the class says it all
+        case .invalidOutput(let m): message = m                  // where the output did not decode; claude said nothing
+        case .rateLimited(let m), .contextExceeded(let m), .failed(_, let m): message = said ?? m
+        case .notLoggedIn, .claudeNotFound: message = said ?? "" // a path is not a message
+        case .timedOut: return head                              // the class says it all
         }
-        if message.allSatisfy(\.isWhitespace) { message = otherwise }
-        // Mask first: a value with blanks in it no longer matches once the blanks are collapsed. Longest first: a
-        // value that starts with another one would otherwise keep its tail.
-        for secret in secrets.sorted(by: { $0.count > $1.count }) where secret.count >= minimumSecretLength {
-            message = message.replacingOccurrences(of: secret, with: "***")
-        }
-        let detail = message.replacing(/\bsk-[A-Za-z0-9_\-]{8,}/, with: "***")
-            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        guard !detail.isEmpty else { return head }
-        return head + ": " + (detail.count > failureDetailLimit ? String(detail.prefix(failureDetailLimit)) + "…" : detail)
+        let detail = oneLine(message, secrets: secrets)
+        return detail.isEmpty ? head : head + ": " + detail
     }
 
-    /// `claude_env` values this long or longer are masked in a failure line. Shorter ones (`1`, `true`) are left:
+    /// `text` as one line that can go to the log in the clear: every value of `secrets` (the `claude_env` values)
+    /// and anything shaped like an API key becomes `***`, blanks and line breaks collapse, and the result is cut to
+    /// `failureDetailLimit`. In that order: a value with blanks in it no longer matches once the blanks are
+    /// collapsed, and a value cut in half does not match at all. Longest value first: a value that starts with
+    /// another one would otherwise keep its tail.
+    static func oneLine(_ text: String, secrets: [String]) -> String {
+        var masked = text
+        for secret in secrets.sorted(by: { $0.count > $1.count }) where secret.count >= minimumSecretLength {
+            masked = masked.replacingOccurrences(of: secret, with: "***")
+        }
+        let line = masked.replacing(/\bsk-[A-Za-z0-9_\-]{8,}/, with: "***")
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return line.count > failureDetailLimit ? String(line.prefix(failureDetailLimit)) + "…" : line
+    }
+
+    /// `claude_env` values this long or longer are masked in a log line. Shorter ones (`1`, `true`) are left:
     /// masking them would eat ordinary words of the message. Which values are secret is not known, so a long value
     /// that is not one (a model id, a region, a folder) is masked too.
     static let minimumSecretLength = 8
 
-    /// What stands in for the message of a failed run: what claude said (`ClaudeResultClassifier.failureText`), or,
-    /// when it said nothing, the shape of its output — sizes only, never the output itself.
+    /// What a failed run said, at full length (`ClaudeResultClassifier.failureText`), or, when it said nothing,
+    /// the shape of its output — sizes only, never the output itself.
     static func unexplained(_ result: ProcessResult) -> String {
         let said = ClaudeResultClassifier.failureText(result)
-        guard said.isEmpty else { return said }
+        guard said.allSatisfy(\.isWhitespace) else { return said }
         let isObject = (try? JSONSerialization.jsonObject(with: result.stdout)) is [String: Any]
         return "no error text (stdout \(result.stdout.count) bytes, \(isObject ? "a JSON object" : "not a JSON object"); stderr \(result.stderr.count) bytes)"
     }
@@ -125,19 +146,56 @@ public struct ClaudeLiveSummarizer: LiveSummarizer {
     /// The log line of a call that never ran: the error's type, domain and code. Not its description, which can
     /// hold a path.
     static func launchFailureLogLine(_ error: any Error) -> String {
+        "live claude -p did not run: \(typeAndCode(error))"
+    }
+
+    /// The log line of a recording whose live summary is off from the start (`checkReady` or the factory failed):
+    /// claude is not where the settings say, or `claude auth status --json` did not report a login. `authStatus` is
+    /// that run when it finished; the line gives its exit code, what its JSON said about `loggedIn` and its stderr
+    /// (through `oneLine`). Never its stdout, which names the account, nor the path of claude.
+    static func unavailableLogLine(_ error: any Error, authStatus: ProcessResult? = nil, secrets: [String] = []) -> String {
+        let head = "live claude -p unavailable: "
+        switch error as? SummarizerError {
+        case .claudeNotFound(let path):
+            return head + "claudeNotFound (" + (path.isEmpty ? "no claude command was found" : "the configured claude command is missing or not executable") + ")"
+        case .notLoggedIn:
+            guard let authStatus else { return head + "notLoggedIn" }
+            var parts = [authStatus.timedOut ? "timed out" : "exit \(authStatus.exitCode)"]
+            if let loggedIn = (try? JSONSerialization.jsonObject(with: authStatus.stdout) as? [String: Any])?["loggedIn"] as? Bool {
+                parts.append("loggedIn \(loggedIn)")
+            } else {
+                parts.append("stdout \(authStatus.stdout.count) bytes without loggedIn")
+            }
+            let stderr = oneLine(String(decoding: authStatus.stderr, as: UTF8.self), secrets: secrets)
+            if !stderr.isEmpty { parts.append("stderr: " + stderr) }
+            return head + "notLoggedIn (claude auth status: " + parts.joined(separator: ", ") + ")"
+        default:
+            return head + typeAndCode(error)
+        }
+    }
+
+    private static func typeAndCode(_ error: any Error) -> String {
         let ns = error as NSError
-        return "live claude -p did not run: \(String(describing: type(of: error))) (\(ns.domain) \(ns.code))"
+        return "\(String(describing: type(of: error))) (\(ns.domain) \(ns.code))"
     }
 }
 
 /// Builds the live summarizer from the current settings (the same path resolution as `SummarizerFactory`).
 public enum LiveSummarizerFactory {
+    /// `log` gets the summarizer's failure lines, and the line of a claude that was not found at all.
     public static func make(settings: Settings, paths: AppPaths,
-                            locate: @Sendable () async -> String? = { await ClaudeLocator.locate() }) async throws -> any LiveSummarizer {
-        let claudePath = try await ClaudeProcess.resolvePath(configured: settings.claudePath, locate: locate)
+                            locate: @Sendable () async -> String? = { await ClaudeLocator.locate() },
+                            log: @escaping @Sendable (String) -> Void = ClaudeLiveSummarizer.systemLog) async throws -> any LiveSummarizer {
+        let claudePath: String
+        do {
+            claudePath = try await ClaudeProcess.resolvePath(configured: settings.claudePath, locate: locate)
+        } catch {
+            log(ClaudeLiveSummarizer.unavailableLogLine(error))
+            throw error
+        }
         return ClaudeLiveSummarizer(claudePath: claudePath, model: settings.liveSummaryModel,
                                     workingDirectory: paths.liveSummaryWorkingDirectory,
-                                    extraArguments: settings.claudeArgs, environmentOverrides: settings.claudeEnv)
+                                    extraArguments: settings.claudeArgs, environmentOverrides: settings.claudeEnv, log: log)
     }
 }
 
