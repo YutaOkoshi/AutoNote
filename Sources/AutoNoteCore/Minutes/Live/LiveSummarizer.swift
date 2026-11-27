@@ -86,11 +86,13 @@ public struct ClaudeLiveSummarizer: LiveSummarizer {
         case .rateLimited(let m), .contextExceeded(let m), .invalidOutput(let m), .failed(_, let m): message = m
         case .claudeNotFound, .notLoggedIn, .timedOut: message = ""     // a path is not a message
         }
-        var detail = message.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        // Mask first: a value with blanks in it no longer matches once the blanks are collapsed.
+        var masked = message
         for secret in secrets where secret.count >= minimumSecretLength {
-            detail = detail.replacingOccurrences(of: secret, with: "***")
+            masked = masked.replacingOccurrences(of: secret, with: "***")
         }
-        detail = detail.replacing(/sk-[A-Za-z0-9_\-]{8,}/, with: "***")
+        let detail = masked.replacing(/sk-[A-Za-z0-9_\-]{8,}/, with: "***")
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard !detail.isEmpty else { return head }
         return head + ": " + (detail.count > failureDetailLimit ? String(detail.prefix(failureDetailLimit)) + "…" : detail)
     }

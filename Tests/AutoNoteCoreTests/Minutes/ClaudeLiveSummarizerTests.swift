@@ -148,6 +148,10 @@ import AutoNoteTestSupport
             .failed(exitCode: 1, message: "bad token made-up-value-123 or sk-ant-abc_DEF-0123456789 in request"),
             exitCode: 1, secrets: ["made-up-value-123", "", "in"])
         #expect(secret == "live claude -p failed: failed (exit 1): bad token *** or *** in request")
+        // A value with blanks in it is masked as written (before the message becomes one line).
+        let spaced = ClaudeLiveSummarizer.failureLogLine(
+            .failed(exitCode: 1, message: "header was made-up  two\twords here"), exitCode: 1, secrets: ["made-up  two\twords"])
+        #expect(spaced == "live claude -p failed: failed (exit 1): header was *** here")
     }
 
     @Test func defaultTimeoutIsSixtySeconds() {
