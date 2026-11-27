@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  毎日の見回りの LaunchAgent の雛形（アプリ経由の形）。launchd からシェルを直接呼ぶ形
+  （example.share-to-repo.daily-patrol.plist）では会議ファイルのフォルダを読めないときに使う。
+  先に launchd/make-patrol-app.sh で __SHARE_HOME__/SharePatrol.app を作る（README の「launchd から会議ファイルの
+  フォルダを読めないとき」）。__LABEL__ と __SHARE_HOME__ を置き換えて ~/Library/LaunchAgents/__LABEL__.plist に置く。
+  設定の場所（config.env）はアプリが自分の置き場所から決めるので、ここには書かない。
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/open</string>
+    <string>-g</string>
+    <string>-W</string>
+    <string>__SHARE_HOME__/SharePatrol.app</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__SHARE_HOME__/logs/launchd-patrol.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__SHARE_HOME__/logs/launchd-patrol.err.log</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
