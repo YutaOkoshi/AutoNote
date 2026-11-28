@@ -17,9 +17,9 @@ private final class Seconds: Sendable {
     func add(_ s: Int) { values.withLock { $0.append(s) } }
 }
 
-/// The watchdog looks every 10 ms of wall time; every threshold is on the meeting timeline (`FakeHostClock`), at the
+/// The watchdog looks every 5 ms of wall time; every threshold is on the meeting timeline (`FakeHostClock`), at the
 /// production values, so a test moves the clock instead of sleeping.
-let tapRecoveryTestPolicy = SystemTapRecoveryPolicy(checkInterval: .milliseconds(10))
+let tapRecoveryTestPolicy = SystemTapRecoveryPolicy(checkInterval: .milliseconds(5))
 
 /// Calls the tap's IOProc with 10 ms of `value` every 5 ms of wall time, stamped with the fake clock's current time.
 func feedTap(_ hw: FakeTapHardware, host: FakeHostClock, value: @escaping @Sendable () -> Float) -> Task<Void, Never> {
@@ -44,21 +44,30 @@ private func rebuilt(_ src: ProcessTapSource, _ n: Int) async -> Bool {
 
 /// Waits until the watchdog has looked twice more: the second look is wholly at the current clock reading. Also
 /// needed right after `start`: "another process has been playing since" is the time of the first look that saw it.
-/// With `fed`, two more callbacks are drained after that and the watchdog looks twice again, so a look that read the
-/// current clock has seen callbacks (in the other order, the look that sees them may have read the clock before
-/// it moved, and the callbacks then count for the old time). Returns early once `done` (a rebuild under way holds
-/// the looks back; `testPatience` ends a wait that would never end).
+/// With `fed`, the order is one look, two more callbacks drained, two looks: every look after the first one reads
+/// the clock where it is now, and the last one began after the callbacks, so a look at the current time has seen
+/// them (callbacks first, and the look that sees them may have read the clock before it moved; they then count for
+/// the old time). Returns early once `done` (a rebuild under way holds the looks back; `testPatience` ends a wait
+/// that would never end).
 func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { false }) async {
-    await looks(src, 2, or: done)
-    guard fed else { return }
+    guard fed else { return await looks(src, 2, or: done) }
+    await looks(src, 1, or: done)
     let drained = src.health?.callbacks ?? 0
-    _ = await eventuallyTrue { done() || (src.health?.callbacks ?? 0) >= drained + 2 }
+    await soon { done() || (src.health?.callbacks ?? 0) >= drained + 2 }
     await looks(src, 2, or: done)
+}
+
+/// `eventuallyTrue` asking every 2 ms: `settle` runs hundreds of times in one test.
+private func soon(_ condition: () async -> Bool) async {
+    let patience = ContinuousClock.now + testPatience
+    while !(await condition()), ContinuousClock.now < patience {
+        try? await Task.sleep(for: .milliseconds(2))
+    }
 }
 
 private func looks(_ src: ProcessTapSource, _ more: Int, or done: () -> Bool) async {
     let before = await src.watchdogLooks
-    _ = await eventuallyTrue {
+    await soon {
         if done() { return true }
         return await src.watchdogLooks >= before + more
     }
