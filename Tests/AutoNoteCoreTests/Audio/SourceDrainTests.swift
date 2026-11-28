@@ -16,7 +16,7 @@ import AutoNoteTestSupport
 
     @Test func runAwaitingReturnsTrueWhenWorkFinishesInTime() async {
         let queue = DispatchQueue(label: "test.runAwaiting.fast")
-        let finished = await queue.runAwaiting(timeout: .seconds(5)) {}
+        let finished = await queue.runAwaiting(timeout: testPatience) {}
         #expect(finished == true)
     }
 

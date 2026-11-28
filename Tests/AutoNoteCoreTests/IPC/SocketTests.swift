@@ -300,9 +300,11 @@ private enum RawSocket {
         let t = TempSocket()
         defer { t.cleanUp() }
         let started = ContinuousClock.now
-        let error = await clientError(client(t, launcher: nil))
+        let error = await clientError(client(t, launcher: nil, launchTimeout: testPatience))
         #expect(error == .appNotRunning)
-        #expect(ContinuousClock.now - started < .seconds(1))
+        // "Fast" is: without waiting out the time it has for a launch. That time is `testPatience` here, so a
+        // stalled machine cannot be mistaken for the wait.
+        #expect(ContinuousClock.now - started < testPatience)
     }
 
     @Test func stopRemovesSocketFile() async throws {

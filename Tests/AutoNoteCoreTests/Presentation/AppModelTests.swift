@@ -678,7 +678,7 @@ import AutoNoteTestSupport
         await waitUntil { model.liveSummaryUpdatedText == "5 秒前に更新" }
         #expect(model.liveSummaryUpdatedText == "5 秒前に更新")
         clock.advance(3)   // no update and no snapshot: only the 1-second tick can move the line
-        await waitUntil(timeout: .seconds(4)) { model.liveSummaryUpdatedText == "8 秒前に更新" }
+        await waitUntil { model.liveSummaryUpdatedText == "8 秒前に更新" }
         #expect(model.liveSummaryUpdatedText == "8 秒前に更新")
         await fakes.recorder.send(.idle(language: .ja))
         await waitUntil { model.liveSummaryUpdatedText == nil }

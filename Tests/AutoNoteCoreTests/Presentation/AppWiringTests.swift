@@ -76,7 +76,7 @@ private struct LiveFixture {
     }
 }
 
-/// The first value of `stream` that satisfies `condition`, or nil after 2 s.
+/// The first value of `stream` that satisfies `condition`, or nil after `testPatience`.
 private func first<T: Sendable>(_ stream: AsyncStream<T>, where condition: @Sendable @escaping (T) -> Bool) async -> T? {
     await withTaskGroup(of: T?.self) { group in
         group.addTask {
@@ -84,7 +84,7 @@ private func first<T: Sendable>(_ stream: AsyncStream<T>, where condition: @Send
             return nil
         }
         group.addTask {
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: testPatience)
             return nil
         }
         let result = await group.next() ?? nil
@@ -93,7 +93,7 @@ private func first<T: Sendable>(_ stream: AsyncStream<T>, where condition: @Send
     }
 }
 
-/// Every value of `stream` until it ends, or nil when it has not ended after 2 s.
+/// Every value of `stream` until it ends, or nil when it has not ended after `testPatience`.
 private func all<T: Sendable>(_ stream: AsyncStream<T>) async -> [T]? {
     await withTaskGroup(of: [T]?.self) { group in
         group.addTask {
@@ -102,7 +102,7 @@ private func all<T: Sendable>(_ stream: AsyncStream<T>) async -> [T]? {
             return Task.isCancelled ? nil : values
         }
         group.addTask {
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: testPatience)
             return nil
         }
         let result = await group.next() ?? nil

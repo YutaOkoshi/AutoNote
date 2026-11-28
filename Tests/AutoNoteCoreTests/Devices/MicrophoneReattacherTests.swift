@@ -190,9 +190,9 @@ enum AttachFailure: String, CaseIterable, Sendable {
         }
         // The adapter forwards in event order, so a leaked manual stop would already be buffered ahead of this one.
         // The reason travels with it, so the coordinator can log the stop as `diskFull`.
-        #expect(await firstValue(selfStops, within: .seconds(5)) == .diskFull)
+        #expect(await firstValue(selfStops, within: testPatience) == .diskFull)
         #expect(await !receives(selfStops, within: .milliseconds(200)))
-        #expect(await receives(otherSelfStops, within: .seconds(5)))     // every stream gets the self-stop
+        #expect(await receives(otherSelfStops, within: testPatience))     // every stream gets the self-stop
         #expect(await !receives(otherSelfStops, within: .milliseconds(200)))
     }
 
@@ -208,7 +208,7 @@ enum AttachFailure: String, CaseIterable, Sendable {
         h.disk.bytes = 100_000_000
         await h.session.tick()
         _ = try await withTimeout(testPatience) { await eventsUntilStopped(events) }
-        #expect(await receives(selfStops, within: .seconds(5)))
+        #expect(await receives(selfStops, within: testPatience))
     }
 
     /// Real-session path: the disk-full stop is held inside the microphone's `stop` while our `.manual` stop waits
@@ -231,7 +231,7 @@ enum AttachFailure: String, CaseIterable, Sendable {
         try await waitUntil { await control.expectingOwnStop == .manual }
         mic.release()
 
-        #expect(await receives(selfStops, within: .seconds(5)))
+        #expect(await receives(selfStops, within: testPatience))
         await ownStop.value                                     // throws notRecording inside: marker cleared
         #expect(await control.expectingOwnStop == nil)
         #expect(await session.state == .idle)
@@ -241,8 +241,8 @@ enum AttachFailure: String, CaseIterable, Sendable {
         let control = FakeRecordingControl()
         let first = await control.selfStops(), second = await control.selfStops()
         await control.emitSelfStop()
-        #expect(await receives(first, within: .seconds(5)))
-        #expect(await receives(second, within: .seconds(5)))
+        #expect(await receives(first, within: testPatience))
+        #expect(await receives(second, within: testPatience))
     }
 
     @Test func adapterPassesMicrophoneUID() async throws {

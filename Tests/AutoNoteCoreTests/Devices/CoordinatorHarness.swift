@@ -69,7 +69,7 @@ final class CoordinatorHarness: Sendable {
 
     func setConfig(_ config: AutoRecordConfig) { configBox.value.withLock { $0 = config } }
 
-    /// Polls `condition` (real time, at most 2 s). Used only where work runs in another task (reattach, `run()`).
+    /// Polls `condition` (real time, until `testPatience`). Used only where work runs in another task (reattach, `run()`).
     func waitUntil(_ condition: () async -> Bool) async throws {
         let deadline = ContinuousClock.now + testPatience
         while await !condition() {

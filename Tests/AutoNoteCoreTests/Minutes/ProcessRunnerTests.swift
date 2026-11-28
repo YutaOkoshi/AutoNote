@@ -12,7 +12,7 @@ import AutoNoteTestSupport
         let result = try await FoundationProcessRunner().run(
             executable: sh,
             arguments: ["-c", "printf \"%s|\" \"$@\"; pwd; cat", "sh", "a", "", "b c"],
-            stdin: Data("入力".utf8), workingDirectory: cwd, environment: env, timeout: .seconds(10))
+            stdin: Data("入力".utf8), workingDirectory: cwd, environment: env, timeout: testPatience)
         // realpath, not resolvingSymlinksInPath: the latter maps /private/var back to /var.
         let real = try #require(realpath(cwd.path, nil).map { p in defer { free(p) }; return String(cString: p) })
         #expect(result.exitCode == 0)
@@ -24,14 +24,14 @@ import AutoNoteTestSupport
         let result = try await FoundationProcessRunner().run(
             executable: sh, arguments: ["-c", "printf '%s' \"$AUTONOTE_TEST_VAR:${HOME-unset}\""],
             stdin: Data(), workingDirectory: try TemporaryDirectory.make(),
-            environment: ["AUTONOTE_TEST_VAR": "v1"], timeout: .seconds(10))
+            environment: ["AUTONOTE_TEST_VAR": "v1"], timeout: testPatience)
         #expect(String(decoding: result.stdout, as: UTF8.self) == "v1:unset")
     }
 
     @Test func nonZeroExitCodeAndStderrAreReported() async throws {
         let result = try await FoundationProcessRunner().run(
             executable: sh, arguments: ["-c", "printf err >&2; exit 3"],
-            stdin: Data(), workingDirectory: try TemporaryDirectory.make(), environment: env, timeout: .seconds(10))
+            stdin: Data(), workingDirectory: try TemporaryDirectory.make(), environment: env, timeout: testPatience)
         #expect(result.exitCode == 3)
         #expect(String(decoding: result.stderr, as: UTF8.self) == "err")
         #expect(result.stdout.isEmpty)
@@ -53,7 +53,7 @@ import AutoNoteTestSupport
         let script = "head -c 200000 /dev/zero | tr '\\0' o; head -c 200000 /dev/zero | tr '\\0' e >&2"
         let result = try await FoundationProcessRunner().run(
             executable: sh, arguments: ["-c", script], stdin: Data(),
-            workingDirectory: try TemporaryDirectory.make(), environment: env, timeout: .seconds(10))
+            workingDirectory: try TemporaryDirectory.make(), environment: env, timeout: testPatience)
         #expect(result.exitCode == 0)
         #expect(result.stdout.count == 200_000)
         #expect(result.stderr.count == 200_000)
@@ -63,12 +63,12 @@ import AutoNoteTestSupport
 
     @Test func timeoutKillsProcess() async throws {
         // The verdict is how the child ended: by SIGTERM (the runner stopped it), not by `sleep` running out (0).
-        // A runner that only waited would return after 30 s with status 0; a time limit here would also fail when
-        // the machine merely stalls.
+        // A runner that only waited would return after 300 s with status 0 (long enough that no stall gets there
+        // first); a time limit here would also fail when the machine merely stalls.
         let dir = try TemporaryDirectory.make()
         let pidFile = dir.appending(path: "pid")
         let result = try await FoundationProcessRunner().run(
-            executable: sh, arguments: ["-c", "echo $$ > \"$0\"; exec sleep 30", pidFile.path], stdin: Data(),
+            executable: sh, arguments: ["-c", "echo $$ > \"$0\"; exec sleep 300", pidFile.path], stdin: Data(),
             workingDirectory: dir, environment: env, timeout: .seconds(1))
         #expect(result.timedOut == true)
         #expect(result.exitCode == SIGTERM)
@@ -103,20 +103,20 @@ import AutoNoteTestSupport
         let sh = self.sh
         let task = Task {
             try await FoundationProcessRunner().run(
-                executable: sh, arguments: ["-c", "echo $$ > \"$0\"; exec sleep 30", pidFile.path], stdin: Data(),
-                workingDirectory: dir, environment: env, timeout: .seconds(60))
+                executable: sh, arguments: ["-c", "echo $$ > \"$0\"; exec sleep 300", pidFile.path], stdin: Data(),
+                workingDirectory: dir, environment: env, timeout: testPatience)
         }
-        let deadline = ContinuousClock.now + .seconds(10)
+        let deadline = ContinuousClock.now + testPatience
         while !FileManager.default.fileExists(atPath: pidFile.path) || (try? Data(contentsOf: pidFile))?.isEmpty != false {
             guard ContinuousClock.now < deadline else { break }
             try await Task.sleep(for: .milliseconds(20))
         }
         let pid = try #require(pid_t(String(decoding: try Data(contentsOf: pidFile), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)))
-        let start = ContinuousClock.now
         task.cancel()
+        // What happened, not how fast: it came back with `CancellationError` (left alone, the child would have
+        // been stopped by the runner's own timeout, which ends in a result, not in this error) and the child is gone.
         await #expect(throws: CancellationError.self) { try await task.value }
-        #expect(ContinuousClock.now - start < .seconds(3))
         #expect(kill(pid, 0) != 0)
     }
 
