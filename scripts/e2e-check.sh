@@ -6,12 +6,14 @@
 #   --verbose   各コマンドの出力をそのまま見せる（既定は FAIL のときだけ末尾 20 行）
 # 環境変数（FAIL 検出の確認用。副作用なしで期待値だけを変える）:
 #   E2E_EXPECT_VERSION   autonote --version の期待値（既定: Sources/AutoNoteCore/AutoNoteVersion.swift の値）
-#   E2E_MENUBAR_PROCESS  項目 7b で osascript が見るプロセス名（既定: AutoNoteApp）
+#   E2E_EXPECT_STATUS_ITEM_ID   項目 7b がメニューバー項目の AXIdentifier に期待する値（既定: autonote-status-item）
 #   AUTONOTE_CLI         項目 01.x が使う autonote の場所（既定: .build/debug/autonote）
-#   E2E_MENUBAR_INDEX    項目 7b で見る menu bar の番号（既定: 2 = ステータス項目のメニューバー）
+#   E2E_MENUBAR_INDEX    項目 7b・07.3・06.7 で見る menu bar の番号（既定: 2 = ステータス項目のメニューバー）
 #   E2E_EXPECT_RECORDER_STATE   項目 06.3 が status --json の recorder.state に期待する値（既定: idle）
 #   E2E_EXPECT_AUTOMATION_OUT   項目 06.5 が auto-out.txt に期待する 1 行（既定: minutes_generated <会議ID>）
 # アプリを起動する項目は、必ず使い捨てのデータ領域（/tmp/an-e2e.XXXXXX。ソケットのパスを短く保つ）で動かし、利用者の実データには触らない。
+# メニューバーや GUI を触る項目（7b・07.3・06.7）は、項目 7 が自分で起動したアプリだけを pid で指す（下の app_ax）。
+# 同じ名前のインストール済みのアプリ（/Applications/AutoNote.app）が動いていても、そちらは読まない・開かない・押さない・止めない。
 #
 # 各項目は PASS / FAIL / SKIP の 1 行を出す。最後に集計し、FAIL が 1 つでもあれば終了コード 1。
 # 機材・許可ダイアログ・ネットワーク・GUI に依存する項目は、条件がそろわなければ SKIP（失敗にしない）。
@@ -46,9 +48,13 @@ BUNDLE_ID="${AUTONOTE_BUNDLE_ID:-}"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/autonote-e2e.XXXXXX")"
 DATA="$(mktemp -d /tmp/an-e2e.XXXXXX)"   # AUTONOTE_DATA_DIR。unix ソケットのパス上限（約 104 バイト）に収まる短さにする
 APP_PID=""
+APP_MENU_OPENED=0   # 07.3 が自分のアプリのメニューを開いたら 1。閉じたのを確かめたら 0
 cleanup() {
-    # どの経路（PASS / SKIP / FAIL / 中断）でも、起動したアプリを必ず止める
-    if [[ -n "${APP_PID}" ]]; then kill "${APP_PID}" 2>/dev/null; wait "${APP_PID}" 2>/dev/null; fi
+    # どの経路（PASS / SKIP / FAIL / 中断）でも、開いたメニューを閉じ、起動したアプリを必ず止める
+    if [[ -n "${APP_PID}" ]]; then
+        [[ "${APP_MENU_OPENED}" -eq 1 ]] && close_app_menu
+        kill "${APP_PID}" 2>/dev/null; wait "${APP_PID}" 2>/dev/null
+    fi
     rm -rf "${WORK}" "${DATA}"
 }
 trap cleanup EXIT
@@ -93,6 +99,82 @@ run_timeout() {
         sleep 0.1; waited=$((waited + 1))
     done
     wait "${pid}"
+}
+
+# ---- 自分で起動したアプリだけを System Events で触るための補助 ----
+# `tell process "AutoNoteApp"` は名前で引くので、同じ名前のプロセスが 2 つあるとどちらに当たるか決まらない。
+# 2026-11-28 に、/Applications の AutoNote（常駐）のメニューを 07.3 が開いたままにし、そのアプリが終了の合図に
+# 応じなくなった（メインスレッドがメニューバー項目のアクセシビリティ押下の中で止まっていた）。
+# そのため必ず unix id（項目 7 の APP_PID）で引く。引けなければ別のプロセスには当てず、呼び手が SKIP にする。
+# ★ プロセスやその要素への参照を AppleScript の変数に入れない（`set p to first process whose unix id is N` や
+#   `set mb to menu bar item 1 of …` をしない）。System Events は返す参照を `application process "AutoNoteApp"` と
+#   名前の形に直すので、変数を経由した次の命令は名前で引き直され、同じ名前の別のアプリに当たる（実測。pid で
+#   引いたのに、先に起動していた同名のアプリの項目名が返った）。命令は下の tell の入れ子の中で、it（ステータス項目）
+#   から相対で書く（title、selected、click it、menu 1 など）。値（文字列・真偽・名前のリスト）は変数に入れてよい。
+# キー入力（key code 53 など）も送らない: 手前のアプリに届くので、利用者の作業や別のアプリのメニューに当たる。
+AX_NO_PROCESS="E2E-NO-PROCESS-FOR-PID"
+app_ax_script() {   # app_ax_script <tell の中身>: APP_PID のプロセスのステータス項目だけに向けた AppleScript を出す
+    local idx="${E2E_MENUBAR_INDEX:-2}"
+    cat <<OSA
+with timeout of 8 seconds
+tell application "System Events"
+    if (count of (every process whose unix id is ${APP_PID})) is not 1 then error "${AX_NO_PROCESS} ${APP_PID}" number 9001
+    tell (first process whose unix id is ${APP_PID})
+        tell menu bar item 1 of menu bar ${idx}
+$1
+        end tell
+    end tell
+end tell
+end timeout
+OSA
+}
+# app_ax <秒> <tell の中身>: run_timeout と同じ（出力は LAST_LOG、時間切れは 124）。APP_PID が項目 7 で起動した
+# build/AutoNote.app の AutoNoteApp でなければ何も送らず、AX_NO_PROCESS の行を LAST_LOG に書いて 1 を返す。
+app_ax() {
+    local secs="$1" body="$2"
+    if [[ -z "${APP_PID}" ]] || ! kill -0 "${APP_PID}" 2>/dev/null \
+        || [[ "$(ps -o comm= -p "${APP_PID}" 2>/dev/null)" != "${APP}/Contents/MacOS/AutoNoteApp" ]]; then
+        new_log; echo "${AX_NO_PROCESS} ${APP_PID:-（なし）}: 項目 7 で起動した ${APP} のプロセスではない" >"${LAST_LOG}"
+        return 1
+    fi
+    run_timeout "${secs}" osascript -e "$(app_ax_script "${body}")"
+}
+# app_ax の失敗（LAST_LOG）が「触れない環境」なら理由を出して 0、それ以外（menu bar が無い、時間切れなど）は 1。
+# -1719 は「インデックスが正しくない」（menu bar が無い）にも使われるので、コード単体では判定せず文言で見る
+ax_skip_reason() {
+    if grep -q "${AX_NO_PROCESS}" "${LAST_LOG}"; then
+        echo "pid ${APP_PID:-（なし）} を、項目 7 で起動したアプリとして特定できない（同じ名前の別のアプリには当てない）"
+    elif grep -Eqi 'assistive|補助アクセス|-25211|-1743|Not authorized to send Apple events' "${LAST_LOG}"; then
+        echo "アクセシビリティ（または Apple Events）の権限が無い: $(tail -n 1 "${LAST_LOG}")"
+    else
+        return 1
+    fi
+}
+# 自分のアプリのメニューが開いていれば閉じる（AXCancel をそのメニューに送る。キー入力は使わない）。
+# 開いているかはステータス項目の AXSelected で見る。閉じたのを確かめられたら 0。LAST_LOG は変えない
+close_app_menu() {
+    local log="${LAST_LOG}" n state="" rc=1
+    for n in 1 2 3; do
+        app_ax 10 '            if selected then perform action "AXCancel" of menu 1
+            delay 0.3
+            return selected' && state="$(cat "${LAST_LOG}")"
+        if [[ "${state}" == "false" ]]; then APP_MENU_OPENED=0; rc=0; break; fi
+        kill -0 "${APP_PID}" 2>/dev/null || break
+    done
+    LAST_LOG="${log}"
+    return "${rc}"
+}
+# 見張り: 自分で起動したもの以外の AutoNoteApp（インストール済みのアプリなど）のうち、メニューが開いているものの pid を
+# 空白区切りで出す（AXSelected を読むだけ。何も押さない）。07.3 が、メニューを開く前後で比べる
+other_app_open_menus() {
+    local pid out=""
+    for pid in $(pgrep -x AutoNoteApp); do
+        [[ "${pid}" == "${APP_PID}" ]] && continue
+        [[ "$(osascript -e "with timeout of 5 seconds
+tell application \"System Events\" to tell (first process whose unix id is ${pid}) to tell menu bar item 1 of menu bar ${E2E_MENUBAR_INDEX:-2} to return selected
+end timeout" 2>/dev/null)" == "true" ]] && out+="${pid} "
+    done
+    printf '%s' "${out}"
 }
 
 have_cert() { security find-identity -v -p codesigning 2>/dev/null | grep -q "\"${CERT_NAME}\""; }
@@ -261,29 +343,32 @@ JSON
         LAST_LOG="${WORK}/app.log"; fail "起動後 5 秒以内にプロセスが消えた"
         APP_PID=""; return
     fi
-    # メニューバー項目の名前を System Events で読む（アクセシビリティ権限が要る）。
-    # 権限エラーのときだけ SKIP。それ以外の失敗（menu bar が無い、時間切れ等）と waveform が無いのは FAIL。
-    local proc="${E2E_MENUBAR_PROCESS:-AutoNoteApp}" idx="${E2E_MENUBAR_INDEX:-2}"
-    local names="" result="" n
+    # 起動したアプリ（pid）のメニューバー項目を System Events で読む（アクセシビリティ権限が要る）。
+    # 見るのはアプリが付ける固定の AXIdentifier（Sources/AutoNoteApp/MenuBarContent.swift の MenuBarLabel.accessibilityID）。
+    # 項目の名前は SF Symbol の説明で、OS の言語で変わる（英語「waveform」、日本語「オーディオ波形」）ので判定に使わない。
+    # 触れない環境（権限なし・pid で引けない）だけ SKIP。それ以外の失敗（menu bar が無い、時間切れ等）と識別子の違いは FAIL。
+    local want="${E2E_EXPECT_STATUS_ITEM_ID:-autonote-status-item}" idx="${E2E_MENUBAR_INDEX:-2}"
+    local got="" result="" reason="" n
     for n in 1 2 3 4 5; do
-        if run_timeout 10 osascript -e "tell application \"System Events\" to tell process \"${proc}\" to get name of every menu bar item of menu bar ${idx}"; then
-            names="$(cat "${LAST_LOG}")"
-            if [[ "${names}" == *waveform* ]]; then result=pass; break; fi
-            result="no-waveform"
-        # -1719 は「インデックスが正しくない」（menu bar が無い）にも使われるので、コード単体では判定せず文言で見る
-        elif grep -Eqi 'assistive|補助アクセス|-25211|-1743|Not authorized to send Apple events' "${LAST_LOG}"; then
-            result=permission; break
+        if app_ax 10 '            set v to value of attribute "AXIdentifier"
+            if v is missing value then return "（なし）"
+            return (v as text) & " / " & (title as text)'; then
+            got="$(cat "${LAST_LOG}")"
+            if [[ "${got%% / *}" == "${want}" ]]; then result=pass; break; fi
+            result="wrong-id"
+        elif reason="$(ax_skip_reason)"; then
+            result=untouchable; break
         else
             result=error
         fi
-        sleep 1   # 起動直後はメニューバー項目がまだ無いことがあるので、権限エラー以外は再試行する
+        sleep 1   # 起動直後はメニューバー項目がまだ無いことがあるので、触れない環境以外は再試行する
     done
-    pass "生存確認"
-    CURRENT="7b. メニューバー項目 waveform（process ${proc} / menu bar ${idx}）"
+    pass "生存確認（pid ${APP_PID}）"
+    CURRENT="7b. メニューバー項目の識別子 ${want}（pid ${APP_PID} / menu bar ${idx}）"
     case "${result}" in
-        pass) pass "「${names}」" ;;
-        permission) skip "アクセシビリティ（または Apple Events）の権限が無い: $(tail -n 1 "${LAST_LOG}")" ;;
-        no-waveform) LAST_LOG=""; fail "メニューバー項目「${names}」に waveform が無い" ;;
+        pass) pass "「${got}」" ;;
+        untouchable) skip "${reason}" ;;
+        wrong-id) LAST_LOG=""; fail "メニューバー項目の AXIdentifier / 名前が「${got}」（期待 ${want}）" ;;
         *) fail "osascript が失敗（5 回試行）" ;;
     esac
 }
@@ -315,31 +400,43 @@ check_first_run_no_download() {
 check_menu_no_folder_warning() {
     CURRENT="07.3 メニューに「保存先が見つかりません」が出ない"
     app_or_skip || return
-    local proc="${E2E_MENUBAR_PROCESS:-AutoNoteApp}" idx="${E2E_MENUBAR_INDEX:-2}"
-    local names code
-    run_timeout 10 osascript \
-        -e "tell application \"System Events\" to tell process \"${proc}\" to click menu bar item 1 of menu bar ${idx}" \
-        -e "delay 0.5" \
-        -e "tell application \"System Events\" to tell process \"${proc}\" to set n to name of every menu item of menu 1 of menu bar item 1 of menu bar ${idx}" \
-        -e "tell application \"System Events\" to key code 53" \
-        -e "return n"
-    code=$?
+    # 開くのは項目 7 で起動したアプリ（pid）のメニューだけ。開いた直後に、別の AutoNoteApp のメニューが開いていないかを
+    # 見る（宛先の取り違えの見張り）。項目名を読んだら閉じ、閉じたことを確かめる（close_app_menu）。
+    # 途中で失敗・時間切れ・中断しても、cleanup が閉じてからアプリを止める
+    local names="" code reason="" others_before others_open pid stray="" log closed=1
+    others_before=" $(other_app_open_menus)"
+    APP_MENU_OPENED=1
+    app_ax 15 '            click it
+            delay 0.5
+            return selected'
+    code=$?; log="${LAST_LOG}"
+    others_open="$(other_app_open_menus)"
+    for pid in ${others_open}; do
+        [[ "${others_before}" == *" ${pid} "* ]] && continue
+        # 開いたままだとそのアプリは終了の合図に応じなくなるので、その pid のメニューに AXCancel を送って閉じる
+        osascript -e "with timeout of 5 seconds
+tell application \"System Events\" to tell (first process whose unix id is ${pid}) to tell menu bar item 1 of menu bar ${E2E_MENUBAR_INDEX:-2} to perform action \"AXCancel\" of menu 1
+end timeout" >/dev/null 2>&1
+        stray+="${pid} "
+    done
+    if [[ ${code} -eq 0 && -z "${stray}" ]]; then
+        app_ax 10 '            return name of every menu item of menu 1'
+        code=$?; log="${LAST_LOG}"
+    fi
+    close_app_menu || closed=0
+    LAST_LOG="${log}"
+    if [[ -n "${stray}" ]]; then
+        LAST_LOG=""; fail "別の AutoNoteApp（pid ${stray% }）のメニューが開いた（宛先の取り違え。閉じる操作は送った）"; return
+    fi
     if [[ ${code} -ne 0 ]]; then
-        # 開いたままにしない（run_timeout は LAST_LOG を差し替えるので、判定用に元のログを取っておく）
-        local log="${LAST_LOG}"
-        run_timeout 5 osascript -e 'tell application "System Events" to key code 53'
-        LAST_LOG="${log}"
-        if grep -Eqi 'assistive|補助アクセス|-25211|-1743|Not authorized to send Apple events' "${LAST_LOG}"; then
-            skip "アクセシビリティ（または Apple Events）の権限が無い: $(tail -n 1 "${LAST_LOG}")"
-        else
-            fail "osascript が失敗（exit ${code}）"
-        fi
+        if reason="$(ax_skip_reason)"; then skip "${reason}"; else fail "osascript が失敗（exit ${code}）"; fi
         return
     fi
+    [[ "${closed}" -eq 1 ]] || { fail "開いたメニューを閉じられない（アプリは検査の終わりに止める）"; return; }
     names="$(cat "${LAST_LOG}")"
     [[ "${names}" == *録音開始* ]] || { fail "メニュー項目に「録音開始」が無い"; return; }
     [[ "${names}" != *保存先が見つかりません* ]] || { fail "メニュー項目に「保存先が見つかりません」がある"; return; }
-    pass "「録音開始」あり、「保存先が見つかりません」なし"
+    pass "「録音開始」あり、「保存先が見つかりません」なし、メニューは閉じた"
 }
 
 # 06.3〜06.6 の前提: 項目 7 で起動したアプリが生きていること。生きていなければ skip して 1 を返す
@@ -427,14 +524,21 @@ check_recording_main_thread() {
     # メニューバー項目が読めることで再発を見る。マイク許可が無い環境では start が失敗するので skip
     if ! AUTONOTE_DATA_DIR="${DATA}" run_timeout 10 "${AUTONOTE_CLI}" start; then skip "autonote start が失敗（マイク許可が無い環境か）"; return; fi
     sleep 3
-    local cpu item
+    # メニューバー項目は項目 7 で起動したアプリ（pid）のものを読む。経過時間（0:03 の形）は OS の言語に左右されない
+    local cpu item="" item_code item_log reason=""
     cpu="$(ps -o %cpu= -p "${APP_PID}" | tr -d ' ')"
-    item="$(osascript -e 'with timeout of 5 seconds
-tell application "System Events" to tell process "AutoNoteApp" to get title of menu bar item 1 of menu bar 2
-end timeout' 2>&1)"
+    app_ax 10 '            return title'; item_code=$?
+    item_log="${LAST_LOG}"
+    [[ ${item_code} -eq 0 ]] && item="$(cat "${item_log}")"
     AUTONOTE_DATA_DIR="${DATA}" run_timeout 20 "${AUTONOTE_CLI}" stop || { fail "autonote stop が失敗"; return; }
     [[ "${cpu%.*}" -lt 60 ]] || { LAST_LOG="${WORK}/app.log"; fail "録音開始 3 秒後の CPU が ${cpu} %（期待 60 % 未満）"; return; }
-    [[ "${item}" == *:* ]] || { LAST_LOG=""; fail "メニューバー項目の経過時間が読めない: ${item}"; return; }
+    if [[ ${item_code} -ne 0 ]]; then
+        LAST_LOG="${item_log}"
+        if reason="$(ax_skip_reason)"; then skip "CPU ${cpu} % は期待どおり。メニューバー項目は読めない: ${reason}"
+        else fail "メニューバー項目を読めない（exit ${item_code}。主スレッドが固まっていないか）"; fi
+        return
+    fi
+    [[ "${item}" =~ [0-9]+:[0-9][0-9] ]] || { LAST_LOG=""; fail "メニューバー項目の経過時間が読めない: ${item}"; return; }
     pass "CPU ${cpu} %、メニューバー「${item}」"
 }
 
