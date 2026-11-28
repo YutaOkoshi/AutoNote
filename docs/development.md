@@ -23,7 +23,10 @@ AutoNote をソースからビルドし、テストし、変更を入れるた�
 - テスト: `swift test`
 - アプリ（.app）のビルド: `scripts/build-app.sh [debug|release]`（既定は debug）。成果物は `build/AutoNote.app`、同梱の CLI は `build/AutoNote.app/Contents/MacOS/autonote`
 - 動作確認（E2E）: `scripts/e2e-check.sh`。CLI・ソケット・ファイルで確かめられる範囲を人の手なしで見る。`--quick` は時間のかかる項目（`swift test`・`build-app`・whisper を使う項目）を飛ばし、前回ビルドした `build/AutoNote.app` をそのまま確かめる。`--verbose` で各コマンドの出力をそのまま見せる
-- Bluetooth ヘッドセットの実機確認: `scripts/bt-verify.sh --bt-name <名前の一部>`。ヘッドセットの切断・接続（blueutil）、一時プロファイルの Chrome で鳴らすトーンや WebRTC のループバック、独立したタップでの計測を、人の手なしで回す。修正前と修正後のビルドを比べられる。入力・出力が動作中なら始めない。結果は `summary.md`・`results.json`。`scripts/e2e-check.sh` の項目 17 は、構文・計測プログラムのコンパイル・`--dry-run` だけを見る
+  - インストール済みの AutoNote（`/Applications/AutoNote.app`）が動いていてもよい。メニューバーを触る項目（7b・07.3・06.7）は、検査が自分で起動した `build/AutoNote.app` のプロセスだけを pid で指し、同じ名前の別のアプリは読まない・開かない・止めない。pid で特定できなければ SKIP になる。GUI を触る項目を足すときは、スクリプトの `app_ax` を使う（`tell process "AutoNoteApp"` と名前で指さない。System Events の参照を AppleScript の変数に入れない。キー入力を送らない。理由はスクリプトのコメントにある）
+  - 項目 7b は、メニューバー項目の名前（OS の言語で変わる）ではなく、アプリが付ける固定の `AXIdentifier`（`autonote-status-item`。`MenuBarLabel.accessibilityID`）を見る
+  - 項目 08.1（確定版のメモリが入力の長さに比例しない）は `MallocLargeCache=0` で測る。しきい値と実測値はスクリプトのコメントにある
+- Bluetooth ヘッドセットの実機確認: `scripts/bt-verify.sh --bt-name <名前の一部>`。ヘッドセットの切断・接続（blueutil）、一時プロファイルの Chrome で鳴らすトーンや WebRTC のループバック、独立したタップでの計測を、人の手なしで回す。修正前と修正後のビルドを比べられる。入力・出力が動作中なら始めない。結果は `summary.md`・`results.json`。`--dry-run` は何も起動せず、足りない前提（修正前・修正後のアプリなど）を表示するだけで終了コード 0 を返す。`scripts/e2e-check.sh` の項目 17 は、構文・計測プログラムのコンパイル・`--dry-run` だけを見る
 - CI と同じ .app を手元で作るなら `AUTONOTE_BUILD_ARCHS="arm64 x86_64" AUTONOTE_CODESIGN_IDENTITY=- scripts/build-app.sh release`（`AUTONOTE_BUILD_ARCHS` を付けなければホストのアーキテクチャだけ、`AUTONOTE_CODESIGN_IDENTITY` を付けなければ `AutoNote Dev` で署名）
 
 ### `AUTONOTE_DATA_DIR`
