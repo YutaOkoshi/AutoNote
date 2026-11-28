@@ -364,9 +364,9 @@ JSON
         sleep 1   # 起動直後はメニューバー項目がまだ無いことがあるので、触れない環境以外は再試行する
     done
     pass "生存確認（pid ${APP_PID}）"
-    CURRENT="7b. メニューバー項目の識別子 ${want}（pid ${APP_PID} / menu bar ${idx}）"
+    CURRENT="7b. メニューバー項目の識別子 ${want}（menu bar ${idx}）"
     case "${result}" in
-        pass) pass "「${got}」" ;;
+        pass) pass "pid ${APP_PID}「${got}」" ;;
         untouchable) skip "${reason}" ;;
         wrong-id) LAST_LOG=""; fail "メニューバー項目の AXIdentifier / 名前が「${got}」（期待 ${want}）" ;;
         *) fail "osascript が失敗（5 回試行）" ;;
