@@ -119,11 +119,9 @@ public actor LiveFeed {
     /// Finishes both transcribers, drains their results, writes `live.json` and ends the stream.
     public func finish() async throws -> Transcript {
         finishing = true
-        let live = [Track.mic, .system].filter { failures[$0] == nil }
-        // Both tracks hear of the stop before either is drained: draining the microphone can take as long as its
-        // backlog, and what the other track reports about the stop must not be from after that.
-        for track in live { await transcribers[track]?.inputEnded() }
-        for track in live { await transcribers[track]?.finish() }
+        for track in [Track.mic, .system] where failures[track] == nil {
+            await transcribers[track]?.finish()
+        }
         for task in subscriptions { await task.value }
         subscriptions = []
         defer {

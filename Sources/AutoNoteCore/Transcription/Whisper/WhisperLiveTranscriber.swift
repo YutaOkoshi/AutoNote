@@ -69,7 +69,6 @@ public actor WhisperLiveTranscriber: LiveTranscriber {
     private var track: Track?                                   // of the audio fed; names the track in the log
     private var decoding: (to: Double, isFinal: Bool)?
     private var nextBacklogReport = WhisperLiveTranscriber.firstBacklogReport
-    private var inputClosed = false
     /// The deepest backlog and the longest lag of this recording so far (the stop line and `dev transcribe`).
     public private(set) var worstBacklog = Backlog()
     /// The same since the queue was last empty: what the `cleared` line reports, so each backlog shows its own size.
@@ -102,26 +101,18 @@ public actor WhisperLiveTranscriber: LiveTranscriber {
         schedule(planner.ingest(chunk.samples))
     }
 
-    /// The audio is over: closes the last window and writes the stop line (how far behind the decoder is right now,
-    /// and the worst of the recording). Nothing is waited for, so `LiveFeed` can tell both tracks before it drains
-    /// either, and each line carries the moment of the stop. `finish()` does this itself when nobody has.
-    public func inputEnded() async { closeInput() }
-
-    private func closeInput() {
-        guard accepting else { return }
-        accepting = false
-        inputClosed = true
-        schedule(planner.flush())
-        guard let track else { return }
-        let now = backlog()
-        log("live backlog at stop: track=\(track.rawValue) depth=\(now.depth) lag=\(Self.seconds(now.lagSeconds))s "
-            + "max_depth=\(worstBacklog.depth) max_lag=\(Self.seconds(worstBacklog.lagSeconds))s")
-    }
-
     /// Decodes what is left and ends the stream. Later (or concurrent) calls wait for the same ending.
+    /// The stop line is written here, before the wait: how far behind the decoder is when this is called (for the
+    /// system track that is after the microphone's rest was decoded, see `LiveFeed.finish`), and the recording's worst.
     public func finish() async {
-        closeInput()
-        if inputClosed, finishing == nil {
+        if accepting {
+            accepting = false
+            schedule(planner.flush())
+            if let track {
+                let now = backlog()
+                log("live backlog at stop: track=\(track.rawValue) depth=\(now.depth) lag=\(Self.seconds(now.lagSeconds))s "
+                    + "max_depth=\(worstBacklog.depth) max_lag=\(Self.seconds(worstBacklog.lagSeconds))s")
+            }
             finishing = Task {
                 while let running = worker { await running.value }
                 continuation?.finish()

@@ -164,21 +164,6 @@ private final class LogLines: Sendable {
         #expect(log.all == ["live backlog at stop: track=mic depth=0 lag=0.0s max_depth=1 max_lag=0.0s"])
     }
 
-    /// 停止の行は、残りの復号を待たずに `inputEnded()` の時点で出る（`LiveFeed` が両トラックに先に知らせる）。
-    @Test func inputEndedWritesTheStopLineWithoutWaitingForTheDecoder() async throws {
-        let core = FakeWhisperCore(fixedText: "テスト"); core.hold()
-        let log = LogLines(); let t = WhisperLiveTranscriber(core: core, log: log.sink)
-        let s = try await t.start(language: .ja, hints: [])
-        await speak(t, 4)
-        await t.inputEnded()                                        // 復号は止めたまま
-        #expect(log.all.last == "live backlog at stop: track=mic depth=4 lag=12.0s max_depth=4 max_lag=12.0s")
-        await speak(t, 1, from: 4)                                  // 終わりを告げた後の音声は受け取らない
-        await t.inputEnded()
-        core.release(); await t.finish()
-        #expect(await collect(s).filter(\.isFinal).count == 4)
-        #expect(log.all.count { $0.hasPrefix("live backlog at stop:") } == 1)   // finish は書き直さない
-    }
-
     @Test func theBacklogIsCountedAgainOnceTheQueueIsEmpty() async throws {
         let core = FakeWhisperCore(fixedText: "テスト"); core.hold()
         let log = LogLines(); let t = WhisperLiveTranscriber(core: core, log: log.sink)
