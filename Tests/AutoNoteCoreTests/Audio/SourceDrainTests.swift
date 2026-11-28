@@ -1,15 +1,17 @@
 import Testing
 import Foundation
 @testable import AutoNoteCore
+import AutoNoteTestSupport
 
 @Suite struct SourceDrainTests {
     @Test func runAwaitingReturnsFalseWhenWorkOutlastsTimeout() async {
+        // The work does not end until released, so only the timeout can end the wait.
         let queue = DispatchQueue(label: "test.runAwaiting.slow")
-        let t0 = ContinuousClock.now
-        // Work 10× the timeout; the bound leaves 4 s of scheduler slack and still sits well before the work ends.
-        let finished = await queue.runAwaiting(timeout: .seconds(1)) { Thread.sleep(forTimeInterval: 10) }
+        let work = BlockingHold(); work.hold()
+        defer { work.release() }
+        let finished = await queue.runAwaiting(timeout: .milliseconds(200)) { work.wait() }
         #expect(finished == false)
-        #expect(ContinuousClock.now - t0 < .seconds(5))
+        #expect(!work.expired)
     }
 
     @Test func runAwaitingReturnsTrueWhenWorkFinishesInTime() async {

@@ -42,9 +42,10 @@ private func readPID(_ url: URL) throws -> pid_t {
     return try #require(pid_t(text))
 }
 
-/// SIGKILL delivery and reaping are asynchronous; poll up to 2 s.
+/// SIGKILL delivery and reaping are asynchronous; poll until the process is gone.
 private func isGone(_ pid: pid_t) async -> Bool {
-    for _ in 0..<40 {
+    let deadline = ContinuousClock.now + testPatience
+    while ContinuousClock.now < deadline {
         if kill(pid, 0) == -1 && errno == ESRCH { return true }
         try? await Task.sleep(for: .milliseconds(50))
     }
@@ -110,16 +111,19 @@ private func logFolders(_ fx: Fixture) throws -> [URL] {
     @Test func timeoutKillsWholeProcessGroup() async throws {
         let fx = try Fixture()
         let pidFile = fx.root.appending(path: "grandchild.pid")
+        // No exit code: the shell ended by a signal. Had the runner only waited, `wait` would have returned after
+        // 30 s and the shell would have exited with 0. (A limit on the duration would also fail on a stalled machine.)
         let rec = await fx.runner().run(def("sleep 30 & echo $! > \(pidFile.path); wait", timeout: 1), context: ctx, dedupeKey: nil)
-        #expect(rec.timedOut && !rec.succeeded && rec.durationSeconds < 8)
+        #expect(rec.timedOut && !rec.succeeded)
         #expect(rec.exitCode == nil)
         #expect(await isGone(try readPID(pidFile)))
     }
 
     @Test func sigtermIgnoredIsKilled() async throws {
         let fx = try Fixture()
+        // As above: no exit code means SIGKILL ended it; ignoring SIGTERM and living on would end in exit code 0.
         let rec = await fx.runner(killGrace: .seconds(1)).run(def("trap '' TERM; sleep 30", timeout: 1), context: ctx, dedupeKey: nil)
-        #expect(rec.timedOut && !rec.succeeded && rec.durationSeconds < 8)
+        #expect(rec.timedOut && !rec.succeeded)
         #expect(rec.exitCode == nil)
     }
 

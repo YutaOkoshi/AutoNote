@@ -38,12 +38,12 @@ import AutoNoteTestSupport
     }
 
     @Test func largeStdinDoesNotDeadlock() async throws {
+        // A deadlock (stdin written before the pipes are drained) ends in the timeout, so `timedOut` is the verdict;
+        // how long the run took says nothing on a busy machine.
         let input = Data(repeating: UInt8(ascii: "x"), count: 300_000)
-        let start = ContinuousClock.now
         let result = try await FoundationProcessRunner().run(
             executable: URL(fileURLWithPath: "/bin/cat"), arguments: [], stdin: input,
-            workingDirectory: try TemporaryDirectory.make(), environment: env, timeout: .seconds(10))
-        #expect(ContinuousClock.now - start < .seconds(10))
+            workingDirectory: try TemporaryDirectory.make(), environment: env, timeout: testPatience)
         #expect(result.timedOut == false)
         #expect(result.stdout.count == 300_000)
         #expect(result.stdout == input)
@@ -62,14 +62,16 @@ import AutoNoteTestSupport
     }
 
     @Test func timeoutKillsProcess() async throws {
+        // The verdict is how the child ended: by SIGTERM (the runner stopped it), not by `sleep` running out (0).
+        // A runner that only waited would return after 30 s with status 0; a time limit here would also fail when
+        // the machine merely stalls.
         let dir = try TemporaryDirectory.make()
         let pidFile = dir.appending(path: "pid")
-        let start = ContinuousClock.now
         let result = try await FoundationProcessRunner().run(
             executable: sh, arguments: ["-c", "echo $$ > \"$0\"; exec sleep 30", pidFile.path], stdin: Data(),
             workingDirectory: dir, environment: env, timeout: .seconds(1))
-        #expect(ContinuousClock.now - start < .seconds(3))
         #expect(result.timedOut == true)
+        #expect(result.exitCode == SIGTERM)
         let pid = try #require(pid_t(String(decoding: try Data(contentsOf: pidFile), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)))
         #expect(kill(pid, 0) != 0)
@@ -84,9 +86,11 @@ import AutoNoteTestSupport
             arguments: ["-c", "trap '' TERM; echo $$ > \"$0\"; while :; do sleep 1; done", pidFile.path],
             stdin: Data(), workingDirectory: dir, environment: env, timeout: .seconds(1))
         let elapsed = ContinuousClock.now - start
+        // The shell ignores SIGTERM and never ends by itself: it came back, so it was killed, and by SIGKILL.
+        // Not before the 5 s of grace (a stall only makes it later, so there is no upper limit to miss).
         #expect(result.timedOut == true)
+        #expect(result.exitCode == SIGKILL)
         #expect(elapsed >= .seconds(5))
-        #expect(elapsed < .seconds(10))
         let pid = try #require(pid_t(String(decoding: try Data(contentsOf: pidFile), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)))
         #expect(kill(pid, 0) != 0)

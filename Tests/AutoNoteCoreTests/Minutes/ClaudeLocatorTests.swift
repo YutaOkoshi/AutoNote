@@ -83,9 +83,8 @@ import AutoNoteTestSupport
 
     @Test func loginShellLookupReturnsAbsolutePathOrNil() async {
         // Does not depend on a real `claude` being installed: only the shape of the result is checked.
-        let start = ContinuousClock.now
+        // (That the lookup gives up on a hanging shell is `FoundationProcessRunner`'s timeout, tested there.)
         let found = await ClaudeLocator.loginShellLookup()
-        #expect(ContinuousClock.now - start < .seconds(10))
         if let found { #expect(found.hasPrefix("/")); #expect(!found.contains("\n")) }
     }
 }
