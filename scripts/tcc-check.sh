@@ -14,6 +14,11 @@
 #
 # 記録先: docs/superpowers/research/2026-10-24-spike-raw/tcc-check.log（追記。Bluetooth の UID は下 3 オクテットを伏せる）
 # 許可ダイアログはこのスクリプトでは押さない。出ていれば記録して、利用者に頼む内容を最後に表示する。
+# 終了・操作するのは build/AutoNote.app から起動したプロセスだけ（pid で指す。名前では指さない）。
+# それ以外の場所から起動した AutoNoteApp（インストール済みのアプリなど）が動いていると、何もせずに終了コード 3 で止まる
+# （同じ Bundle ID のアプリが動いていると `open` がどちらを起動するか確かめていないのと、許可の判定が混ざるため）。
+# ★ audio-persist の初回と --reset、dictation は tccutil reset を実行する。許可は Bundle ID 単位なので、インストール済みの
+#   AutoNote（同じ Bundle ID）の許可も消え、利用者が許可し直すまでシステム音声の録音・音声認識が使えなくなる。
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -85,7 +90,22 @@ screen_locked() {
 }
 screen_state() { rec "screen locked: $(screen_locked)（ロック中は許可ダイアログが見えず、System Events の窓一覧も空になる）"; }
 
-app_running() { pgrep -x AutoNoteApp >/dev/null; }
+# AutoNoteApp という実行ファイルのプロセスを「pid<TAB>実行ファイルのパス」で出す。ps はロケールで表せないバイトを M-… に
+# 置き換えるので、UTF-8 のロケールで読む（リポジトリが日本語のフォルダの下にあってもパスを比べられるように）
+app_procs() {
+    LC_ALL=en_US.UTF-8 ps -axo pid=,comm= \
+        | awk '{ pid = $1; sub(/^ *[0-9]+ +/, ""); if ($0 ~ /\/AutoNoteApp$/) print pid "\t" $0 }'
+}
+# build/AutoNote.app のプロセスかどうかは実行ファイルのパスで見る（`open` は実体のパスで起動することがあるので、両方と比べる）
+OWN_BIN="${APP}/Contents/MacOS/AutoNoteApp"
+OWN_BIN_REAL="$(pwd -P)/build/AutoNote.app/Contents/MacOS/AutoNoteApp"
+own_pids() {      # build/AutoNote.app から起動した AutoNoteApp の pid（空白区切り）
+    app_procs | OWN="${OWN_BIN}" REAL="${OWN_BIN_REAL}" awk -F'\t' '$2 == ENVIRON["OWN"] || $2 == ENVIRON["REAL"] { printf "%s ", $1 }'
+}
+foreign_apps() {  # それ以外の場所から起動した AutoNoteApp（「pid パス」を 1 行ずつ）
+    app_procs | OWN="${OWN_BIN}" REAL="${OWN_BIN_REAL}" awk -F'\t' '$2 != ENVIRON["OWN"] && $2 != ENVIRON["REAL"] { print $1 " " $2 }'
+}
+app_running() { [[ -n "$(own_pids)" ]]; }
 
 # 「開発」メニューは AUTONOTE_DATA_DIR の起動（か DEBUG ビルド）にだけ出るので、使い捨てのデータ領域で起動する。
 # TCC の許可はバンドル単位なのでデータ領域を変えても判定は同じ。dev-checks.log は常に既定の場所（DEVLOG）に書かれる。
@@ -100,29 +120,36 @@ app_open() {
     local i
     for i in $(seq 1 50); do app_running && break; sleep 0.2; done
     sleep 2   # メニューバー項目ができるまで待つ
-    if app_running; then rec "AutoNoteApp running (pid $(pgrep -x AutoNoteApp | tr '\n' ' '))"; else rec "AutoNoteApp not running"; return 1; fi
+    if app_running; then rec "AutoNoteApp running (pid $(own_pids))"; else rec "AutoNoteApp not running"; return 1; fi
 }
 
 app_quit() {
     app_running || return 0
-    pkill -x AutoNoteApp   # Apple Events の quit は応答待ちで 2 分止まることがある（実測）
+    # 終了させるのは build/AutoNote.app から起動した pid だけ（名前で pkill しない: 途中で起動された別の場所の AutoNoteApp を巻き込む）
+    # shellcheck disable=SC2046
+    kill $(own_pids) 2>/dev/null   # Apple Events の quit は応答待ちで 2 分止まることがある（実測）
     local i
     for i in $(seq 1 25); do app_running || break; sleep 0.2; done
-    app_running && pkill -9 -x AutoNoteApp
+    # shellcheck disable=SC2046
+    app_running && kill -9 $(own_pids) 2>/dev/null
     sleep 1
     rec "AutoNoteApp quit"
 }
 
 # 「開発」サブメニューの項目を押す（menu bar 2 = ステータス項目のメニューバー）
+# build/AutoNote.app のプロセスを pid で指す（`tell process "AutoNoteApp"` は名前で引くので、同じ名前の別のアプリに当たる）。
+# 参照を変数に入れない: System Events は参照を名前の形に直して返す（scripts/e2e-check.sh の app_ax の説明）
 click_dev() {
-    local item="$1" r
+    local item="$1" r pid
+    pid="$(own_pids | awk '{ print $1 }')"
+    [[ -n "${pid}" ]] || { rec "click 開発 > ${item}: build/AutoNote.app のプロセスが無い"; return 1; }
     r="$(osascript 2>&1 <<EOF
-tell application "System Events" to tell process "AutoNoteApp"
-    click menu bar item 1 of menu bar 2
+tell application "System Events" to tell (first process whose unix id is ${pid}) to tell menu bar item 1 of menu bar 2
+    click it
     delay 0.5
-    click menu item "開発" of menu 1 of menu bar item 1 of menu bar 2
+    click menu item "開発" of menu 1
     delay 0.5
-    click menu item "${item}" of menu 1 of menu item "開発" of menu 1 of menu bar item 1 of menu bar 2
+    click menu item "${item}" of menu 1 of menu item "開発" of menu 1
 end tell
 EOF
 )"
@@ -329,7 +356,25 @@ phase_bt_silence() {
     TODO+=("Shokz（OpenRun Pro 2）と内蔵スピーカーの両方で 1 回ずつ回す: 出力を切り替えて scripts/tcc-check.sh bt-silence（今回の出力: ${dev:-unknown}）")
 }
 
-case "${PHASE}" in audio-persist|audio-denied|dictation|bt-silence) ;; *) sed -n '2,18p' "$0"; exit 2 ;; esac
+case "${PHASE}" in audio-persist|audio-denied|dictation|bt-silence) ;; *) sed -n '2,21p' "$0"; exit 2 ;; esac
+
+# 別の場所から起動した AutoNoteApp（/Applications のインストール済みのアプリなど）が動いていたら、何もせずに止まる。
+# 終了・操作は pid で指すのでそちらには届かないが、同じ Bundle ID のアプリが動いているときに `open` が build/AutoNote.app を
+# 起動するかは確かめていない。許可（TCC）もバンドル単位なので、どちらの動きを記録したのか分からなくなる。
+if [[ -n "$(foreign_apps)" ]]; then
+    {
+        echo "別の場所から起動した AutoNoteApp が動いているので始めません:"
+        foreign_apps | sed 's/^/  pid /'
+        echo "そのアプリを自分で終了してから実行し直してください（このスクリプトは終了も起動もしません）。"
+        echo "インストール済みの AutoNote なら、録音中・後処理中でないことを先に確かめてから終了します:"
+        echo "  /Applications/AutoNote.app/Contents/MacOS/autonote status --json  →  status.queue が空、status.recorder.state が idle"
+        echo "  osascript -e 'tell application id \"${BUNDLE_ID}\" to quit'"
+        echo "確認が終わったら、自分で起動し直してください: open -g /Applications/AutoNote.app（起動し直すまで自動録音は動きません）"
+        echo "★ audio-persist の初回と --reset、dictation は tccutil reset を実行します。許可は Bundle ID 単位なので、"
+        echo "  インストール済みの AutoNote の許可も消え、許可し直すまでシステム音声の録音・音声認識が使えなくなります。"
+    } >&2
+    exit 3
+fi
 [[ -f "${OUT}" ]] || printf '# TCC 確認（scripts/tcc-check.sh の出力。Bluetooth の UID は下 3 オクテットを伏せる）\n' > "${OUT}"
 rec ""
 rec "# ===== [$(now)] tcc-check.sh ${PHASE} $(sw_vers -productVersion) $(uname -m) ====="
@@ -339,7 +384,7 @@ case "${PHASE}" in
     audio-denied) phase_audio_denied ;;
     dictation) phase_dictation ;;
     bt-silence) phase_bt_silence ;;
-    *) sed -n '2,17p' "$0"; exit 2 ;;
+    *) sed -n '2,21p' "$0"; exit 2 ;;
 esac
 
 echo

@@ -6,12 +6,17 @@
 #   --verbose   各コマンドの出力をそのまま見せる（既定は FAIL のときだけ末尾 20 行）
 # 環境変数（FAIL 検出の確認用。副作用なしで期待値だけを変える）:
 #   E2E_EXPECT_VERSION   autonote --version の期待値（既定: Sources/AutoNoteCore/AutoNoteVersion.swift の値）
-#   E2E_MENUBAR_PROCESS  項目 7b で osascript が見るプロセス名（既定: AutoNoteApp）
+#   E2E_EXPECT_STATUS_ITEM_ID   項目 7b・06.7 がメニューバー項目の AXIdentifier に期待する値（既定: autonote-status-item）
 #   AUTONOTE_CLI         項目 01.x が使う autonote の場所（既定: .build/debug/autonote）
-#   E2E_MENUBAR_INDEX    項目 7b で見る menu bar の番号（既定: 2 = ステータス項目のメニューバー）
+#   E2E_MENUBAR_INDEX    項目 7b・07.3・06.7 で見る menu bar の番号（既定: 2 = ステータス項目のメニューバー）
 #   E2E_EXPECT_RECORDER_STATE   項目 06.3 が status --json の recorder.state に期待する値（既定: idle）
 #   E2E_EXPECT_AUTOMATION_OUT   項目 06.5 が auto-out.txt に期待する 1 行（既定: minutes_generated <会議ID>）
 # アプリを起動する項目は、必ず使い捨てのデータ領域（/tmp/an-e2e.XXXXXX。ソケットのパスを短く保つ）で動かし、利用者の実データには触らない。
+# メニューバーや GUI を触る項目（7b・07.3・06.7）は、項目 7 が自分で起動したアプリだけを pid で指す（下の app_ax）。
+# 同じ名前のインストール済みのアプリ（/Applications/AutoNote.app）が動いていても、そちらは開かない・押さない・止めない。
+# そちらに届くのは 07.3 の見張りだけ: メニューが開いているか（AXSelected）を、自分のメニューを開く前と後に 1 回ずつ読む。
+# 07.3 の間にそちらのメニューが新しく開いていたときに限り、閉じる操作（AXCancel）を送って FAIL にする（宛先の取り違え）。
+# そちらが録音中のとき（autonote status --json の recorder.state が idle でない・読めない）は、マイクを開く 06.7・09.3・02.1 を SKIP にする。
 #
 # 各項目は PASS / FAIL / SKIP の 1 行を出す。最後に集計し、FAIL が 1 つでもあれば終了コード 1。
 # 機材・許可ダイアログ・ネットワーク・GUI に依存する項目は、条件がそろわなければ SKIP（失敗にしない）。
@@ -30,7 +35,7 @@ for arg in "$@"; do
     case "${arg}" in
         --quick) QUICK=1 ;;
         --verbose) VERBOSE=1 ;;
-        -h|--help) sed -n "2,21p" "$0"; exit 0 ;;
+        -h|--help) sed -n "2,26p" "$0"; exit 0 ;;
         *) echo "不明な引数: ${arg}（使えるのは --quick と --verbose）" >&2; exit 2 ;;
     esac
 done
@@ -46,9 +51,17 @@ BUNDLE_ID="${AUTONOTE_BUNDLE_ID:-}"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/autonote-e2e.XXXXXX")"
 DATA="$(mktemp -d /tmp/an-e2e.XXXXXX)"   # AUTONOTE_DATA_DIR。unix ソケットのパス上限（約 104 バイト）に収まる短さにする
 APP_PID=""
+APP_MENU_OPENED=0   # 07.3 が自分のアプリのメニューを開いたら 1。閉じたのを確かめたら 0
 cleanup() {
-    # どの経路（PASS / SKIP / FAIL / 中断）でも、起動したアプリを必ず止める
-    if [[ -n "${APP_PID}" ]]; then kill "${APP_PID}" 2>/dev/null; wait "${APP_PID}" 2>/dev/null; fi
+    # どの経路（PASS / SKIP / FAIL / 中断）でも、開いたメニューを閉じ、起動したアプリを必ず止める
+    # （pid が別のプロセスに使い回されていたら送らない: app_is_ours）
+    if [[ -n "${APP_PID}" ]]; then
+        if app_is_ours; then
+            [[ "${APP_MENU_OPENED}" -eq 1 ]] && close_app_menu
+            kill "${APP_PID}" 2>/dev/null
+        fi
+        wait "${APP_PID}" 2>/dev/null
+    fi
     rm -rf "${WORK}" "${DATA}"
 }
 trap cleanup EXIT
@@ -93,6 +106,106 @@ run_timeout() {
         sleep 0.1; waited=$((waited + 1))
     done
     wait "${pid}"
+}
+
+# ---- 自分で起動したアプリだけを System Events で触るための補助 ----
+# `tell process "AutoNoteApp"` は名前で引くので、同じ名前のプロセスが 2 つあるとどちらに当たるか決まらない。
+# 2026-11-28 に、/Applications の AutoNote（常駐）のメニューを 07.3 が開いたままにし、そのアプリが終了の合図に
+# 応じなくなった（メインスレッドがメニューバー項目のアクセシビリティ押下の中で止まっていた）。
+# そのため必ず unix id（項目 7 の APP_PID）で引く。自分のアプリと確かめられなければ別のプロセスには当てず、呼び手が SKIP にする。
+# ★ プロセスやその要素への参照を AppleScript の変数に入れない（`set p to first process whose unix id is N` や
+#   `set mb to menu bar item 1 of …` をしない）。System Events は返す参照を `application process "AutoNoteApp"` と
+#   名前の形に直すので、変数を経由した次の命令は名前で引き直され、同じ名前の別のアプリに当たる（実測。pid で
+#   引いたのに、先に起動していた同名のアプリの項目名が返った）。命令は下の tell の入れ子の中で、it（ステータス項目）
+#   から相対で書く（title、selected、click it、menu 1 など）。値（文字列・真偽・名前のリスト）は変数に入れてよい。
+# キー入力（key code 53 など）も送らない: 手前のアプリに届くので、利用者の作業や別のアプリのメニューに当たる。
+AX_NOT_OURS="E2E-PID-NOT-OURS"                    # シェル側: APP_PID が自分の起動したアプリと確かめられない → 呼び手が SKIP
+AX_NOT_LISTED="E2E-PID-NOT-IN-SYSTEM-EVENTS"      # System Events の一覧に pid が無い → app_ax が再試行し、それでも無ければ失敗（FAIL）
+# APP_PID が、このスクリプトが項目 7 で起動して今も動いている AutoNoteApp か。親がこのスクリプト（$$）であることと、
+# 実行ファイルの名前で見る。パス全体の文字列は比べない: ps は、ロケールで表せないバイト（日本語のフォルダ名を C ロケールで
+# 見たときなど）を M-… に置き換えるので、リポジトリが非 ASCII のパスにあると一致しなくなる。末尾は ASCII なので変わらない
+app_is_ours() {
+    [[ -n "${APP_PID}" ]] || return 1
+    local info
+    info="$(LC_ALL=C ps -o ppid=,comm= -p "${APP_PID}" 2>/dev/null)" || return 1
+    [[ "$(awk '{ print $1 }' <<<"${info}")" == "$$" && "${info}" == */Contents/MacOS/AutoNoteApp ]]
+}
+app_ax_script() {   # app_ax_script <tell の中身>: APP_PID のプロセスのステータス項目だけに向けた AppleScript を出す
+    local idx="${E2E_MENUBAR_INDEX:-2}"
+    cat <<OSA
+with timeout of 8 seconds
+tell application "System Events"
+    if (count of (every process whose unix id is ${APP_PID})) is not 1 then error "${AX_NOT_LISTED}: System Events の一覧に pid ${APP_PID} が無い" number 9001
+    tell (first process whose unix id is ${APP_PID})
+        tell menu bar item 1 of menu bar ${idx}
+$1
+        end tell
+    end tell
+end tell
+end timeout
+OSA
+}
+# app_ax <秒> <tell の中身>: run_timeout と同じ（出力は LAST_LOG、時間切れは 124）。送る前に APP_PID を確かめる:
+#   - 動いていない（落ちた）→ 何も送らず 1。呼び手は FAIL にする（SKIP の理由にはしない。項目の前に落ちていれば、
+#     先に app_or_skip が FAIL にする）
+#   - 動いているが自分の起動したアプリと確かめられない → 何も送らず、AX_NOT_OURS の行を LAST_LOG に書いて 1（呼び手が SKIP）
+# System Events の一覧に pid がまだ無いとき（起動直後や負荷の高いとき。何も送られていない）は 1 秒おいて 3 回まで試し、
+# それでも無ければ失敗のまま返す（SKIP にしない: GUI のプロセスとして立ち上がらない退行を見逃さないため）
+app_ax() {
+    local secs="$1" body="$2" n rc=1
+    if [[ -z "${APP_PID}" ]] || ! kill -0 "${APP_PID}" 2>/dev/null; then
+        new_log; echo "項目 7 で起動したアプリ（pid ${APP_PID:-なし}）が動いていない" >"${LAST_LOG}"
+        return 1
+    fi
+    if ! app_is_ours; then
+        new_log; echo "${AX_NOT_OURS} ${APP_PID}: このスクリプトが起動した ${APP} のプロセスと確かめられない" >"${LAST_LOG}"
+        return 1
+    fi
+    for n in 1 2 3; do
+        run_timeout "${secs}" osascript -e "$(app_ax_script "${body}")"; rc=$?
+        [[ ${rc} -ne 0 ]] && grep -q "${AX_NOT_LISTED}" "${LAST_LOG}" || return "${rc}"
+        sleep 1
+    done
+    return "${rc}"
+}
+# app_ax の失敗（LAST_LOG）が「触れない環境」なら理由を出して 0、それ以外（menu bar が無い、時間切れ、アプリが落ちた、
+# System Events の一覧に出ない）は 1。
+# -1719 は「インデックスが正しくない」（menu bar が無い）にも使われるので、コード単体では判定せず文言で見る
+ax_skip_reason() {
+    if grep -q "${AX_NOT_OURS}" "${LAST_LOG}"; then
+        echo "pid ${APP_PID:-（なし）} を、項目 7 で起動したアプリとして特定できない（同じ名前の別のアプリには当てない）"
+    elif grep -Eqi 'assistive|補助アクセス|-25211|-1743|Not authorized to send Apple events' "${LAST_LOG}"; then
+        echo "アクセシビリティ（または Apple Events）の権限が無い: $(tail -n 1 "${LAST_LOG}")"
+    else
+        return 1
+    fi
+}
+# 自分のアプリのメニューが開いていれば閉じる（AXCancel をそのメニューに送る。キー入力は使わない）。
+# 開いているかはステータス項目の AXSelected で見る。閉じたのを確かめられたら 0。LAST_LOG は変えない
+close_app_menu() {
+    local log="${LAST_LOG}" n state="" rc=1
+    for n in 1 2 3; do
+        app_ax 10 '            if selected then perform action "AXCancel" of menu 1
+            delay 0.3
+            return selected' && state="$(cat "${LAST_LOG}")"
+        if [[ "${state}" == "false" ]]; then APP_MENU_OPENED=0; rc=0; break; fi
+        kill -0 "${APP_PID}" 2>/dev/null || break
+    done
+    LAST_LOG="${log}"
+    return "${rc}"
+}
+# 見張り: 自分で起動したもの以外の AutoNoteApp（インストール済みのアプリなど）のうち、メニューが開いているものの pid を
+# 空白区切りで出す（AXSelected を読むだけ。何も押さない）。07.3 が、メニューを開く前後で比べる。
+# 別のアプリに System Events の問い合わせが届くのはここだけ（相手が応答しなければ 5 秒で諦めて、開いていない扱いにする）
+other_app_open_menus() {
+    local pid out=""
+    for pid in $(pgrep -x AutoNoteApp); do
+        [[ "${pid}" == "${APP_PID}" ]] && continue
+        [[ "$(osascript -e "with timeout of 5 seconds
+tell application \"System Events\" to tell (first process whose unix id is ${pid}) to tell menu bar item 1 of menu bar ${E2E_MENUBAR_INDEX:-2} to return selected
+end timeout" 2>/dev/null)" == "true" ]] && out+="${pid} "
+    done
+    printf '%s' "${out}"
 }
 
 have_cert() { security find-identity -v -p codesigning 2>/dev/null | grep -q "\"${CERT_NAME}\""; }
@@ -261,29 +374,33 @@ JSON
         LAST_LOG="${WORK}/app.log"; fail "起動後 5 秒以内にプロセスが消えた"
         APP_PID=""; return
     fi
-    # メニューバー項目の名前を System Events で読む（アクセシビリティ権限が要る）。
-    # 権限エラーのときだけ SKIP。それ以外の失敗（menu bar が無い、時間切れ等）と waveform が無いのは FAIL。
-    local proc="${E2E_MENUBAR_PROCESS:-AutoNoteApp}" idx="${E2E_MENUBAR_INDEX:-2}"
-    local names="" result="" n
+    # 起動したアプリ（pid）のメニューバー項目を System Events で読む（アクセシビリティ権限が要る）。
+    # 見るのはアプリが付ける固定の AXIdentifier（Sources/AutoNoteApp/MenuBarContent.swift の MenuBarLabel.accessibilityID）。
+    # 項目の名前は SF Symbol の説明で、OS の言語で変わる（英語「waveform」、日本語「オーディオ波形」）ので判定に使わない。
+    # 触れない環境（権限なし・自分の起動したアプリと確かめられない）だけ SKIP。それ以外の失敗（System Events の一覧に pid が
+    # 出てこない、menu bar が無い、時間切れ等）と識別子の違いは FAIL。
+    local want="${E2E_EXPECT_STATUS_ITEM_ID:-autonote-status-item}" idx="${E2E_MENUBAR_INDEX:-2}"
+    local got="" result="" reason="" n
     for n in 1 2 3 4 5; do
-        if run_timeout 10 osascript -e "tell application \"System Events\" to tell process \"${proc}\" to get name of every menu bar item of menu bar ${idx}"; then
-            names="$(cat "${LAST_LOG}")"
-            if [[ "${names}" == *waveform* ]]; then result=pass; break; fi
-            result="no-waveform"
-        # -1719 は「インデックスが正しくない」（menu bar が無い）にも使われるので、コード単体では判定せず文言で見る
-        elif grep -Eqi 'assistive|補助アクセス|-25211|-1743|Not authorized to send Apple events' "${LAST_LOG}"; then
-            result=permission; break
+        if app_ax 10 '            set v to value of attribute "AXIdentifier"
+            if v is missing value then return "（なし）"
+            return (v as text) & " / " & (title as text)'; then
+            got="$(cat "${LAST_LOG}")"
+            if [[ "${got%% / *}" == "${want}" ]]; then result=pass; break; fi
+            result="wrong-id"
+        elif reason="$(ax_skip_reason)"; then
+            result=untouchable; break
         else
             result=error
         fi
-        sleep 1   # 起動直後はメニューバー項目がまだ無いことがあるので、権限エラー以外は再試行する
+        sleep 1   # 起動直後はメニューバー項目がまだ無いことがあるので、触れない環境以外は再試行する
     done
-    pass "生存確認"
-    CURRENT="7b. メニューバー項目 waveform（process ${proc} / menu bar ${idx}）"
+    pass "生存確認（pid ${APP_PID}）"
+    CURRENT="7b. メニューバー項目の識別子 ${want}（menu bar ${idx}）"
     case "${result}" in
-        pass) pass "「${names}」" ;;
-        permission) skip "アクセシビリティ（または Apple Events）の権限が無い: $(tail -n 1 "${LAST_LOG}")" ;;
-        no-waveform) LAST_LOG=""; fail "メニューバー項目「${names}」に waveform が無い" ;;
+        pass) pass "pid ${APP_PID}「${got}」" ;;
+        untouchable) skip "${reason}" ;;
+        wrong-id) LAST_LOG=""; fail "メニューバー項目の AXIdentifier / 名前が「${got}」（期待 ${want}）。build/AutoNote.app が識別子を足す前（2026-11-28 より前）のビルドなら scripts/build-app.sh で作り直す（--quick は作り直さない）" ;;
         *) fail "osascript が失敗（5 回試行）" ;;
     esac
 }
@@ -315,37 +432,77 @@ check_first_run_no_download() {
 check_menu_no_folder_warning() {
     CURRENT="07.3 メニューに「保存先が見つかりません」が出ない"
     app_or_skip || return
-    local proc="${E2E_MENUBAR_PROCESS:-AutoNoteApp}" idx="${E2E_MENUBAR_INDEX:-2}"
-    local names code
-    run_timeout 10 osascript \
-        -e "tell application \"System Events\" to tell process \"${proc}\" to click menu bar item 1 of menu bar ${idx}" \
-        -e "delay 0.5" \
-        -e "tell application \"System Events\" to tell process \"${proc}\" to set n to name of every menu item of menu 1 of menu bar item 1 of menu bar ${idx}" \
-        -e "tell application \"System Events\" to key code 53" \
-        -e "return n"
-    code=$?
+    # 開くのは項目 7 で起動したアプリ（pid）のメニューだけ。開いた直後に、別の AutoNoteApp のメニューが開いていないかを
+    # 見る（宛先の取り違えの見張り）。項目名を読んだら閉じ、閉じたことを確かめる（close_app_menu）。
+    # 途中で失敗・時間切れ・中断しても、cleanup が閉じてからアプリを止める
+    local names="" code reason="" others_before others_open pid stray="" log closed=1
+    others_before=" $(other_app_open_menus)"
+    APP_MENU_OPENED=1
+    app_ax 15 '            click it
+            delay 0.5
+            return selected'
+    code=$?; log="${LAST_LOG}"
+    others_open="$(other_app_open_menus)"
+    for pid in ${others_open}; do
+        [[ "${others_before}" == *" ${pid} "* ]] && continue
+        # 開いたままだとそのアプリは終了の合図に応じなくなるので、その pid のメニューに AXCancel を送って閉じる
+        osascript -e "with timeout of 5 seconds
+tell application \"System Events\" to tell (first process whose unix id is ${pid}) to tell menu bar item 1 of menu bar ${E2E_MENUBAR_INDEX:-2} to perform action \"AXCancel\" of menu 1
+end timeout" >/dev/null 2>&1
+        stray+="${pid} "
+    done
+    if [[ ${code} -eq 0 && -z "${stray}" ]]; then
+        app_ax 10 '            return name of every menu item of menu 1'
+        code=$?; log="${LAST_LOG}"
+    fi
+    close_app_menu || closed=0
+    LAST_LOG="${log}"
+    if [[ -n "${stray}" ]]; then
+        LAST_LOG=""; fail "別の AutoNoteApp（pid ${stray% }）のメニューがこの項目の間に開いた（宛先の取り違え。閉じる操作は送った。利用者が同じときに自分で開いた場合もこの表示になる）"; return
+    fi
     if [[ ${code} -ne 0 ]]; then
-        # 開いたままにしない（run_timeout は LAST_LOG を差し替えるので、判定用に元のログを取っておく）
-        local log="${LAST_LOG}"
-        run_timeout 5 osascript -e 'tell application "System Events" to key code 53'
-        LAST_LOG="${log}"
-        if grep -Eqi 'assistive|補助アクセス|-25211|-1743|Not authorized to send Apple events' "${LAST_LOG}"; then
-            skip "アクセシビリティ（または Apple Events）の権限が無い: $(tail -n 1 "${LAST_LOG}")"
-        else
-            fail "osascript が失敗（exit ${code}）"
-        fi
+        if reason="$(ax_skip_reason)"; then skip "${reason}"; else fail "osascript が失敗（exit ${code}）"; fi
         return
     fi
+    [[ "${closed}" -eq 1 ]] || { fail "開いたメニューを閉じられない（アプリは検査の終わりに止める）"; return; }
     names="$(cat "${LAST_LOG}")"
     [[ "${names}" == *録音開始* ]] || { fail "メニュー項目に「録音開始」が無い"; return; }
     [[ "${names}" != *保存先が見つかりません* ]] || { fail "メニュー項目に「保存先が見つかりません」がある"; return; }
-    pass "「録音開始」あり、「保存先が見つかりません」なし"
+    pass "「録音開始」あり、「保存先が見つかりません」なし、メニューは閉じた"
 }
 
-# 06.3〜06.6 の前提: 項目 7 で起動したアプリが生きていること。生きていなければ skip して 1 を返す
+# 起動したアプリを使う項目の前提: 項目 7 で起動したアプリが生きていること。使えなければ skip か fail を出して 1 を返す。
+#   - 起動していない（項目 7 が SKIP・FAIL だった、06.6 が止めた後）→ SKIP
+#   - 起動したのに落ちている → FAIL（SKIP にすると、途中で落ちる退行が「0 failed」で通ってしまう。app.log の末尾は最初の 1 回だけ出す）
+#   - 動いているが自分の起動したアプリと確かめられない → SKIP（別のアプリには当てない）
+APP_DEATH_SHOWN=0
 app_or_skip() {
-    if [[ -n "${APP_PID}" ]] && kill -0 "${APP_PID}" 2>/dev/null; then return 0; fi
-    skip "アプリが起動していない"; return 1
+    if [[ -z "${APP_PID}" ]]; then skip "アプリが起動していない"; return 1; fi
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        if [[ "${APP_DEATH_SHOWN}" -eq 0 ]]; then LAST_LOG="${WORK}/app.log"; APP_DEATH_SHOWN=1; else LAST_LOG=""; fi
+        fail "項目 7 で起動したアプリ（pid ${APP_PID}）が落ちている"; return 1
+    fi
+    if app_is_ours; then return 0; fi
+    skip "pid ${APP_PID} を、項目 7 で起動したアプリとして特定できない（同じ名前の別のアプリには当てない）"; return 1
+}
+
+# マイクを開く項目（06.7・09.3・02.1）の前提: インストール済みの AutoNote が録音中でないこと。録音中（か、動いているのに
+# 状態を読めない）なら skip して 1 を返す。利用者の録音の最中に別のプロセスがマイクを開いたときの影響は確かめていないため。
+# 状態は同梱の CLI の `status --json`（recorder.state）で読む。そのアプリが動いていないときは呼ばない（呼ぶとアプリが起動する）
+INSTALLED_APP="/Applications/AutoNote.app"
+mic_or_skip() {
+    local pid state="" log="${LAST_LOG}"
+    pid="$(LC_ALL=C ps -axo pid=,comm= | BIN="${INSTALLED_APP}/Contents/MacOS/AutoNoteApp" \
+        awk '{ p = $1; sub(/^ *[0-9]+ +/, ""); if ($0 == ENVIRON["BIN"]) { print p; exit } }')"
+    [[ -n "${pid}" ]] || return 0
+    if run_timeout 5 env -u AUTONOTE_DATA_DIR "${INSTALLED_APP}/Contents/MacOS/autonote" status --json; then
+        state="$(plutil -extract status.recorder.state raw -o - "${LAST_LOG}" 2>/dev/null)"
+    fi
+    LAST_LOG="${log}"
+    [[ "${state}" == "idle" ]] && return 0
+    if [[ -n "${state}" ]]; then skip "インストール済みの AutoNote（pid ${pid}）が待機中でない（recorder.state ${state}）ので、マイクを開かない"
+    else skip "インストール済みの AutoNote（pid ${pid}）が録音中かどうかを読めない（status --json が 5 秒で答えない）ので、マイクを開かない"; fi
+    return 1
 }
 
 check_cli_app_not_running() {
@@ -422,26 +579,39 @@ check_recording_main_thread() {
     CURRENT="06.7 録音開始のあと主スレッドが回り続けない"
     app_or_skip || return
     cli_or_skip || return
+    mic_or_skip || return
     # 2026-10-27: メニューバーのラベルの TimelineView が SwiftUI の更新を抜けられず、録音開始から終了まで主スレッドが
     # 100 % で回り、ウィンドウもアクセシビリティも固まった。録音を始めて 3 秒後の CPU と、System Events から
     # メニューバー項目が読めることで再発を見る。マイク許可が無い環境では start が失敗するので skip
     if ! AUTONOTE_DATA_DIR="${DATA}" run_timeout 10 "${AUTONOTE_CLI}" start; then skip "autonote start が失敗（マイク許可が無い環境か）"; return; fi
     sleep 3
-    local cpu item
+    # メニューバー項目は項目 7 で起動したアプリ（pid）のものを読む。経過時間（0:03 の形）は OS の言語に左右されない。
+    # 録音中の表示（記号 + 経過時間）でも、識別子が 7b と同じであることも見る
+    local cpu item="" item_id="" item_code item_log reason="" want_id="${E2E_EXPECT_STATUS_ITEM_ID:-autonote-status-item}"
     cpu="$(ps -o %cpu= -p "${APP_PID}" | tr -d ' ')"
-    item="$(osascript -e 'with timeout of 5 seconds
-tell application "System Events" to tell process "AutoNoteApp" to get title of menu bar item 1 of menu bar 2
-end timeout' 2>&1)"
+    app_ax 10 '            set v to value of attribute "AXIdentifier"
+            if v is missing value then set v to "（なし）"
+            return (v as text) & " / " & (title as text)'; item_code=$?
+    item_log="${LAST_LOG}"
+    if [[ ${item_code} -eq 0 ]]; then item="$(cat "${item_log}")"; item_id="${item%% / *}"; item="${item#* / }"; fi
     AUTONOTE_DATA_DIR="${DATA}" run_timeout 20 "${AUTONOTE_CLI}" stop || { fail "autonote stop が失敗"; return; }
     [[ "${cpu%.*}" -lt 60 ]] || { LAST_LOG="${WORK}/app.log"; fail "録音開始 3 秒後の CPU が ${cpu} %（期待 60 % 未満）"; return; }
-    [[ "${item}" == *:* ]] || { LAST_LOG=""; fail "メニューバー項目の経過時間が読めない: ${item}"; return; }
-    pass "CPU ${cpu} %、メニューバー「${item}」"
+    if [[ ${item_code} -ne 0 ]]; then
+        LAST_LOG="${item_log}"
+        if reason="$(ax_skip_reason)"; then skip "CPU ${cpu} % は期待どおり。メニューバー項目は読めない: ${reason}"
+        else fail "メニューバー項目を読めない（exit ${item_code}。主スレッドが固まっていないか）"; fi
+        return
+    fi
+    [[ "${item}" =~ [0-9]+:[0-9][0-9] ]] || { LAST_LOG=""; fail "メニューバー項目の経過時間が読めない: ${item}"; return; }
+    [[ "${item_id}" == "${want_id}" ]] || { LAST_LOG=""; fail "録音中のメニューバー項目の AXIdentifier が「${item_id}」（期待 ${want_id}）"; return; }
+    pass "CPU ${cpu} %、メニューバー「${item}」（識別子 ${item_id}）"
 }
 
 check_live_summary_default_off() {
     CURRENT="09.3 リアルタイム要約は既定オフ（録音しても要約せず通常どおり止まる）"
     app_or_skip || return
     cli_or_skip || return
+    mic_or_skip || return
     # 項目 7 の settings.json は live_summary_enabled を書かない（既定 false）。マイク許可が無い環境では start が失敗するので skip
     # 同じ app.log には 06.7 の録音の off 行もあるので、start 前の件数から 1 件以上増えることを見る
     local offs_before; offs_before="$(grep -c "live summary: off (" "${WORK}/app.log" 2>/dev/null)"; offs_before="${offs_before:-0}"
@@ -640,7 +810,12 @@ check_bt_verify_script() {
     run_timeout 180 scripts/bt-verify.sh --dry-run --out "${WORK}/bt-verify-dry" </dev/null; code=$?
     [[ ${code} -eq 0 ]] || { fail "--dry-run が exit ${code}"; return; }
     grep -q '\[dry-run\] nothing was played' "${LAST_LOG}" || { fail "--dry-run の終わりの行が無い"; return; }
-    LAST_LOG=""; pass "（実機の Bluetooth での実行は scripts/bt-verify.sh --bt-name <名前の一部>）"
+    # --dry-run は前提が足りなくても exit 0 なので、挙げた不足（✗ の行）を結果に残す。build/AutoNote.app があるのに
+    # 修正の目印（mic rebuild #）が無いのは、実機の確認が始まらなくなる退行なので FAIL
+    grep -q '^✗ after app lacks the fix' "${LAST_LOG}" \
+        && { fail "build/AutoNote.app に bt-verify が探す目印（mic rebuild #）が無い（実機の確認が始まらない）"; return; }
+    local lacking; lacking="$(grep '^✗ ' "${LAST_LOG}" | sed -E 's/^✗ //; s/: .*//' | awk 'BEGIN { ORS = "" } NR > 1 { print "、" } { print }')"
+    LAST_LOG=""; pass "--dry-run が挙げた不足: ${lacking:-なし}（実機の Bluetooth での実行は scripts/bt-verify.sh --bt-name <名前の一部> --plan baseline,verify。修正前との比較は --before-app）"
 }
 
 check_render_fixture() {
@@ -665,6 +840,7 @@ check_render_fixture_detects_diff() {
 check_dev_record() {
     CURRENT="02.1 dev record で 5 秒の WAV と manifest"
     cli_or_skip || return
+    mic_or_skip || return
     run "${AUTONOTE_CLI}" dev record --check-permission
     grep -q '"mic_permission":"authorized"' "${LAST_LOG}" || { skip "マイク許可がない（責任プロセス: ターミナル）"; return; }
     local out="${WORK}/rec" code
@@ -886,8 +1062,30 @@ check_dev_transcribe_whisper_resampled() {
     pass "audio_seconds ${secs}"
 }
 
+# 08.1: 確定版の文字起こしは窓（約 10 分）ごとに読むので、メモリは入力の長さに比例して増えない。それを 10 分（1 窓）と
+# 60 分（6 窓）の peak footprint の差で見る。検出したいのは次の 2 つ:
+#   - ファイル全体を一度に持つ実装への後戻り: 1 窓の中では、この項目の測り方（MallocLargeCache=0）で約 8 MiB/分 増える
+#     （300 秒と 717 秒の 1 窓で実測。216〜219 → 273 MiB）ので、60 分なら約 +400 MiB（付けない条件では 12.6 MiB/分、+630 MiB）
+#   - 窓ごとに何かを持ち続ける漏れ: 60 分は 5 窓多いので、1 窓あたり約 10 MiB 以上の漏れで 100 MiB を超える
+#     （漏れの無いときの差が最小の 53.5 でも、(100 − 53.5) ÷ 5 = 9.3 MiB で超える）
+#     1 窓の Int16 の PCM が 18 MiB、Float の標本が 37 MiB、メルが 18 MiB なので、どれを持ち続けても超える
+# MallocLargeCache=0 で測る。付けないと、解放済みの大きなブロックを malloc が手元に残した分も footprint に入り、
+# 差がその時々で変わる（下の表。CPU が混んでいると増える）。知りたいのはプログラムが持ち続けている分なので、切って測る。
+# 実測（2026-11-28、M5 Pro・macOS 27.2.1・debug ビルド・for-tests-ggml-tiny。差は同じ回の 60 分 − 10 分、単位 MiB）:
+#   | 条件                                   | 回数 | 10 分（最小〜最大） | 60 分（最小〜最大） | 差: 最小 / 中央値 / 最大 |
+#   | MallocLargeCache=0（この項目の条件）   |  12  | 252.8〜256.4        | 308.9〜312.4        | 53.5 / 55.9 / 59.6       |
+#   | 付けない（以前の条件。しきい値 50）    |  12  | 324.0〜327.8        | 392.2〜426.2        | 66.4 / 77.0 / 100.1      |
+#   | 付けない・別の 13 回（他の作業と並行） |  13  | 324.6〜340.3        | 395.0〜453.1        | 55.7 / 83.3 / 125.6      |
+#   | MallocLargeCache=0 + --gpu off         |   5  | 344.7〜348.9        | 348.6〜359.6        |  3.9 /  6.0 / 10.7       |
+#   12 回のうち 6 回は CPU に 12 本の空ループをかけた状態。MallocLargeCache=0 では 120 分（12 窓）も 313.3〜315.4（60 分 +4.3）、
+#   240 分（24 窓）を流しながら見た footprint も窓ごとに増えなかった。
+# 差の 56 MiB は 1 回きりの段差で、長さに比例しない。peak を窓ごとに追うと（60 分）: 1 窓目 252 → 2 窓目の始めに +36 →
+# 2〜5 窓目は増えない → 最後の窓（それまでの窓より 6 秒長い）の始めに +22。--gpu off では 2 窓目の段差が出ず、最後の窓も +3
+# なので、Metal の経路で前の窓の分のバッファが次の窓を置くまで残るとみられる（どのバッファかは未特定）。
+# 以前のしきい値 50 MiB は、付けない条件ではこの Mac で毎回超える（最小 55.7）。段差 + ぶれの上に 40 MiB の余裕を置いて 100 MiB にする。
+# FAIL したら、まず MallocLargeCache=0 が効いているかを見る（付けた 10 分が、付けない 10 分より約 70 MiB 小さい）。
 check_batch_memory_flat() {
-    CURRENT="08.1 dev transcribe whisper の peak footprint が 10 分と 60 分で 50 MB 以内（max RSS は 250 MB 以内）"
+    CURRENT="08.1 dev transcribe whisper の peak footprint の差が 10 分と 60 分で 100 MiB 以内（max RSS は 250 MiB 以内）"
     [[ "${QUICK}" -eq 1 ]] && { skip "--quick"; return; }
     command -v python3 >/dev/null 2>&1 || { skip "python3 が無い"; return; }
     [[ -f "${DUMMY_GGML}" ]] || { skip "${DUMMY_GGML} が無い（scripts/setup-whisper.sh）"; return; }
@@ -896,14 +1094,14 @@ check_batch_memory_flat() {
     for min in 10 60; do
         run make_tone_wav "${WORK}/m${min}.wav" $((min * 60)) || { fail "make_tone_wav が失敗（${min} 分）"; rm -f "${WORK}"/m10.wav "${WORK}"/m60.wav; return; }
     done
-    run_timeout 600 /usr/bin/time -l "${AUTONOTE_CLI}" dev transcribe "${WORK}/m10.wav" --engine whisper --model-path "${DUMMY_GGML}"; local code=$?
+    MallocLargeCache=0 run_timeout 600 /usr/bin/time -l "${AUTONOTE_CLI}" dev transcribe "${WORK}/m10.wav" --engine whisper --model-path "${DUMMY_GGML}"; local code=$?
     rm -f "${WORK}/m10.wav"
     if [[ ${code} -eq 124 ]]; then fail "10 分の WAV が 600 秒以内に終わらない"; rm -f "${WORK}/m60.wav"; return; fi
     [[ ${code} -eq 0 ]] || { fail "10 分: exit ${code}（期待 0）"; rm -f "${WORK}/m60.wav"; return; }
     grep -q '文字起こし 窓 1/1（' "${LAST_LOG}" || { fail "10 分: 「文字起こし 窓 1/1（」の行が無い"; rm -f "${WORK}/m60.wav"; return; }
     rss10="$(awk '/maximum resident set size/ {print $1}' "${LAST_LOG}")"
     fp10="$(awk '/peak memory footprint/ {print $1}' "${LAST_LOG}")"
-    run_timeout 600 /usr/bin/time -l "${AUTONOTE_CLI}" dev transcribe "${WORK}/m60.wav" --engine whisper --model-path "${DUMMY_GGML}"; code=$?
+    MallocLargeCache=0 run_timeout 600 /usr/bin/time -l "${AUTONOTE_CLI}" dev transcribe "${WORK}/m60.wav" --engine whisper --model-path "${DUMMY_GGML}"; code=$?
     rm -f "${WORK}/m60.wav"
     if [[ ${code} -eq 124 ]]; then fail "60 分の WAV が 600 秒以内に終わらない"; return; fi
     [[ ${code} -eq 0 ]] || { fail "60 分: exit ${code}（期待 0）"; return; }
@@ -913,8 +1111,8 @@ check_batch_memory_flat() {
     local wi="${last% *}" wn="${last#* }"
     if [[ -z "${last}" || "${wi}" != "${wn}" || "${wn}" -lt 5 ]]; then fail "60 分: 最後の窓の行が「窓 N/N」（N >= 5）でない（「${last}」）"; return; fi
     if [[ -z "${rss10}" || -z "${rss60}" || -z "${fp10}" || -z "${fp60}" ]]; then fail "max RSS / peak footprint を読めない（RSS ${rss10}/${rss60}, footprint ${fp10}/${fp60}）"; return; fi
-    detail="RSS $((rss10 / 1048576))→$((rss60 / 1048576)) MB, footprint $((fp10 / 1048576))→$((fp60 / 1048576)) MB（窓 ${wn} 個）"
-    if (( fp60 - fp10 > 52428800 )); then fail "peak footprint の差が 50 MiB を超えた: ${detail}"
+    local detail="RSS $((rss10 / 1048576))→$((rss60 / 1048576)) MiB, footprint $((fp10 / 1048576))→$((fp60 / 1048576)) MiB（差 $(((fp60 - fp10) / 1048576)) MiB、窓 ${wn} 個）"
+    if (( fp60 - fp10 > 104857600 )); then fail "peak footprint の差が 100 MiB を超えた: ${detail}。切り分けは check_batch_memory_flat の上のコメント（まず MallocLargeCache=0 が効いているかを見る）"
     elif (( rss60 - rss10 > 262144000 )); then fail "max RSS の差が 250 MiB を超えた: ${detail}"
     else pass "${detail}"; fi
 }
