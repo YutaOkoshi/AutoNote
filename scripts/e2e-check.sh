@@ -990,8 +990,28 @@ check_dev_transcribe_whisper_resampled() {
     pass "audio_seconds ${secs}"
 }
 
+# 08.1: 確定版の文字起こしは窓（約 10 分）ごとに読むので、メモリは入力の長さに比例して増えない。それを 10 分（1 窓）と
+# 60 分（6 窓）の peak footprint の差で見る。検出したいのは次の 2 つ:
+#   - ファイル全体を一度に持つ実装への後戻り: 1 窓の中では 12.6 MiB/分 増える（300〜717 秒の 1 窓で実測）ので、60 分なら +630 MiB
+#   - 窓ごとに何かを持ち続ける漏れ: 60 分は 5 窓多いので、1 窓あたり 9 MiB 以上の漏れで 100 MiB を超える
+#     （1 窓の Int16 の PCM が 18 MiB、Float の標本が 37 MiB、メルが 18 MiB）
+# MallocLargeCache=0 で測る。付けないと、解放済みの大きなブロックを malloc が手元に残した分も footprint に入り、
+# 差がその時々で変わる（下の表。CPU が混んでいると増える）。知りたいのはプログラムが持ち続けている分なので、切って測る。
+# 実測（2026-11-28、M5 Pro・macOS 27.2.1・debug ビルド・for-tests-ggml-tiny。差は同じ回の 60 分 − 10 分、単位 MiB）:
+#   | 条件                                   | 回数 | 10 分（最小〜最大） | 60 分（最小〜最大） | 差: 最小 / 中央値 / 最大 |
+#   | MallocLargeCache=0（この項目の条件）   |  12  | 252.8〜256.4        | 308.9〜312.4        | 53.5 / 55.9 / 59.6       |
+#   | 付けない（以前の条件。しきい値 50）    |  12  | 324.0〜327.8        | 392.2〜426.2        | 66.4 / 77.0 / 100.1      |
+#   | 付けない・別の 13 回（他の作業と並行） |  13  | 324.6〜340.3        | 395.0〜453.1        | 55.7 / 83.3 / 125.6      |
+#   | MallocLargeCache=0 + --gpu off         |   5  | 344.7〜348.9        | 348.6〜359.6        |  3.9 /  6.0 / 10.7       |
+#   12 回のうち 6 回は CPU に 12 本の空ループをかけた状態。MallocLargeCache=0 では 120 分（12 窓）も 313.3〜315.4（60 分 +4.3）、
+#   240 分（24 窓）を流しながら見た footprint も窓ごとに増えなかった。
+# 差の 56 MiB は 1 回きりの段差で、長さに比例しない。peak を窓ごとに追うと（60 分）: 1 窓目 252 → 2 窓目の始めに +36 →
+# 2〜5 窓目は増えない → 最後の窓（それまでの窓より 6 秒長い）の始めに +22。--gpu off では 2 窓目の段差が出ず、最後の窓も +3
+# なので、Metal の経路で前の窓の分のバッファが次の窓を置くまで残るとみられる（どのバッファかは未特定）。
+# 以前のしきい値 50 MiB は、付けない条件ではこの Mac で毎回超える（最小 55.7）。段差 + ぶれの上に 40 MiB の余裕を置いて 100 MiB にする。
+# FAIL したら、まず MallocLargeCache=0 が効いているかを見る（付けた 10 分が、付けない 10 分より約 70 MiB 小さい）。
 check_batch_memory_flat() {
-    CURRENT="08.1 dev transcribe whisper の peak footprint が 10 分と 60 分で 50 MB 以内（max RSS は 250 MB 以内）"
+    CURRENT="08.1 dev transcribe whisper の peak footprint の差が 10 分と 60 分で 100 MiB 以内（max RSS は 250 MiB 以内）"
     [[ "${QUICK}" -eq 1 ]] && { skip "--quick"; return; }
     command -v python3 >/dev/null 2>&1 || { skip "python3 が無い"; return; }
     [[ -f "${DUMMY_GGML}" ]] || { skip "${DUMMY_GGML} が無い（scripts/setup-whisper.sh）"; return; }
@@ -1000,14 +1020,14 @@ check_batch_memory_flat() {
     for min in 10 60; do
         run make_tone_wav "${WORK}/m${min}.wav" $((min * 60)) || { fail "make_tone_wav が失敗（${min} 分）"; rm -f "${WORK}"/m10.wav "${WORK}"/m60.wav; return; }
     done
-    run_timeout 600 /usr/bin/time -l "${AUTONOTE_CLI}" dev transcribe "${WORK}/m10.wav" --engine whisper --model-path "${DUMMY_GGML}"; local code=$?
+    MallocLargeCache=0 run_timeout 600 /usr/bin/time -l "${AUTONOTE_CLI}" dev transcribe "${WORK}/m10.wav" --engine whisper --model-path "${DUMMY_GGML}"; local code=$?
     rm -f "${WORK}/m10.wav"
     if [[ ${code} -eq 124 ]]; then fail "10 分の WAV が 600 秒以内に終わらない"; rm -f "${WORK}/m60.wav"; return; fi
     [[ ${code} -eq 0 ]] || { fail "10 分: exit ${code}（期待 0）"; rm -f "${WORK}/m60.wav"; return; }
     grep -q '文字起こし 窓 1/1（' "${LAST_LOG}" || { fail "10 分: 「文字起こし 窓 1/1（」の行が無い"; rm -f "${WORK}/m60.wav"; return; }
     rss10="$(awk '/maximum resident set size/ {print $1}' "${LAST_LOG}")"
     fp10="$(awk '/peak memory footprint/ {print $1}' "${LAST_LOG}")"
-    run_timeout 600 /usr/bin/time -l "${AUTONOTE_CLI}" dev transcribe "${WORK}/m60.wav" --engine whisper --model-path "${DUMMY_GGML}"; code=$?
+    MallocLargeCache=0 run_timeout 600 /usr/bin/time -l "${AUTONOTE_CLI}" dev transcribe "${WORK}/m60.wav" --engine whisper --model-path "${DUMMY_GGML}"; code=$?
     rm -f "${WORK}/m60.wav"
     if [[ ${code} -eq 124 ]]; then fail "60 分の WAV が 600 秒以内に終わらない"; return; fi
     [[ ${code} -eq 0 ]] || { fail "60 分: exit ${code}（期待 0）"; return; }
@@ -1017,8 +1037,8 @@ check_batch_memory_flat() {
     local wi="${last% *}" wn="${last#* }"
     if [[ -z "${last}" || "${wi}" != "${wn}" || "${wn}" -lt 5 ]]; then fail "60 分: 最後の窓の行が「窓 N/N」（N >= 5）でない（「${last}」）"; return; fi
     if [[ -z "${rss10}" || -z "${rss60}" || -z "${fp10}" || -z "${fp60}" ]]; then fail "max RSS / peak footprint を読めない（RSS ${rss10}/${rss60}, footprint ${fp10}/${fp60}）"; return; fi
-    detail="RSS $((rss10 / 1048576))→$((rss60 / 1048576)) MB, footprint $((fp10 / 1048576))→$((fp60 / 1048576)) MB（窓 ${wn} 個）"
-    if (( fp60 - fp10 > 52428800 )); then fail "peak footprint の差が 50 MiB を超えた: ${detail}"
+    local detail="RSS $((rss10 / 1048576))→$((rss60 / 1048576)) MiB, footprint $((fp10 / 1048576))→$((fp60 / 1048576)) MiB（差 $(((fp60 - fp10) / 1048576)) MiB、窓 ${wn} 個）"
+    if (( fp60 - fp10 > 104857600 )); then fail "peak footprint の差が 100 MiB を超えた: ${detail}"
     elif (( rss60 - rss10 > 262144000 )); then fail "max RSS の差が 250 MiB を超えた: ${detail}"
     else pass "${detail}"; fi
 }
