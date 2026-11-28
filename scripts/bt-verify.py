@@ -656,7 +656,11 @@ def main():
     for which, path in (("before", a.before_app), ("after", a.after_app)):
         if which in needs:
             b = os.path.join(path, "Contents", "MacOS", "AutoNoteApp")
-            if not os.path.exists(b):
+            if not path:
+                # Only the build before the fix can be absent here (bt-verify.sh found none and was given none).
+                problems.append(f"{which} app missing: none given (pass a build from before v0.7.0 with --before-app, "
+                                "or use --plan baseline,verify, which needs none)")
+            elif not os.path.exists(b):
                 problems.append(f"{which} app missing: {path}")
             elif (FIX_MARK in open(b, "rb").read()) != (which == "after"):
                 problems.append(f"{which} app {'lacks' if which == 'after' else 'has'} the fix: {path}")
