@@ -42,7 +42,7 @@ AutoNote をソースからビルドし、テストし、変更を入れるた�
 
 録音がなぜ始まった・止まったかは `log show --last 1h --predicate 'subsystem == "com.yutaokoshi.autonote"'` で読める（流しながら見るなら `log stream --predicate ...`）。開始・停止・一時停止のたびに、`devices` カテゴリに `recording -> idle on manualStop (origin: hotkey, stop: manual, meeting: <会議 ID>)` のような 1 行が出る。`origin` がきっかけ（`hotkey`・`menu`・`window`・`notificationAction`・`cli`・`countdownFired`・`graceExpired`・`diskFull`・`terminating`・`sessionEnded`・`startFailed`・`deviceConnected`・`deviceDisconnected`。定義は `Sources/AutoNoteCore/Devices/RecordingControlOrigin.swift`）、`stop` が録音に渡した `StopReason` で、何も変えなかった操作は末尾に `ignored` が付く。前後の行で、ショートカットの受信（`HotKeyCenter`）、CLI のコマンドと送信元 PID（`SocketServer`）、機材の追加・削除（`DeviceMonitor` と `devices`）、設定の保存で変わったキー名（`AppWiring`。値は出さない）、録音セッションの開始・終了と秒数（`RecordingSession`）、ライブ文字起こし・ライブ要約の開始・終了を突き合わせる。どれも `notice` 以上なので後から `log show` で読める（`info` と `debug` は残らない）。
 
-### 使われなかった設定値とライブ要約の失敗をログで読む
+### 使われなかった設定値・ライブ要約の失敗・ライブの復号の遅れをログで読む
 
 利用者向けの読み方とコマンドは [利用者リファレンス](guide/reference.md) の「ログで理由を調べる」にある。開発で知っておくこと:
 
@@ -50,7 +50,9 @@ AutoNote をソースからビルドし、テストし、変更を入れるた�
 - ライブ文字起こしの開始の行（`LiveTranscriptionWiring`）は、実際に動いたエンジンを `engine:` で示す（`EngineChoice.displayName`）
 - ライブ要約の `claude -p` が失敗すると、`ClaudeLiveSummarizer` カテゴリに `live claude -p failed: <種類> (exit N): <claude のエラー文>` が `error` で出る。エラー文は `ClaudeResultClassifier.failureText`（エラーエンベロープの `subtype`・`result`・`errors` と stderr）で、`claude_env` の値（8 文字以上）と `sk-…` 形のトークンを `***` にしてから 1 行・200 文字に切る（切ってから伏せると、切れ目にかかった値が残る）。指示文・文字起こし・成功時の出力は出さない。文が何も無いときは出力の形（バイト数）だけ、`claude` を起動できなかったときは `live claude -p did not run: <型> (<domain> <code>)` が出る。会議 ID はこの行には無い（スケジューラの `live summary: failed (...) (<会議 ID>)` は `NSLog` で出るので、時刻で突き合わせる）
 - 録音の最初の確認（`checkReady`: 実行ファイルの確認と `claude auth status --json`）や `LiveSummarizerFactory` が失敗すると、スケジューラはその録音の要約を止めて以後呼ばない。このときは `live claude -p unavailable: <種類> (<理由>)` が同じカテゴリに出る（確認の終了コード、JSON の `loggedIn`、stderr。stdout と `claude` のパスは出さない）
-- ライブの whisper の復号が音声に追いつかないと、`WhisperLiveTranscriber` カテゴリに `live backlog: track=mic depth=4 lag=15.0s` が `notice` で出る（`depth` は復号待ちの確定窓の数、`lag` は復号中の窓の始まりから最新の窓の終わりまでの音声の秒数。3 を超えたときと、その後は倍になるたび）。列が空に戻ると `live backlog cleared: …`、停止時には（音声が 1 度でも届いていれば）`live backlog at stop: … max_depth=… max_lag=…` が出る。窓は捨てない（見えるようにするだけ。0.8.2 以降）。`autonote dev transcribe --engine whisper-live --realtime` の `summary` にも `max_backlog`・`max_lag_seconds` が入る
+- ライブの whisper の復号が音声に追いつかないと、`WhisperLiveTranscriber` カテゴリに `live backlog: track=mic depth=4 lag=21.0s` が `notice` で出る（0.8.2 以降。窓は捨てない。見えるようにするだけ）。`depth` はまだ復号し終えていない確定窓の数（復号中の 1 つを含む）、`lag` は先頭の窓の後ろで待っている音声の秒数（先頭の窓の終わりから最新の窓の終わりまで。待ちが無ければ 0）。行が出るのは `depth` が 4 になったときと、その後 8・16… と倍になるたびで、列が空に戻ると `live backlog cleared: track=mic max_depth=… max_lag=…`（いま解消した山の最大）が出て数え直す
+- 停止の行 `live backlog at stop: track=… depth=… lag=…s max_depth=… max_lag=…s` は、遅れが無くても録音のたびに mic と system で 1 行ずつ出る（音声が 1 度も届かなかったトラックは出ない）。どちらも停止した時点の値で（残りの復号を待つ前に書く）、`max_*` は録音全体の最大。**正常な値**: 追いついていれば `depth` は 0〜1、`lag` は 0.0、`max_depth` は 1〜2、`max_lag` は 0.0 か窓 1 つ分（続けて話していれば 7 秒前後）。`max_depth` が 3 以上なら遅れた時間帯がある（`live backlog:` の行は 4 からなので、3 までの遅れはこの行でしか分からない）。停止の行の後に `cleared` が出たら、その間が停止後に残りを復号していた時間。会議 ID は行に無いので、直前の `LiveTranscriptionWiring` の `<会議 ID>: live transcript stopping` と時刻で突き合わせる。読むコマンドは [利用者リファレンス](guide/reference.md) の「リアルタイムの文字が遅れて出るとき」
+- `autonote dev transcribe --engine whisper-live --realtime` の `summary` の `max_backlog`・`max_lag_seconds` は、同じ数え方の録音全体の最大。`--realtime` を付けないとファイルを一度に流し込むので、値は窓の数に近くなり、復号の遅さは表さない
 - `swift test` と `autonote` の CLI も同じ行を本物のログに書く（テストは架空の値を使う）。アプリの行だけを読むなら、条件に `AND process == "AutoNoteApp"` を足す
 
 ## リポジトリ構成

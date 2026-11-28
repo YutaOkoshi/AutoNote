@@ -3,8 +3,9 @@ import Foundation
 
 /// `autonote dev transcribe` — runs one engine on a file or the microphone and prints one JSON line per
 /// utterance (`wall` = wall-clock seconds since input started), then a `summary` line (with `whisper-live` it also
-/// carries `max_backlog` and `max_lag_seconds`, `WhisperLiveTranscriber.Backlog`). Live engines get the file
-/// as 0.1 s `AudioChunk`s (paced with `--realtime`); `whisper` is the batch path. `--text-out` writes the final
+/// carries `max_backlog` and `max_lag_seconds`, `WhisperLiveTranscriber.Backlog`; they tell how slow the decoder is
+/// only with `--realtime`, because without it the file arrives at once and nearly every window waits). Live engines
+/// get the file as 0.1 s `AudioChunk`s (paced with `--realtime`); `whisper` is the batch path. `--text-out` writes the final
 /// utterances joined with no separator (for `scripts/cer.py`). Whisper model load happens before input starts,
 /// so `elapsed` / `rtf` exclude it. Exit codes: 0 ok, 1 error, 2 usage, 3 engine unavailable
 /// (`unavailable: <reason>` on stderr).
@@ -63,8 +64,8 @@ enum DevTranscribe {
         var elapsed: Double
         var rtf: Double
         var finals: Int
-        var maxBacklog: Int?            // whisper-live only: the most commits that waited for the decoder…
-        var maxLagSeconds: Double?      // …and the furthest it was behind the audio
+        var maxBacklog: Int?            // whisper-live only: the most commits not decoded yet at one time…
+        var maxLagSeconds: Double?      // …and the most audio that waited behind the oldest of them
     }
 
     private struct SummaryLine: Encodable { var summary: Summary }

@@ -12,14 +12,21 @@ import Synchronization
 /// runs. That backlog is only counted and logged here (`Backlog`); no window is dropped, thinned out or decoded
 /// with another model because of it.
 public actor WhisperLiveTranscriber: LiveTranscriber {
-    /// The commits not decoded yet (waiting, plus the one being decoded) and how far the decoder is behind: from the
-    /// start of the window it is decoding to the end of the newest job, in seconds of received audio.
+    /// The commits not decoded yet (the one being decoded, plus those waiting) and how much audio waits behind the
+    /// oldest of them: from its end to the end of the newest, in seconds of received audio.
+    /// A decoder that keeps up has a depth of 0 or 1 and a lag of 0 (nothing waits behind the window it works on);
+    /// each further commit adds one and its stretch of audio (7 s for back-to-back windows of continuous speech).
     public struct Backlog: Sendable, Equatable {
         public var depth: Int
         public var lagSeconds: Double
 
         public init(depth: Int = 0, lagSeconds: Double = 0) {
             self.depth = depth; self.lagSeconds = lagSeconds
+        }
+
+        fileprivate mutating func raise(to other: Backlog) {
+            depth = max(depth, other.depth)
+            lagSeconds = max(lagSeconds, other.lagSeconds)
         }
     }
 
@@ -60,10 +67,13 @@ public actor WhisperLiveTranscriber: LiveTranscriber {
     private var worker: Task<Void, Never>?
     private let log: @Sendable (String) -> Void
     private var track: Track?                                   // of the audio fed; names the track in the log
-    private var decoding: (from: Double, isFinal: Bool)?
+    private var decoding: (to: Double, isFinal: Bool)?
     private var nextBacklogReport = WhisperLiveTranscriber.firstBacklogReport
-    /// The deepest backlog and the longest lag of this recording so far.
+    private var inputClosed = false
+    /// The deepest backlog and the longest lag of this recording so far (the stop line and `dev transcribe`).
     public private(set) var worstBacklog = Backlog()
+    /// The same since the queue was last empty: what the `cleared` line reports, so each backlog shows its own size.
+    private var peakBacklog = Backlog()
 
     /// `log` gets the backlog lines (track, depth and seconds; never the text).
     public init(core: any WhisperCore, config: ChunkPlanner.Config = .init(),
@@ -92,16 +102,26 @@ public actor WhisperLiveTranscriber: LiveTranscriber {
         schedule(planner.ingest(chunk.samples))
     }
 
+    /// The audio is over: closes the last window and writes the stop line (how far behind the decoder is right now,
+    /// and the worst of the recording). Nothing is waited for, so `LiveFeed` can tell both tracks before it drains
+    /// either, and each line carries the moment of the stop. `finish()` does this itself when nobody has.
+    public func inputEnded() async { closeInput() }
+
+    private func closeInput() {
+        guard accepting else { return }
+        accepting = false
+        inputClosed = true
+        schedule(planner.flush())
+        guard let track else { return }
+        let now = backlog()
+        log("live backlog at stop: track=\(track.rawValue) depth=\(now.depth) lag=\(Self.seconds(now.lagSeconds))s "
+            + "max_depth=\(worstBacklog.depth) max_lag=\(Self.seconds(worstBacklog.lagSeconds))s")
+    }
+
     /// Decodes what is left and ends the stream. Later (or concurrent) calls wait for the same ending.
     public func finish() async {
-        if accepting {
-            accepting = false
-            schedule(planner.flush())
-            if let track {
-                let now = backlog()
-                log("live backlog at stop: track=\(track.rawValue) depth=\(now.depth) lag=\(Self.seconds(now.lagSeconds))s "
-                    + "max_depth=\(worstBacklog.depth) max_lag=\(Self.seconds(worstBacklog.lagSeconds))s")
-            }
+        closeInput()
+        if inputClosed, finishing == nil {
             finishing = Task {
                 while let running = worker { await running.value }
                 continuation?.finish()
@@ -134,27 +154,33 @@ public actor WhisperLiveTranscriber: LiveTranscriber {
     }
 
     private func backlog() -> Backlog {
-        let depth = jobs.count(where: \.isFinal) + (decoding?.isFinal == true ? 1 : 0)
-        guard let newest = jobs.last, let oldest = decoding?.from ?? jobs.first?.from else { return Backlog(depth: depth) }
-        return Backlog(depth: depth, lagSeconds: max(0, newest.to - oldest))
+        var ends = jobs.filter(\.isFinal).map(\.to)                 // in the order they will be decoded
+        if let decoding, decoding.isFinal { ends.insert(decoding.to, at: 0) }
+        guard let oldest = ends.first, let newest = ends.last else { return Backlog() }
+        return Backlog(depth: ends.count, lagSeconds: max(0, newest - oldest))
     }
 
-    /// Called whenever jobs were added: keeps the worst values and writes a line at depths 4, 8, 16, …
+    /// Called after every `schedule` (so, for each chunk fed): keeps the worst values and writes a line at depths
+    /// 4, 8, 16, …
     private func noteBacklog() {
         let now = backlog()
-        worstBacklog.depth = max(worstBacklog.depth, now.depth)
-        worstBacklog.lagSeconds = max(worstBacklog.lagSeconds, now.lagSeconds)
+        worstBacklog.raise(to: now)
+        peakBacklog.raise(to: now)
         guard now.depth >= nextBacklogReport else { return }
         while nextBacklogReport <= now.depth { nextBacklogReport *= 2 }
         log("live backlog: track=\(track?.rawValue ?? "-") depth=\(now.depth) lag=\(Self.seconds(now.lagSeconds))s")
     }
 
-    /// Called after each decode: once no commit is left, a reported backlog is over and the count starts again.
+    /// Called after each decode: once no commit is left, a backlog is over. If it was reported, a line says how far
+    /// it went (this backlog only; the worst of the recording is in the stop line), and the count starts again.
     private func noteBacklogCleared() {
-        guard nextBacklogReport > Self.firstBacklogReport, backlog().depth == 0 else { return }
+        guard backlog().depth == 0 else { return }
+        let peak = peakBacklog
+        peakBacklog = Backlog()
+        guard nextBacklogReport > Self.firstBacklogReport else { return }
         nextBacklogReport = Self.firstBacklogReport
-        log("live backlog cleared: track=\(track?.rawValue ?? "-") max_depth=\(worstBacklog.depth) "
-            + "max_lag=\(Self.seconds(worstBacklog.lagSeconds))s")
+        log("live backlog cleared: track=\(track?.rawValue ?? "-") max_depth=\(peak.depth) "
+            + "max_lag=\(Self.seconds(peak.lagSeconds))s")
     }
 
     private static func seconds(_ s: Double) -> String { String(format: "%.1f", s) }
@@ -170,7 +196,7 @@ public actor WhisperLiveTranscriber: LiveTranscriber {
     private func drain() async {
         while !jobs.isEmpty {
             let next = jobs.removeFirst()
-            decoding = (next.from, next.isFinal)
+            decoding = (next.to, next.isFinal)
             let text = await decode(next)
             decoding = nil
             noteBacklogCleared()                                    // before the yield: a reader of the final sees the line

@@ -1,9 +1,51 @@
 import AutoNoteCore
 import AutoNoteTestSupport
 import Foundation
+import Synchronization
 import Testing
 
+private final class CallList: Sendable {
+    private let calls = Mutex<[String]>([])
+    var all: [String] { calls.withLock { $0 } }
+    func add(_ call: String) { calls.withLock { $0.append(call) } }
+}
+
+/// Records what `LiveFeed` calls on it, in order, next to the other track's calls.
+private actor RecordingTranscriber: LiveTranscriber {
+    private let name: String
+    private let calls: CallList
+    private var continuation: AsyncStream<Utterance>.Continuation?
+
+    init(_ name: String, calls: CallList) { self.name = name; self.calls = calls }
+
+    func start(language: Language, hints: [String]) async throws -> AsyncStream<Utterance> {
+        let (stream, continuation) = AsyncStream<Utterance>.makeStream()
+        self.continuation = continuation
+        return stream
+    }
+    func feed(_ chunk: AudioChunk) async {}
+    func inputEnded() async { calls.add("\(name) inputEnded") }
+    func finish() async {
+        calls.add("\(name) finish")
+        continuation?.finish()
+        continuation = nil
+    }
+}
+
 @Suite struct LiveFeedTests {
+    /// Draining the microphone can take as long as its backlog; what the other track notes at the stop (whisper's
+    /// `live backlog at stop` line) must be from before that, so both hear of the end first.
+    @Test func bothTracksHearOfTheEndBeforeEitherIsDrained() async throws {
+        let calls = CallList()
+        let feed = LiveFeed(transcribers: [.mic: RecordingTranscriber("mic", calls: calls),
+                                           .system: RecordingTranscriber("system", calls: calls)],
+                            replacer: Replacer([]), liveJSON: try TemporaryDirectory.make().appending(path: "live.json"),
+                            engineName: "Fake Live")
+        _ = try await feed.start(language: .ja, hints: [])
+        _ = try await feed.finish()
+        #expect(calls.all == ["mic inputEnded", "system inputEnded", "mic finish", "system finish"])
+    }
+
     private func makeFeed(
         mic: [Utterance], sys: [Utterance], rules: [Replacement] = [], sysError: FakeError? = nil
     ) throws -> (LiveFeed, FakeLiveTranscriber, FakeLiveTranscriber, URL) {

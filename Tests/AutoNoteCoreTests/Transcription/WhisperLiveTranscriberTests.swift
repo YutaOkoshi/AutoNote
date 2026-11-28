@@ -114,18 +114,18 @@ private final class LogLines: Sendable {
         await speak(t, 3)
         #expect(log.all.isEmpty)                                    // 3 件までは出さない
         await speak(t, 1, from: 3)
-        // 4 件目の確定の終わり（15 秒）− 復号中の窓の始まり（0 秒）
-        #expect(log.all == ["live backlog: track=mic depth=4 lag=15.0s"])
+        // 4 件目の確定の終わり（15 秒）− 復号中の窓の終わり（3 秒）: 先頭の窓の後ろで待っている音声
+        #expect(log.all == ["live backlog: track=mic depth=4 lag=12.0s"])
         await speak(t, 3, from: 4)
         #expect(log.all.count == 1)                                 // 5〜7 件では出さない
         await speak(t, 1, from: 7)
-        #expect(log.all == ["live backlog: track=mic depth=4 lag=15.0s", "live backlog: track=mic depth=8 lag=31.0s"])
-        #expect(await t.worstBacklog == .init(depth: 8, lagSeconds: 31))
+        #expect(log.all == ["live backlog: track=mic depth=4 lag=12.0s", "live backlog: track=mic depth=8 lag=28.0s"])
+        #expect(await t.worstBacklog == .init(depth: 8, lagSeconds: 28))
         core.release(); await t.finish()
         #expect(await collect(s).filter(\.isFinal).count == 8)      // 何も捨てない
         // 停止の行の depth と lag は、止めた時点までにどこまで復号が進んだかで変わる。最大値は変わらない
-        #expect(log.all.count { $0.hasPrefix("live backlog at stop: track=mic depth=") && $0.hasSuffix(" max_depth=8 max_lag=31.0s") } == 1)
-        #expect(log.all.contains("live backlog cleared: track=mic max_depth=8 max_lag=31.0s"))
+        #expect(log.all.count { $0.hasPrefix("live backlog at stop: track=mic depth=") && $0.hasSuffix(" max_depth=8 max_lag=28.0s") } == 1)
+        #expect(log.all.contains("live backlog cleared: track=mic max_depth=8 max_lag=28.0s"))
         #expect(log.all.count == 4)
         #expect(log.all.allSatisfy { !$0.contains("テスト") })       // 本文は出さない
     }
@@ -138,7 +138,45 @@ private final class LogLines: Sendable {
         core.release(); await t.finish(); _ = await collect(s)
         #expect(log.all.count == 1)                                 // 停止の 1 行だけ
         #expect(log.all.first?.hasPrefix("live backlog at stop: track=mic depth=") == true)
-        #expect(log.all.first?.hasSuffix(" max_depth=3 max_lag=11.0s") == true)
+        #expect(log.all.first?.hasSuffix(" max_depth=3 max_lag=8.0s") == true)
+    }
+
+    /// 待ちが無ければ遅れは 0。復号中の 1 件は深さに数えるが、その後ろに何も無ければ遅れではない。
+    @Test func nothingWaitingBehindTheWindowInWorkIsNoLag() async throws {
+        let core = FakeWhisperCore(fixedText: "テスト"); core.hold()
+        let log = LogLines(); let t = WhisperLiveTranscriber(core: core, log: log.sink)
+        let s = try await t.start(language: .ja, hints: [])
+        await speak(t, 1)                                           // 0〜3 秒を復号中、待ちなし
+        #expect(await t.worstBacklog == .init(depth: 1, lagSeconds: 0))
+        await speak(t, 1, from: 1)                                  // 4〜7 秒が後ろで待つ: 7 − 3
+        #expect(await t.worstBacklog == .init(depth: 2, lagSeconds: 4))
+        core.release(); await t.finish(); _ = await collect(s)
+    }
+
+    /// 追いついている復号: 確定を 1 件ずつ読み切ってから次を話す。停止の行は出るが、遅れは 0 のまま。
+    @Test func aDecoderThatKeepsUpReportsNoLagAtStop() async throws {
+        let core = FakeWhisperCore(fixedText: "テスト")
+        let log = LogLines(); let t = WhisperLiveTranscriber(core: core, log: log.sink)
+        let s = try await t.start(language: .ja, hints: [])
+        var results = s.makeAsyncIterator()
+        for i in 0..<3 { await speak(t, 1, from: i); await finals(&results, 1) }
+        await t.finish()
+        #expect(log.all == ["live backlog at stop: track=mic depth=0 lag=0.0s max_depth=1 max_lag=0.0s"])
+    }
+
+    /// 停止の行は、残りの復号を待たずに `inputEnded()` の時点で出る（`LiveFeed` が両トラックに先に知らせる）。
+    @Test func inputEndedWritesTheStopLineWithoutWaitingForTheDecoder() async throws {
+        let core = FakeWhisperCore(fixedText: "テスト"); core.hold()
+        let log = LogLines(); let t = WhisperLiveTranscriber(core: core, log: log.sink)
+        let s = try await t.start(language: .ja, hints: [])
+        await speak(t, 4)
+        await t.inputEnded()                                        // 復号は止めたまま
+        #expect(log.all.last == "live backlog at stop: track=mic depth=4 lag=12.0s max_depth=4 max_lag=12.0s")
+        await speak(t, 1, from: 4)                                  // 終わりを告げた後の音声は受け取らない
+        await t.inputEnded()
+        core.release(); await t.finish()
+        #expect(await collect(s).filter(\.isFinal).count == 4)
+        #expect(log.all.count { $0.hasPrefix("live backlog at stop:") } == 1)   // finish は書き直さない
     }
 
     @Test func theBacklogIsCountedAgainOnceTheQueueIsEmpty() async throws {
@@ -146,15 +184,19 @@ private final class LogLines: Sendable {
         let log = LogLines(); let t = WhisperLiveTranscriber(core: core, log: log.sink)
         let s = try await t.start(language: .ja, hints: [])
         var results = s.makeAsyncIterator()
-        await speak(t, 4)
-        core.release(); await finals(&results, 4)                   // 列が空に戻るまで待つ
-        #expect(log.all == ["live backlog: track=mic depth=4 lag=15.0s",
-                            "live backlog cleared: track=mic max_depth=4 max_lag=15.0s"])
+        await speak(t, 8)
+        core.release(); await finals(&results, 8)                   // 列が空に戻るまで待つ
+        #expect(log.all == ["live backlog: track=mic depth=4 lag=12.0s", "live backlog: track=mic depth=8 lag=28.0s",
+                            "live backlog cleared: track=mic max_depth=8 max_lag=28.0s"])
         core.hold()
-        await speak(t, 3, from: 4)
-        #expect(log.all.count == 2)
-        await speak(t, 1, from: 7)                                  // 8 件目ではなく、数え直して 4 件目で出る
-        #expect(log.all.last == "live backlog: track=mic depth=4 lag=15.0s")
-        core.release(); await t.finish()
+        await speak(t, 3, from: 8)
+        #expect(log.all.count == 3)
+        await speak(t, 1, from: 11)                                 // 数え直して 4 件目で出る
+        #expect(log.all.last == "live backlog: track=mic depth=4 lag=12.0s")
+        core.release(); await finals(&results, 4)
+        // 解消の行はその山の最大（4 件）。録音全体の最大（8 件）は停止の行にだけ出る
+        #expect(log.all.last == "live backlog cleared: track=mic max_depth=4 max_lag=12.0s")
+        await t.finish()
+        #expect(log.all.last == "live backlog at stop: track=mic depth=0 lag=0.0s max_depth=8 max_lag=28.0s")
     }
 }
