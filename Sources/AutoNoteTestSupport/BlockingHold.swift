@@ -5,7 +5,10 @@ import Foundation
 /// A fixed sleep ("blocks for 3 s") makes the test a race against the clock: on a stalled machine the sleep is over
 /// before the code under test gave up waiting, and the test cannot tell. With a hold the order is the verdict: the
 /// code under test returned while the call was still held (`expired == false`), then the test releases it.
-/// A held call lets go by itself after `limit`, so a test that would otherwise hang ends with `expired == true`.
+/// A held call lets go by itself after `limit`, so a test that would otherwise hang ends with `expired == true`;
+/// the hold is released with it, so the calls after that one go through and the test fails after one `limit`, not
+/// one per call. `limit` is the test target's `testPatience` (which this target cannot see): keep the two equal,
+/// or a hold gives up before the test stopped waiting for the code that should have returned.
 public final class BlockingHold: @unchecked Sendable {
     private let condition = NSCondition()
     private let limit: TimeInterval
@@ -41,6 +44,8 @@ public final class BlockingHold: @unchecked Sendable {
             while held {
                 if !condition.wait(until: deadline) {
                     _expired = true
+                    held = false
+                    condition.broadcast()
                     return
                 }
             }

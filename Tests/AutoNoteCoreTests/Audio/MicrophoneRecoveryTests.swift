@@ -210,12 +210,17 @@ func feed(_ engine: FakeMicrophoneEngine, host: FakeHostClock, from: Double) -> 
         let time = StepClock()
         let src = makeRecoveringMicSource(engine, .fake(), time: time)
         try await src.start { _ in }
+        engine.stopHold.hold()                                   // the rebuild pauses in its first step, stopping the old engine
+        defer { engine.stopHold.release() }
         engine.simulateConfigurationChange(stopEngine: true)
-        await pass(.milliseconds(50), time, src)   // around the settle delay: the rebuild begins about now
-        await src.stop()
-        let starts = engine.startCount
+        #expect(await reach(time, src) { engine.stopHold.waiting == 1 })
+        async let stopped: Void = src.stop()
+        #expect(await eventuallyTrue { !(await src.isWatching) })   // the stop is in, waiting for that rebuild
+        engine.stopHold.release()
+        await stopped
+        #expect(!engine.stopHold.expired)
         await pass(.seconds(5), time, src)
-        #expect(engine.startCount == starts)
+        #expect(engine.startCount == 1)                          // the rebuild did not bring the engine up again
         #expect(!engine.isRunning)
     }
 }
