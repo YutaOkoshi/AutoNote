@@ -1,4 +1,5 @@
 import Foundation
+import Testing
 import Synchronization
 @testable import AutoNoteCore
 import AutoNoteTestSupport
@@ -69,11 +70,14 @@ final class CoordinatorHarness: Sendable {
 
     func setConfig(_ config: AutoRecordConfig) { configBox.value.withLock { $0 = config } }
 
-    /// Polls `condition` (real time, at most 2 s). Used only where work runs in another task (reattach, `run()`).
-    func waitUntil(_ condition: () async -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(2)
+    /// Polls `condition` (real time, until `testPatience`). Used only where work runs in another task (reattach, `run()`).
+    func waitUntil(sourceLocation: SourceLocation = #_sourceLocation, _ condition: () async -> Bool) async throws {
+        let deadline = ContinuousClock.now + testPatience
         while await !condition() {
-            guard ContinuousClock.now < deadline else { throw WaitTimedOut() }
+            guard ContinuousClock.now < deadline else {
+                Issue.record("waitUntil: the condition did not hold within \(testPatience)", sourceLocation: sourceLocation)
+                throw WaitTimedOut()
+            }
             try await Task.sleep(for: .milliseconds(2))
         }
     }

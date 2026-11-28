@@ -11,7 +11,6 @@ public final class FakeMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {
     private var _prepareCount = 0
     private var _startCount = 0
     private var _format = InputFormat(sampleRate: 48_000, channels: 1)
-    private var _stopDelay: Duration = .zero
     private var _isStopped = false
     private var _isRunning = false
     private var _stopItselfOnStarts = 0
@@ -19,7 +18,7 @@ public final class FakeMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {
     private var _prepareError: (any Error)?
     private var _prepareErrorsLeft = 0
     private var _needsRebuild = false
-    private var _currentFormatDelay = 0.0
+    private var _notificationsPosted = 0
     private var handler: (@Sendable () -> Void)?
     private var ring: AudioRingBuffer?
 
@@ -38,11 +37,8 @@ public final class FakeMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {
         get { lock.withLock { _format } }
         set { lock.withLock { _format = newValue } }
     }
-    /// Blocks the calling thread for this long inside `stop`.
-    public var stopDelay: Duration {
-        get { lock.withLock { _stopDelay } }
-        set { lock.withLock { _stopDelay = newValue } }
-    }
+    /// Held: `stop` does not return until released (an engine whose stop hangs).
+    public let stopHold = BlockingHold()
     /// The next this-many `start`s succeed, then the engine stops itself at once and posts a configuration change
     /// (what `AVAudioEngine` does on `iounit configuration changed > stopping the engine`).
     public var stopItselfOnStarts: Int {
@@ -61,11 +57,11 @@ public final class FakeMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {
         get { lock.withLock { _needsRebuild } }
         set { lock.withLock { _needsRebuild = newValue } }
     }
-    /// Seconds `currentFormat` blocks its caller (the source's control queue), to pause a check mid-way.
-    public var currentFormatDelay: Double {
-        get { lock.withLock { _currentFormatDelay } }
-        set { lock.withLock { _currentFormatDelay = newValue } }
-    }
+    /// Held: `currentFormat` blocks its caller (the source's control queue), to pause a check mid-way.
+    public let formatHold = BlockingHold()
+    /// Configuration changes handed to the handler so far (the one after stopping itself comes `notificationDelay`
+    /// later).
+    public var notificationsPosted: Int { lock.withLock { _notificationsPosted } }
 
     /// The next `count` `prepare` calls throw `error`.
     public func failPrepare(_ count: Int, with error: any Error) {
@@ -99,22 +95,20 @@ public final class FakeMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {
         }
         if stopsItself {
             let (handler, delay) = lock.withLock { (self.handler, _notificationDelay) }
-            DispatchQueue.global().asyncAfter(deadline: .now() + delay) { handler?() }
+            DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [self] in
+                handler?()
+                lock.withLock { _notificationsPosted += 1 }
+            }
         }
     }
 
     public func stop() {
-        let delay = lock.withLock { _stopDelay }
-        if delay > .zero {
-            let c = delay.components
-            Thread.sleep(forTimeInterval: Double(c.seconds) + Double(c.attoseconds) / 1e18)
-        }
+        stopHold.wait()
         lock.withLock { ring = nil; _isStopped = true; _isRunning = false }
     }
 
     public func currentFormat() -> InputFormat? {
-        let delay = lock.withLock { _currentFormatDelay }
-        if delay > 0 { Thread.sleep(forTimeInterval: delay) }
+        formatHold.wait()
         return lock.withLock { _format }
     }
 
@@ -131,6 +125,7 @@ public final class FakeMicrophoneEngine: MicrophoneEngine, @unchecked Sendable {
             return self.handler
         }
         handler?()
+        lock.withLock { _notificationsPosted += 1 }
     }
 
     /// Writes `frames` interleaved Float32 frames of `format.channels` channels, all equal to `value`, into the ring

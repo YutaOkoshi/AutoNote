@@ -120,11 +120,13 @@ import Foundation
         #expect(ps.flatMap(transcriptLines).count == 5)
     }
 
+    /// Guards against planning that grows with the square of the utterances (seconds for a long meeting).
+    /// Measured as CPU time of this thread: the wall clock also counts the time other tests held the cores.
     @Test func planningSixHundredLongUtterancesIsFast() {
         let i = input(utts(600))
-        let start = Date()
+        let start = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
         _ = PromptBuilder().plan(i)
-        #expect(Date().timeIntervalSince(start) < 1.0)
+        #expect(Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - start) / 1e9 < 1.0)
     }
 
     @Test func partNoteAndMergeInstructionsUseBriefTexts() {

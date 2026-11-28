@@ -12,10 +12,13 @@ private final class EngineSourceFactory: AudioSourceFactory, @unchecked Sendable
     init(engine: FakeMicrophoneEngine, policy: MicrophoneRecoveryPolicy = micRecoveryTestPolicy) { self.engine = engine; self.policy = policy }
     func makeSystemSource(clock: MeetingClock) -> any AudioSource { system }
     private let made = Mutex<MicrophoneSource?>(nil)
-    /// The counters of the microphone source made last.
-    var health: SourceHealth? { made.withLock { $0 }?.health }
+    /// The clock of the microphone's recovery: it stands still unless a test moves it (`reach`).
+    let time = StepClock()
+    /// The microphone source made last, and its counters.
+    var source: MicrophoneSource? { made.withLock { $0 } }
+    var health: SourceHealth? { source?.health }
     func makeMicrophoneSource(deviceUID: String?, clock: MeetingClock) -> any AudioSource {
-        let source = makeRecoveringMicSource(engine, clock, policy: policy)
+        let source = makeRecoveringMicSource(engine, clock, policy: policy, time: time)
         made.withLock { $0 = source }
         return source
     }
@@ -36,7 +39,7 @@ private func speak(_ engine: FakeMicrophoneEngine, host: FakeHostClock, from: Do
         engine.push(frames: Int(engine.format.sampleRate), hostTime: host.hostTime(atSeconds: from + Double(i)), value: 0.25)
         if i % 4 == 3 { try? await Task.sleep(for: .milliseconds(25)) }   // the ring holds 10 s: let the drain keep up
     }
-    _ = await eventuallyTrue(.seconds(30)) { (health?.callbacks ?? 0) >= before + seconds }
+    _ = await eventuallyTrue { (health?.callbacks ?? 0) >= before + seconds }
     host.advance(Double(seconds))
 }
 
@@ -96,7 +99,8 @@ private func speak(_ engine: FakeMicrophoneEngine, host: FakeHostClock, from: Do
         let session = RecordingSession(paths: paths, manifests: manifests, sources: factory, host: host, disk: FakeDiskSpace(),
                                        now: { Samples.start }, tickInterval: .seconds(3600), timeZone: Samples.tokyo)
         _ = try await session.start(.init(language: .ja))
-        #expect(await eventuallyTrue { engine.startCount == 2 && engine.isRunning })
+        let source = try #require(factory.source)
+        #expect(await reach(factory.time, source) { engine.startCount == 2 && engine.isRunning })
         engine.push(frames: 48_000, hostTime: host.hostTime(atSeconds: 1.0), value: 0.25)   // 1.0 ..< 2.0 s
         try await Task.sleep(for: .milliseconds(100))
         host.advance(4.0)
@@ -133,7 +137,8 @@ private func speak(_ engine: FakeMicrophoneEngine, host: FakeHostClock, from: Do
                                        now: { Samples.start }, tickInterval: .seconds(3600), timeZone: Samples.tokyo)
         let events = await session.events()
         _ = try await session.start(.init(language: .ja))
-        #expect(await eventuallyTrue(.seconds(10)) { engine.isStopped && engine.startCount == 4 })   // gave up after 3 rebuilds
+        let source = try #require(factory.source)
+        #expect(await reach(factory.time, source) { engine.isStopped && engine.startCount == 4 })   // gave up after 3 rebuilds
         try await Task.sleep(for: .milliseconds(100))
         host.advance(20)
         let m = try await session.stop()

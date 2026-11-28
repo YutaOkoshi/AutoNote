@@ -48,7 +48,7 @@ private enum RawSocket {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         var on: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
-        var tv = timeval(tv_sec: 5, tv_usec: 0)
+        var tv = timeval(tv_sec: Int(testPatience.components.seconds), tv_usec: 0)   // ends a read that would never end
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
@@ -79,8 +79,16 @@ private enum RawSocket {
         }
     }
 
+    /// `readLine` on a thread of its own. It blocks, and the server's answer to a request needs a thread of the
+    /// concurrency pool (the handler is async): read on a pool thread and, with few cores, nobody is left to answer.
+    static func line(_ fd: Int32) async -> Data? {
+        await withCheckedContinuation { continuation in
+            Thread { continuation.resume(returning: readLine(fd)) }.start()
+        }
+    }
+
     /// Reads up to and including one `\n`; nil on EOF/timeout.
-    static func readLine(_ fd: Int32) -> Data? {
+    private static func readLine(_ fd: Int32) -> Data? {
         var out = Data()
         var byte: UInt8 = 0
         while read(fd, &byte, 1) == 1 {
@@ -93,8 +101,13 @@ private enum RawSocket {
 
 @Suite struct SocketTests {
     private func client(_ t: TempSocket, launcher: (any AppLauncher)? = nil,
-                        launchTimeout: Duration = .seconds(10)) -> SocketClient {
+                        launchTimeout: Duration = testPatience) -> SocketClient {
         SocketClient(socketURL: t.socketURL, launcher: launcher, launchTimeout: launchTimeout, pollInterval: .milliseconds(50))
+    }
+
+    /// A request that is answered. The waits are liveness limits (`testPatience`), not what the tests measure.
+    private func status(_ c: SocketClient) async throws(SocketClientError) -> IPCResponse {
+        try await c.send(.status, args: IPCArgs(), responseTimeout: testPatience)
     }
 
     private func clientError(_ c: SocketClient) async -> SocketClientError? {
@@ -111,7 +124,7 @@ private enum RawSocket {
         defer { t.cleanUp() }
         let server = SocketServer(socketURL: t.socketURL, handler: EchoHandler())
         try await server.start()
-        let response = try await client(t).send(.status, args: IPCArgs())
+        let response = try await status(client(t))
         #expect(response.ok)
         #expect(response.id == 1)
         #expect(response.result?.path == "echo-1")
@@ -140,7 +153,7 @@ private enum RawSocket {
         try Data("stale".utf8).write(to: t.socketURL)
         let server = SocketServer(socketURL: t.socketURL, handler: EchoHandler())
         try await server.start()
-        let response = try await client(t).send(.status, args: IPCArgs())
+        let response = try await status(client(t))
         #expect(response.result?.path == "echo-1")
         await server.stop()
     }
@@ -153,7 +166,7 @@ private enum RawSocket {
         let second = SocketServer(socketURL: t.socketURL, handler: EchoHandler())
         await #expect(throws: SocketError.alreadyRunning) { try await second.start() }
         #expect(FileManager.default.fileExists(atPath: t.socketURL.path))
-        let response = try await client(t).send(.status, args: IPCArgs())
+        let response = try await status(client(t))
         #expect(response.ok)
         #expect(response.result?.path == "echo-1")
         await first.stop()
@@ -185,7 +198,7 @@ private enum RawSocket {
         try await server.start()
         let c = client(t)
         let responses = try await withThrowingTaskGroup(of: IPCResponse.self) { group in
-            for _ in 0..<5 { group.addTask { try await c.send(.status, args: IPCArgs()) } }
+            for _ in 0..<5 { group.addTask { try await status(c) } }
             var all: [IPCResponse] = []
             for try await r in group { all.append(r) }
             return all
@@ -208,14 +221,14 @@ private enum RawSocket {
         try #require(fd >= 0)
         defer { close(fd) }
         RawSocket.write(fd, "hello\n")
-        let line = try #require(RawSocket.readLine(fd))
+        let line = try #require(await RawSocket.line(fd))
         let bad = try IPCCodec.decodeResponse(line)
         #expect(!bad.ok)
         #expect(bad.id == nil)
         #expect(bad.error?.code == .badRequest)
         // The connection stays open: a valid request on the same fd is answered.
         RawSocket.write(fd, #"{"cmd":"status","args":{},"id":42}"# + "\n")
-        let next = try IPCCodec.decodeResponse(try #require(RawSocket.readLine(fd)))
+        let next = try IPCCodec.decodeResponse(try #require(await RawSocket.line(fd)))
         #expect(next.ok)
         #expect(next.result?.path == "echo-42")
         await server.stop()
@@ -230,7 +243,7 @@ private enum RawSocket {
         try #require(fd >= 0)
         defer { close(fd) }
         RawSocket.writeAll(fd, [UInt8](repeating: 0x61, count: LineBuffer.maxLineBytes + 1))
-        let line = try #require(RawSocket.readLine(fd))
+        let line = try #require(await RawSocket.line(fd))
         let failure = try IPCCodec.decodeResponse(line)
         #expect(!failure.ok)
         #expect(failure.id == nil)
@@ -250,7 +263,7 @@ private enum RawSocket {
                 try await server.start()
             }
         }
-        let response = try await client(t, launcher: launcher).send(.status, args: IPCArgs())
+        let response = try await status(client(t, launcher: launcher))
         #expect(response.ok)
         #expect(response.result?.path == "echo-1")
         #expect(launcher.launches == 1)
@@ -264,9 +277,11 @@ private enum RawSocket {
         let started = ContinuousClock.now
         let error = await clientError(client(t, launcher: launcher, launchTimeout: .seconds(1)))
         let elapsed = ContinuousClock.now - started
+        // It gave up (it came back with `.timedOut`), and not before the second it was given. How much later is up
+        // to the machine; the limit only tells the second it was given from a much longer wait of its own.
         #expect(error == .timedOut)
-        #expect(elapsed < .seconds(5))
         #expect(elapsed >= .milliseconds(900))
+        #expect(elapsed < testPatience)
         #expect(launcher.launches == 1)
     }
 
@@ -286,9 +301,11 @@ private enum RawSocket {
         let t = TempSocket()
         defer { t.cleanUp() }
         let started = ContinuousClock.now
-        let error = await clientError(client(t, launcher: nil))
+        let error = await clientError(client(t, launcher: nil, launchTimeout: testPatience))
         #expect(error == .appNotRunning)
-        #expect(ContinuousClock.now - started < .seconds(1))
+        // "Fast" is: without waiting out the time it has for a launch. That time is `testPatience` here, so a
+        // stalled machine cannot be mistaken for the wait.
+        #expect(ContinuousClock.now - started < testPatience)
     }
 
     @Test func stopRemovesSocketFile() async throws {

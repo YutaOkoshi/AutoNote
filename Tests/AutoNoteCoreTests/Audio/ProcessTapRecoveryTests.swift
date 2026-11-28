@@ -17,9 +17,9 @@ private final class Seconds: Sendable {
     func add(_ s: Int) { values.withLock { $0.append(s) } }
 }
 
-/// The watchdog looks every 10 ms of wall time; every threshold is on the meeting timeline (`FakeHostClock`), at the
+/// The watchdog looks every 5 ms of wall time; every threshold is on the meeting timeline (`FakeHostClock`), at the
 /// production values, so a test moves the clock instead of sleeping.
-let tapRecoveryTestPolicy = SystemTapRecoveryPolicy(checkInterval: .milliseconds(10))
+let tapRecoveryTestPolicy = SystemTapRecoveryPolicy(checkInterval: .milliseconds(5))
 
 /// Calls the tap's IOProc with 10 ms of `value` every 5 ms of wall time, stamped with the fake clock's current time.
 func feedTap(_ hw: FakeTapHardware, host: FakeHostClock, value: @escaping @Sendable () -> Float) -> Task<Void, Never> {
@@ -39,27 +39,77 @@ private func destructions(_ hw: FakeTapHardware) -> Int { hw.calls.filter { $0 =
 /// True once the source has finished its `n`th rebuild (the clock may move again: the next wait starts when a
 /// rebuild ends).
 private func rebuilt(_ src: ProcessTapSource, _ n: Int) async -> Bool {
-    await eventuallyTrue(.seconds(30)) { await src.finishedRebuilds == n }
+    await soon { await src.finishedRebuilds == n }
 }
 
-/// Waits until the watchdog has looked twice more: the second look is wholly at the current clock reading (and, with
-/// `fed`, after two more callbacks were drained). Also needed right after `start`: "another process has been playing
-/// since" is the time of the first look that saw it. Returns early once `done`; gives up after 3 s (a rebuild under
-/// way holds the looks back).
-func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { false }) async {
-    if fed {
+/// Waits until the watchdog has looked twice more: the second look is wholly at the current clock reading. Also
+/// needed right after `start`: "another process has been playing since" is the time of the first look that saw it.
+/// With `fed`, the order is one look, two more callbacks drained, two looks: every look after the first one reads
+/// the clock where it is now, and the last one began after the callbacks, so a look at the current time has seen
+/// them (callbacks first, and the look that sees them may have read the clock before it moved; they then count for
+/// the old time). Returns early once `done` (a rebuild under way holds the looks back).
+///
+/// When a wait runs out of patience (`soon`), the looks or the callbacks have stopped coming and what the test
+/// checks next would be about a state that was never reached: `settle` records an issue at the line of the call.
+func settle(_ src: ProcessTapSource, fed: Bool = false, sourceLocation: SourceLocation = #_sourceLocation,
+            or done: () -> Bool = { false }) async {
+    guard !testIsOutOfPatience else { return }
+    var waitingFor = "two looks of the watchdog"
+    var settled = false
+    if !fed {
+        settled = await looks(src, 2, or: done)
+    } else if await looks(src, 1, or: done) {
+        waitingFor = "two more callbacks"
         let drained = src.health?.callbacks ?? 0
-        _ = await eventuallyTrue { done() || (src.health?.callbacks ?? 0) >= drained + 2 }
+        if await soon({ done() || (src.health?.callbacks ?? 0) >= drained + 2 }) {
+            waitingFor = "two looks of the watchdog after the callbacks"
+            settled = await looks(src, 2, or: done)
+        }
     }
+    guard !settled else { return }
+    Issue.record("""
+        settle: \(waitingFor) did not come within \(testPatience) (watchdog looks so far: \(await src.watchdogLooks), \
+        callbacks: \(src.health?.callbacks ?? 0), rebuilds finished: \(String(describing: await src.finishedRebuilds)))
+        """, sourceLocation: sourceLocation)
+}
+
+/// The tests of this file and of `RecordingSessionAudioLossTests` that used up their patience. A test waits up to
+/// 140 times (`settle`, `rebuilt`, `soon`); if each wait had its own `testPatience`, a watchdog that stopped looking
+/// would cost one test hours and the run its time limit, with no name. So a test has one `testPatience`: the first
+/// wait that runs out marks the test, and every later wait of it asks once and returns.
+private let testsOutOfPatience = Mutex<Set<Test.ID>>([])
+
+private var testIsOutOfPatience: Bool {
+    guard let test = Test.current?.id else { return false }
+    return testsOutOfPatience.withLock { $0.contains(test) }
+}
+
+/// Waits until `condition` holds, asking every 2 ms (`settle` runs hundreds of times in one test). False when the
+/// test's patience ran out, now or in an earlier wait.
+func soon(_ condition: () async -> Bool) async -> Bool {
+    guard !testIsOutOfPatience else { return await condition() }
+    let patience = ContinuousClock.now + testPatience
+    while !(await condition()) {
+        guard ContinuousClock.now < patience else {
+            if let test = Test.current?.id { testsOutOfPatience.withLock { _ = $0.insert(test) } }
+            return false
+        }
+        try? await Task.sleep(for: .milliseconds(2))
+    }
+    return true
+}
+
+private func looks(_ src: ProcessTapSource, _ more: Int, or done: () -> Bool) async -> Bool {
     let before = await src.watchdogLooks
-    _ = await eventuallyTrue {
+    return await soon {
         if done() { return true }
-        return await src.watchdogLooks >= before + 2
+        return await src.watchdogLooks >= before + more
     }
 }
 
 
-@Suite struct ProcessTapRecoveryTests {
+/// The time limit is a backstop for a wait that some helper does not end: the test then fails by name.
+@Suite(.timeLimit(.minutes(10))) struct ProcessTapRecoveryTests {
     private func source(_ hw: FakeTapHardware, _ host: FakeHostClock,
                         _ tweak: (inout SystemTapRecoveryPolicy) -> Void = { _ in }) -> ProcessTapSource {
         var policy = tapRecoveryTestPolicy
@@ -68,9 +118,18 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
                                 stopTimeout: .seconds(2), policy: policy)
     }
 
+    /// For the tests of the zero watch, which move the clock by seconds at a time while callbacks flow: the stall
+    /// watch is out of reach. A look that falls between a jump of two seconds or more and the next callback sees that
+    /// long without callbacks and rebuilds for a stall, which is not what these tests are about (and ended some of
+    /// them on a loaded machine). `keepsTheTapWhileAudioFlows` covers the stall watch under flowing callbacks.
+    private func zeroWatch(_ hw: FakeTapHardware, _ host: FakeHostClock,
+                           _ tweak: (inout SystemTapRecoveryPolicy) -> Void = { _ in }) -> ProcessTapSource {
+        source(hw, host) { $0.stallTimeout = 1_000_000; tweak(&$0) }
+    }
+
     @Test func rebuildsWithinFiveSecondsWhenOnlyZerosArriveWhileAnotherProcessPlays() async throws {
         let host = FakeHostClock(); let hw = FakeTapHardware(); hw.othersPlaying = true
-        let src = source(hw, host)
+        let src = zeroWatch(hw, host)
         try await src.start { _ in }
         await settle(src)
         let feeder = feedTap(hw, host: host) { 0 }
@@ -80,7 +139,7 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
         await settle(src, fed: true)
         #expect(creations(hw) == 1)                              // not yet: 4 s of zeros
         host.advance(1.1)
-        #expect(await eventuallyTrue { creations(hw) == 2 })     // 5.1 s: torn down and created again
+        #expect(await soon { creations(hw) == 2 })     // 5.1 s: torn down and created again
         #expect(hw.lastExcludedBundleIDs == ["com.yutaokoshi.autonote"])
         #expect(src.health?.restarts == 1)
         await src.stop()
@@ -91,7 +150,7 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
     /// for a tap to go deaf, so the wait is 2 s instead of 5.
     @Test func rebuildsAfterTwoSecondsOfZerosWhenTheOutputDeviceChanged() async throws {
         let host = FakeHostClock(); let hw = FakeTapHardware(); hw.othersPlaying = true; hw.outputRoute = "speakers"
-        let src = source(hw, host)
+        let src = zeroWatch(hw, host)
         try await src.start { _ in }
         await settle(src)
         let feeder = feedTap(hw, host: host) { 0 }
@@ -117,7 +176,7 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
     @Test func rebuildsTwoSecondsAfterTheOutputDeviceChangedWhenSoundFlowedUntilThen() async throws {
         let host = FakeHostClock(); let hw = FakeTapHardware(); hw.othersPlaying = true; hw.outputRoute = "speakers"
         let level = Mutex<Float>(0.25)
-        let src = source(hw, host)
+        let src = zeroWatch(hw, host)
         try await src.start { _ in }
         await settle(src)
         let feeder = feedTap(hw, host: host) { level.withLock { $0 } }
@@ -139,7 +198,7 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
     /// Zeros already past their first rebuild when the output changes: the change still gets its 2 s to settle.
     @Test func aChangeOfTheOutputDeviceDuringZerosWaitsItsTwoSecondsToo() async throws {
         let host = FakeHostClock(); let hw = FakeTapHardware(); hw.othersPlaying = true; hw.outputRoute = "speakers"
-        let src = source(hw, host)
+        let src = zeroWatch(hw, host)
         try await src.start { _ in }
         await settle(src)
         let feeder = feedTap(hw, host: host) { 0 }
@@ -165,7 +224,7 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
     /// over at the resume.
     @Test func whileTheRecordingIsPausedZerosCauseNoRebuild() async throws {
         let host = FakeHostClock(); let hw = FakeTapHardware(); hw.othersPlaying = true
-        let src = source(hw, host)
+        let src = zeroWatch(hw, host)
         let notArriving = Seconds()
         src.health?.setNotArrivingObserver { notArriving.add($0 ?? -1) }
         try await src.start { _ in }
@@ -242,7 +301,7 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
     @Test func theZeroRebuildIntervalDoublesAndGoesBackToFiveSecondsOnceAudioReturns() async throws {
         let host = FakeHostClock(); let hw = FakeTapHardware(); hw.othersPlaying = true
         let level = Mutex<Float>(0)
-        let src = source(hw, host)
+        let src = zeroWatch(hw, host)
         try await src.start { _ in }
         await settle(src)
         let feeder = feedTap(hw, host: host) { level.withLock { $0 } }
@@ -260,14 +319,16 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
         #expect(await src.finishedRebuilds == 2)                 // then 20 s
 
         level.withLock { $0 = 0.25 }                             // audio is back on the rebuilt tap
-        #expect(await eventuallyTrue { (src.health?.nonZeroCallbacks ?? 0) > 0 })
+        #expect(await soon { (src.health?.nonZeroCallbacks ?? 0) > 0 })
         await settle(src)
         level.withLock { $0 = 0 }
         let fired = await src.statistics().callbacks
-        #expect(await eventuallyTrue { (src.health?.callbacks ?? 0) >= fired + 2 })   // the non-zero ones are all drained
+        #expect(await soon { (src.health?.callbacks ?? 0) >= fired + 2 })   // the non-zero ones are all drained
         await settle(src)                                        // and seen at this time
         host.advance(5.1)
         #expect(await rebuilt(src, 3))                           // back to 5 s
+        host.advance(10.1)
+        #expect(await rebuilt(src, 4))                           // and the doubling starts over: 10 s next, not 40
         await src.stop()
         #expect(creations(hw) == destructions(hw))
     }
@@ -275,7 +336,7 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
     /// Zeros may be plain silence from an app that keeps its output open: rebuilding for them never ends the source.
     @Test func zeroRebuildsNeverGiveUpAndTellTheOwnerOnceAfterAMinute() async throws {
         let host = FakeHostClock(); let hw = FakeTapHardware(); hw.othersPlaying = true
-        let src = source(hw, host) { $0.maxRebuilds = 2; $0.maxConsecutiveFailures = 1 }
+        let src = zeroWatch(hw, host) { $0.maxRebuilds = 2; $0.maxConsecutiveFailures = 1 }
         let failure = FailureMessage(); let notArriving = Seconds()
         src.health?.setFailureObserver { failure.set($0) }
         src.health?.setNotArrivingObserver { notArriving.add($0 ?? -1) }
@@ -285,7 +346,7 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
         await settle(src, fed: true)                             // callbacks flow before the clock moves
         defer { feeder.cancel() }
         host.advance(5.1)
-        #expect(await eventuallyTrue { creations(hw) == 2 })
+        #expect(await soon { creations(hw) == 2 })
         #expect(notArriving.all.isEmpty)                         // 5 s is not a minute
         for _ in 0..<40 { host.advance(10); await settle(src, fed: true) }   // 400 s of zeros
         #expect(creations(hw) >= 6)
@@ -300,7 +361,7 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
     @Test func tellsTheOwnerWhenAudioIsBackAndAgainForALaterStretch() async throws {
         let host = FakeHostClock(); let hw = FakeTapHardware(); hw.othersPlaying = true
         let level = Mutex<Float>(0)
-        let src = source(hw, host)
+        let src = zeroWatch(hw, host)
         let told = Seconds()
         src.health?.setNotArrivingObserver { told.add($0 ?? -1) }       // -1: arriving again
         try await src.start { _ in }
@@ -311,11 +372,11 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
         for _ in 0..<70 { host.advance(1); await settle(src, fed: true) }    // 70 s of zeros
         #expect(told.all.count == 1 && (told.all.first ?? 0) >= 60)
         level.withLock { $0 = 0.25 }
-        #expect(await eventuallyTrue(.seconds(10)) { told.all.last == -1 })   // heard again
+        #expect(await soon { told.all.last == -1 })   // heard again
         #expect(told.all.count == 2)
         level.withLock { $0 = 0 }
         let fired = await src.statistics().callbacks
-        #expect(await eventuallyTrue(.seconds(10)) { (src.health?.callbacks ?? 0) >= fired + 2 })
+        #expect(await soon { (src.health?.callbacks ?? 0) >= fired + 2 })
         await settle(src)
         for _ in 0..<70 { host.advance(1); await settle(src, fed: true) }    // another 70 s of zeros
         #expect(told.all.count == 3 && (told.all.last ?? 0) >= 60)
@@ -334,7 +395,7 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
         await settle(src)
         #expect(creations(hw) == 1)                              // 1.5 s without a callback is not a stall yet
         host.advance(0.6)
-        #expect(await eventuallyTrue { hw.calls.filter { $0 == "start" }.count == 2 })   // the new IOProc runs
+        #expect(await soon { hw.calls.filter { $0 == "start" }.count == 2 })   // the new IOProc runs
         #expect(creations(hw) == 2)
         // The rebuilt tap delivers; its chunks keep their place on the timeline (host time 10 s).
         for i in 0..<100 {
@@ -422,11 +483,11 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
         await settle(src)
         #expect(recovered.message == nil)
         hw.fire(frames: 480, hostTime: host.hostTime(), sampleTime: 480, value: 0.25)
-        #expect(await eventuallyTrue { recovered.message != nil })
+        #expect(await soon { recovered.message != nil })
         #expect(creations(hw) == givenUpAt)                      // the tap that delivers is kept
 
         host.advance(3)                                          // the callbacks stop again while another app plays
-        #expect(await eventuallyTrue { creations(hw) > givenUpAt })   // watched again, with a fresh budget
+        #expect(await soon { creations(hw) > givenUpAt })   // watched again, with a fresh budget
         await src.stop()
         #expect(creations(hw) == destructions(hw))
     }
@@ -447,21 +508,21 @@ func settle(_ src: ProcessTapSource, fed: Bool = false, or done: () -> Bool = { 
         await settle(src)
         #expect(creations(hw) == 1)                               // the wait starts over at the resume
         host.advance(3)
-        #expect(await eventuallyTrue { creations(hw) == 2 })      // resumed: the stall is acted on
+        #expect(await soon { creations(hw) == 2 })      // resumed: the stall is acted on
         await src.stop()
         #expect(creations(hw) == destructions(hw))
     }
 
     @Test func stopDuringARebuildTearsDownWhatTheRebuildBroughtUp() async throws {
         let host = FakeHostClock(); let hw = FakeTapHardware(); hw.othersPlaying = true
-        let src = source(hw, host)
+        let src = zeroWatch(hw, host)
         try await src.start { _ in }
         await settle(src)
         let feeder = feedTap(hw, host: host) { 0 }
         await settle(src, fed: true)                             // callbacks flow before the clock moves
         hw.startDelay = .milliseconds(300)                       // the rebuild's bring-up takes a while
         host.advance(5.1)
-        #expect(await eventuallyTrue { creations(hw) == 2 })
+        #expect(await soon { creations(hw) == 2 })
         await src.stop()                                         // lands while `start` of the new tap is blocked
         feeder.cancel(); await feeder.value
         let settled = creations(hw)

@@ -42,7 +42,7 @@ AutoNote をソースからビルドし、テストし、変更を入れるた�
 
 録音がなぜ始まった・止まったかは `log show --last 1h --predicate 'subsystem == "com.yutaokoshi.autonote"'` で読める（流しながら見るなら `log stream --predicate ...`）。開始・停止・一時停止のたびに、`devices` カテゴリに `recording -> idle on manualStop (origin: hotkey, stop: manual, meeting: <会議 ID>)` のような 1 行が出る。`origin` がきっかけ（`hotkey`・`menu`・`window`・`notificationAction`・`cli`・`countdownFired`・`graceExpired`・`diskFull`・`terminating`・`sessionEnded`・`startFailed`・`deviceConnected`・`deviceDisconnected`。定義は `Sources/AutoNoteCore/Devices/RecordingControlOrigin.swift`）、`stop` が録音に渡した `StopReason` で、何も変えなかった操作は末尾に `ignored` が付く。前後の行で、ショートカットの受信（`HotKeyCenter`）、CLI のコマンドと送信元 PID（`SocketServer`）、機材の追加・削除（`DeviceMonitor` と `devices`）、設定の保存で変わったキー名（`AppWiring`。値は出さない）、録音セッションの開始・終了と秒数（`RecordingSession`）、ライブ文字起こし・ライブ要約の開始・終了を突き合わせる。どれも `notice` 以上なので後から `log show` で読める（`info` と `debug` は残らない）。
 
-### 使われなかった設定値とライブ要約の失敗をログで読む
+### 使われなかった設定値・ライブ要約の失敗・ライブの復号の遅れをログで読む
 
 利用者向けの読み方とコマンドは [利用者リファレンス](guide/reference.md) の「ログで理由を調べる」にある。開発で知っておくこと:
 
@@ -50,6 +50,16 @@ AutoNote をソースからビルドし、テストし、変更を入れるた�
 - ライブ文字起こしの開始の行（`LiveTranscriptionWiring`）は、実際に動いたエンジンを `engine:` で示す（`EngineChoice.displayName`）
 - ライブ要約の `claude -p` が失敗すると、`ClaudeLiveSummarizer` カテゴリに `live claude -p failed: <種類> (exit N): <claude のエラー文>` が `error` で出る。エラー文は `ClaudeResultClassifier.failureText`（エラーエンベロープの `subtype`・`result`・`errors` と stderr）で、`claude_env` の値（8 文字以上）と `sk-…` 形のトークンを `***` にしてから 1 行・200 文字に切る（切ってから伏せると、切れ目にかかった値が残る）。指示文・文字起こし・成功時の出力は出さない。文が何も無いときは出力の形（バイト数）だけ、`claude` を起動できなかったときは `live claude -p did not run: <型> (<domain> <code>)` が出る。会議 ID はこの行には無い（スケジューラの `live summary: failed (...) (<会議 ID>)` は `NSLog` で出るので、時刻で突き合わせる）
 - 録音の最初の確認（`checkReady`: 実行ファイルの確認と `claude auth status --json`）や `LiveSummarizerFactory` が失敗すると、スケジューラはその録音の要約を止めて以後呼ばない。このときは `live claude -p unavailable: <種類> (<理由>)` が同じカテゴリに出る（確認の終了コード、JSON の `loggedIn`、stderr。stdout と `claude` のパスは出さない）
+- ライブの whisper の復号が音声に追いつかないと、`WhisperLiveTranscriber` カテゴリに `live backlog: track=mic depth=4 lag=21.0s` が `notice` で出る（0.8.2 以降。窓は捨てない。見えるようにするだけ）。`depth` はまだ復号し終えていない確定窓の数（復号中の 1 つを含む）、`lag` は先頭の窓の後ろで待っている音声の秒数（先頭の窓の終わりから最新の窓の終わりまで。待ちが無ければ 0）。行が出るのは `depth` が 4 になったときと、その後 8・16… と倍になるたびで、列が空に戻ると `live backlog cleared: track=mic max_depth=… max_lag=…`（いま解消した山の最大）が出て数え直す
+- 停止の行 `live backlog at stop: track=… depth=… lag=…s max_depth=… max_lag=…s` は、遅れが無くても録音のたびに mic と system で 1 行ずつ出る（音声が 1 度も届かなかったトラックは出ない）。mic の行は停止した時点の値（残りの復号を待つ前に書く）。system の行は mic の残りの復号が終わってから書くので、時刻が遅れ、`depth`・`lag` は停止した時点より小さい（多くは 0）。system が停止の時点でどこまで遅れていたかは、この行からは分からない（`max_*` は録音全体の最大で、停止の時点の値ではない）。system の `cleared` が system の停止の行より先に出ることもある。会議 ID は行に無いので、直前の `LiveTranscriptionWiring` の `<会議 ID>: live transcript stopping` と時刻で突き合わせる。読むコマンドは [利用者リファレンス](guide/reference.md) の「リアルタイムの文字が遅れて出るとき」
+- **値の読み方**（0.8.2 での実測。窓は最長 8 秒）: 見るのは `lag` と `max_lag`（待っている音声の秒数）。`depth` が小さいことは、遅れていないことを意味しない
+  - 数えているのは確定窓の列だけで、復号中の窓にかかる時間と、間に挟まる部分結果の復号は入らない。文字が実際に出るまでの遅れは、`lag` に復号 1〜2 回分を足した長さになる
+  - 追いついている例: 続けて話した 84 秒を large-v3-turbo-q5_0 で流すと `max_depth=1 max_lag=0.0s`、停止の行は `depth=1 lag=0.0s`
+  - 途切れがちな発話の例: 12 秒話して 25 秒黙るのを 2 回（74 秒）、large-v3-turbo を CPU で復号（1 回が約 3.5 秒）。確定の文字は話し終わりから 8〜11 秒遅れて出たが、`max_depth=2 max_lag=3.6s`、停止の行は `depth=0 lag=0.0s` だった。黙っている間に列が空に戻るので、深さは伸びない
+  - 列が伸びた（復号が音声より遅い時間帯があった）と言えるのは、`max_lag` が窓 1 つ分（8 秒）を超えるか、`max_depth` が 3 以上のとき。それ未満でも、1 回の復号が遅ければ文字は数秒〜十数秒遅れる。その遅れは `autonote dev transcribe --engine whisper-live --realtime` の各行の `wall`（出力した時刻）と `end`（発話の終わり）の差で測る
+  - 停止の行の `depth`・`lag` は、停止が最後の窓を閉じるので、追いついていても `depth` は 0〜2、`lag` は 0 から窓 1 つ分（8 秒）までになる（実測 `depth=2 lag=3.4s`）
+  - `live backlog:` の行は `depth` が 4 からなので、3 までの山は停止の行の `max_*` でしか分からない。`cleared` は `live backlog:` を書いた山にだけ出る: 停止の後の復号が `depth` 4 未満で済むと `cleared` は出ない。出たときは、停止の行から `cleared` までが、停止後に残りを復号していた時間
+- `autonote dev transcribe --engine whisper-live --realtime` の `summary` の `max_backlog`・`max_lag_seconds` は、同じ数え方の録音全体の最大。`--realtime` を付けないとファイルを一度に流し込むので、値は窓の数に近くなり、復号の遅さは表さない
 - `swift test` と `autonote` の CLI も同じ行を本物のログに書く（テストは架空の値を使う）。アプリの行だけを読むなら、条件に `AND process == "AutoNoteApp"` を足す
 
 ## リポジトリ構成
@@ -76,6 +86,7 @@ AutoNote をソースからビルドし、テストし、変更を入れるた�
 - 音声はローカルから出さない。外部に渡すのは `claude -p` への文字起こしテキストだけ
 - `claude` の起動（引数と子プロセスの環境変数）は `Sources/AutoNoteCore/Minutes/ClaudeLaunch.swift` の 1 か所で組み立てる。議事録とリアルタイム要約は設定の `claude_args` と `claude_env` を、ログイン確認（`claude auth status`）は `claude_env` だけをここで足す
 - TDD で進める（失敗するテストを書く → 実装する → 通す）。ハードウェアが要る部分だけ手動で確認する
+- テストの合否を実時間で決めない（CI の並列実行では全テストが 20〜40 秒止まることがある）。条件が成り立つまで待ち、待ちの上限は `testPatience`（終わらない待ちを切るための長さで、速さの基準ではない）。「N 秒以内に戻る」は、止まる側の偽物を `BlockingHold` で止めたまま戻ったことで見る。時計で決まる動き（マイクの復旧は `StepClock`、システム音声は `FakeHostClock`）は、テストが時計を進めて見る。子プロセスを本当に止めるテストは、経過時間の上限ではなく終わり方（どのシグナルで終わったか）で見る。待ちが `testPatience`（120 秒）を使い切ったテストは、負荷ではなく本当の失敗（条件が成り立たなかった）なので、再実行で済ませずに原因を見る。失敗の行に、どの待ちが時間切れになったかが出る（`waitUntil`・`settle`・`StepClock`）。実時間や実機の状態にまだ頼るテストは 2 つ: `cancellationAfterTimeoutStillThrowsCancellationError`（200 ms の時間切れの 1 秒後にキャンセルする。負荷で時間切れが 1 秒より遅れると、狙った経路を通らないまま通る）と `systemDiskSpaceReadsTheNearestExistingDirectory`（実機の空き容量を読む）
 - コミットメッセージは英語の Conventional Commits
 - タスクを完了とする前に `scripts/e2e-check.sh` を回す
 
@@ -132,7 +143,7 @@ autonote dev translate <transcript.json> [--target auto|ja|en] [--model <gguf>] 
 
 ## CI / リリース（GitHub Actions）
 
-- `.github/workflows/ci.yml`: main への push・PR・手動実行（workflow_dispatch）で、macOS 26（`macos-26`、Xcode 26.6）上で `swift build` と `swift test`（時間依存のテストが負荷で落ちることがあるので、失敗したら `--no-parallel` で 1 回だけ再実行）を走らせる。開発ブランチへの push だけでは走らない（PR を開くと走る）。docs/ と `*.md` だけの変更でも走らない。同じブランチの古い実行は取り消す。whisper.xcframework と `.build` はキャッシュする
+- `.github/workflows/ci.yml`: main への push・PR・手動実行（workflow_dispatch）で、macOS 26（`macos-26`、Xcode 26.6）上で `swift build` と `swift test` を走らせる（`.github/scripts/swift-test-retry.sh`。失敗したら `--no-parallel` で 1 回だけ再実行する保険が残っているが、0.8.2 でテストの合否を実時間で決めるのをやめてからは、1 回目の並列実行で通るのが期待値。ジョブが緑でも、ログに `swift test が失敗したので` の警告が出ていたら 1 回目は落ちているので、落ちたテストを直す）。開発ブランチへの push だけでは走らない（PR を開くと走る）。docs/ と `*.md` だけの変更でも走らない。同じブランチの古い実行は取り消す。whisper.xcframework と `.build` はキャッシュする
 - `.github/workflows/release.yml`: main への push か手動実行で `Resources/Info.plist` の `CFBundleShortVersionString` を読み、`v<version>` のタグが無ければ次の順に進む。タグがあれば何もしない
   1. `build`（`macos-26`、鍵なし）: ビルド・テストし、arm64 + x86_64 のユニバーサルの .app を組み立てる（ここではアドホック署名）
   2. `sign`（`macos-26`、`environment: release`）: Environment「release」の Secrets（`AUTONOTE_SIGNING_P12_BASE64`・`AUTONOTE_SIGNING_P12_PASSWORD`）を一時キーチェーンに取り込み（`scripts/signing.sh import-ci`）、`scripts/sign-app.sh` で「AutoNote Dev」の証明書で署名し直し、designated requirement の証明書が `scripts/config.sh` の `AUTONOTE_CERT_SHA1` と一致するかを `scripts/signing.sh check` で確かめる。Secrets が無い（fork など）と失敗し、リリースは作られない

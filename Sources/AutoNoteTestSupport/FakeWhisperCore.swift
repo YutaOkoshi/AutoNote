@@ -9,6 +9,8 @@ import Synchronization
 /// the current window.
 /// `init(fixedText:)` is for live windows: one segment spanning the window and one token at its start.
 /// `init(failure:)` records each request and throws `failure`.
+/// `hold()` makes every `run` wait (after recording its request) until `release()`: a decoder slower than the audio,
+/// without a clock.
 /// `detectLanguage` answers with `guess` (Japanese by default), or throws `detectionError` when set, and records the
 /// samples it was asked about.
 public final class FakeWhisperCore: WhisperCore, @unchecked Sendable {
@@ -26,8 +28,37 @@ public final class FakeWhisperCore: WhisperCore, @unchecked Sendable {
         var window = -1
     }
 
+    private struct Gate {
+        var closed = false
+        var waiting: [CheckedContinuation<Void, Never>] = []
+    }
+
     private let script: Script
     private let state = Mutex(State())
+    private let gate = Mutex(Gate())
+
+    /// From now on a `run` records its request and then waits for `release()`.
+    public func hold() { gate.withLock { $0.closed = true } }
+
+    /// Lets the waiting runs go on, and later ones through.
+    public func release() {
+        let waiting = gate.withLock { g -> [CheckedContinuation<Void, Never>] in
+            g.closed = false
+            defer { g.waiting = [] }
+            return g.waiting
+        }
+        for continuation in waiting { continuation.resume() }
+    }
+
+    private func waitWhileHeld() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let open = gate.withLock { g -> Bool in
+                if g.closed { g.waiting.append(continuation) }
+                return !g.closed
+            }
+            if open { continuation.resume() }
+        }
+    }
 
     /// The answer of `detectLanguage` for the samples asked about.
     public var guess: @Sendable ([Float]) -> LanguageGuess {
@@ -83,6 +114,7 @@ public final class FakeWhisperCore: WhisperCore, @unchecked Sendable {
             if r.offsetSeconds == 0 { s.window += 1 }
             return s.window
         }
+        await waitWhileHeld()
         let total = Double(r.samples.count) / PCMAudio.sampleRate
         switch script {
         case let .failure(error):

@@ -104,49 +104,54 @@ private final class ChunkCollector: Sendable {
         #expect(abs(total - 16_000) <= 48)
     }
 
+    // The four tests below are about a hardware call that hangs. The fake's call does not return until the test
+    // releases it, so the verdict is the order ("the source came back while the call was still held"), not a time.
+
     @Test func stopReturnsWithinTimeoutWhenTeardownBlocks() async throws {
-        let hw = FakeTapHardware(); hw.teardownDelay = .seconds(3)
+        let hw = FakeTapHardware(); hw.teardownHold.hold()
+        defer { hw.teardownHold.release() }
         let src = ProcessTapSource(clock: .fake(), hardware: hw, stopTimeout: .milliseconds(200))
         try await src.start { _ in }
-        let t0 = ContinuousClock.now; await src.stop()
-        #expect(ContinuousClock.now - t0 < .seconds(2))
+        await src.stop()
+        #expect(!hw.teardownHold.expired)                           // stop gave up waiting; the teardown never returned
         let calls = hw.calls
         #expect(calls.contains("stop") && !calls.contains("destroyTap"))
     }
 
     @Test func startTimesOutWhenHardwareStartBlocks() async {
-        // Start blocks 10× the timeout; the bound leaves 4 s of scheduler slack and still sits well before the start returns.
-        let hw = FakeTapHardware(); hw.startDelay = .seconds(10)
-        let src = ProcessTapSource(clock: .fake(), hardware: hw, startTimeout: .seconds(1))
-        let t0 = ContinuousClock.now
+        let hw = FakeTapHardware(); hw.startHold.hold()
+        defer { hw.startHold.release() }
+        let src = ProcessTapSource(clock: .fake(), hardware: hw, startTimeout: .milliseconds(200))
         let error = await #expect(throws: AudioSourceError.self) { try await src.start { _ in } }
-        #expect(ContinuousClock.now - t0 < .seconds(5))
         #expect(error == .timedOut(call: "AudioDeviceStart"))
         // Idle again: a second start is admitted instead of throwing alreadyStarted. It queues behind the still-blocked
         // late bring-up on the serial control queue, so it times out as well.
         await #expect(throws: AudioSourceError.timedOut(call: "AudioDeviceStart")) { try await src.start { _ in } }
+        #expect(!hw.startHold.expired)                              // both gave up while the first start was still held
     }
 
     @Test func stopAfterTimedOutStartReturnsPromptly() async throws {
-        let hw = FakeTapHardware(); hw.startDelay = .seconds(3)
+        let hw = FakeTapHardware(); hw.startHold.hold()
+        defer { hw.startHold.release() }
         let src = ProcessTapSource(clock: .fake(), hardware: hw, startTimeout: .milliseconds(200))
         await #expect(throws: AudioSourceError.timedOut(call: "AudioDeviceStart")) { try await src.start { _ in } }
-        let t0 = ContinuousClock.now; await src.stop()
-        #expect(ContinuousClock.now - t0 < .seconds(2))
-        // The late bring-up finishes after ~3 s and is torn down on the control queue right away.
-        let deadline = ContinuousClock.now + .seconds(8)
-        while !hw.calls.contains("destroyTap"), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(50)) }
-        #expect(hw.calls.suffix(3) == ["destroyIOProc", "destroyAggregate", "destroyTap"])
+        await src.stop()
+        #expect(!hw.startHold.expired)                              // stop did not wait for the bring-up
+        #expect(!hw.calls.contains("stop"))                         // nothing to tear down yet
+        // The late bring-up finishes once the hardware lets go and is torn down on the control queue right away.
+        hw.startHold.release()
+        try await waitUntil { hw.calls.contains("destroyTap") }
         #expect(hw.calls == ["createTap", "tapFormat", "createAggregate", "createIOProc", "start",
                              "stop", "destroyIOProc", "destroyAggregate", "destroyTap"])
     }
 
     @Test @MainActor func stopFromMainActorDoesNotBlockMainThread() async throws {
-        let hw = FakeTapHardware(); hw.teardownDelay = .seconds(3)
+        let hw = FakeTapHardware(); hw.teardownHold.hold()
+        defer { hw.teardownHold.release() }
         let src = ProcessTapSource(clock: .fake(), hardware: hw, stopTimeout: .milliseconds(200))
         try await src.start { _ in }
-        let t0 = ContinuousClock.now; await src.stop()
-        #expect(ContinuousClock.now - t0 < .seconds(2))
+        await src.stop()
+        #expect(!hw.teardownHold.expired)
         let calls = hw.calls
         #expect(calls.contains("stop") && !calls.contains("destroyTap"))
     }

@@ -52,6 +52,9 @@ actor LatestConfirmed {
         wake()
     }
 
+    /// Test hook: the newest list and summary that arrived, taken or not.
+    var newest: (list: [Utterance]?, summary: LiveSummaryState?) { (latest, summary) }
+
     /// Whether a newer list or summary (or the end) arrived since they were last taken.
     var hasNewer: Bool { finished || version > taken || summaryVersion > summaryTaken }
 
@@ -121,6 +124,11 @@ public actor LiveTranslator {
     }
 
     private func unregister(_ id: MeetingID) { boxes[id] = nil }
+
+    /// Test hook: the newest list and summary that reached the meeting's running session.
+    func received(_ id: MeetingID) async -> (list: [Utterance]?, summary: LiveSummaryState?) {
+        await boxes[id]?.newest ?? (nil, nil)
+    }
 
     /// Waits for every running session (tests).
     func waitForSessions() async {

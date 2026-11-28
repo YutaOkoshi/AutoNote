@@ -159,7 +159,7 @@ import AutoNoteTestSupport
         let input = try synthesize("wav", in: env.inputs, seconds: 1)
         let count = ProcessInfo.processInfo.activeProcessorCount * 2
         let importer = env.importer
-        let ids = try await withTimeout(.seconds(30)) {
+        let ids = try await withTimeout(testPatience) {
             try await withThrowingTaskGroup(of: MeetingID.self) { group in
                 for _ in 0..<count { group.addTask { try await importer.importFile(input, language: .ja).id } }
                 return try await group.reduce(into: Set<MeetingID>()) { $0.insert($1) }

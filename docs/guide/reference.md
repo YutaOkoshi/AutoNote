@@ -128,7 +128,7 @@
 
 ## ログで理由を調べる
 
-設定が効いていない、リアルタイム要約が出ない・更新されない、というときは macOS のログに理由が残っている（この節の行が出るのは 0.8.1 以降の版）。ターミナルで次の形のコマンドを打つ（`--last 1h` は「直近 1 時間」。`process == "AutoNoteApp"` はアプリ本体の行だけに絞る）。
+設定が効いていない、リアルタイム要約が出ない・更新されない、というときは macOS のログに理由が残っている（この節の行が出るのは 0.8.1 以降の版。文字の遅れの行は 0.8.2 以降）。ターミナルで次の形のコマンドを打つ（`--last 1h` は「直近 1 時間」。`process == "AutoNoteApp"` はアプリ本体の行だけに絞る）。
 
 ### 使われなかった設定値
 
@@ -179,6 +179,26 @@ log show --last 1h --predicate 'subsystem == "com.yutaokoshi.autonote" AND categ
 ```
 
 `engine:` の値と設定値の対応は、`Apple DictationTranscriber` = `dictation`、`Apple SpeechTranscriber` = `speech`、`whisper.cpp <モデル名>` = `whisper`。確定版で動いたエンジンは、議事録の先頭（frontmatter）の `transcript_engine` に同じ表記で入る。
+
+### リアルタイムの文字が遅れて出るとき
+
+リアルタイム版に whisper を選んでいて、文字が話に遅れていくときは、文字起こしが音声に追いついていない（0.8.2 以降の版で出る行。文字は遅れても捨てない）。
+
+```sh
+log show --last 1h --predicate 'subsystem == "com.yutaokoshi.autonote" AND category == "WhisperLiveTranscriber" AND process == "AutoNoteApp"'
+```
+
+```text
+live backlog: track=mic depth=4 lag=21.0s
+live backlog at stop: track=mic depth=6 lag=35.0s max_depth=6 max_lag=35.0s
+live backlog cleared: track=mic max_depth=6 max_lag=35.0s
+```
+
+- `track` は `mic`（自分の声）か `system`（相手の声）。`depth` はまだ文字にできていない区間の数、`lag` はその後ろで待っている音声の秒数
+- `live backlog:` は `depth` が 4・8・16… になったときに出る。`live backlog at stop:` は遅れが無くても録音を止めるたびに出る行で、`max_depth`・`max_lag` は録音全体でいちばん遅れたときの値
+- 見るのは `lag` と `max_lag`。`max_lag` が 8 秒を超えるか `max_depth` が 3 以上なら、録音中に文字起こしが音声より遅い時間帯があった
+- 値が小さくても、文字が遅れていないとは限らない。数えているのは待っている区間だけで、1 つの区間を文字にする時間は入らない。話しては黙る、を繰り返す会議では、黙っている間に待ちが無くなるので `max_depth=2 max_lag=3.6s` のままで、文字は話し終わりから 8〜11 秒遅れて出た例がある（large-v3-turbo を GPU なしで動かしたとき）
+- 遅れているときは、リアルタイム版のモデルを小さいものにするか、Apple の音声入力に戻す（[はじめに](getting-started.md) の「ライブに whisper を選ぶとき」）。議事録に使う確定版の文字起こしは録音後に作り直すので、遅れの影響を受けない
 
 ### リアルタイム要約が失敗した理由
 

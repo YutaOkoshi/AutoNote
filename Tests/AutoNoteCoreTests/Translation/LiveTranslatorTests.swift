@@ -93,16 +93,24 @@ import Testing
             listContinuation.yield([utterances[0]])
             return fake.snapshot.prompts.count == 1
         })
-        // The translator is stuck inside the model; feeding 50 more lists must not block the producer.
-        let clock = ContinuousClock()
-        let elapsed = clock.measure {
-            for n in 1..<utterances.count { listContinuation.yield(Array(utterances.prefix(n + 1))) }
+        // The translator is stuck inside the model. The lists go on being taken all the same, each one before the
+        // next is sent: a reader that waited for the translator would take one more and then stop. (Sending them
+        // all at once would not tell: the stream keeps the newest, and one late read would find it.)
+        var taken = 1
+        for n in 1..<utterances.count {
+            listContinuation.yield(Array(utterances.prefix(n + 1)))
+            guard await pollTranslation(testPatience, { await translator.received(f.id).list?.count == n + 1 }) else { break }
+            taken = n + 1
         }
-        #expect(elapsed < .milliseconds(100))
-        listContinuation.finish()
-        feedsContinuation.finish()
+        #expect(taken == utterances.count)
+        #expect(fake.snapshot.prompts.count == 1)
+        // The stuck translator returns only when its session is cancelled, and the runner cancels its sessions only
+        // while it runs: so it is cancelled before its feeds end. (Ending the feeds first lets the runner finish by
+        // itself now and then; the cancel then reaches nobody and the session is waited for without end.)
         runner.cancel()
         await runner.value
+        listContinuation.finish()
+        feedsContinuation.finish()
         await translator.waitForSessions()
         #expect(fake.snapshot.loaded == nil)
     }

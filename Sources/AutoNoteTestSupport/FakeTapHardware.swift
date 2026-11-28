@@ -8,13 +8,17 @@ public final class FakeTapHardware: TapHardware, @unchecked Sendable {
     private var _calls: [String] = []
     private var _lastTapSpec: TapSpec?
     private var _failOn: String?
-    private var _teardownDelay: Duration = .zero
     private var _startDelay: Duration = .zero
     private var _format: AudioStreamBasicDescription
     private var _othersPlaying: Bool?
     private var _outputRoute: String?
     private var _lastExcludedBundleIDs: [String]?
     private var block: AudioDeviceIOBlock?
+
+    /// Held: `start` does not return until released (like `AudioDeviceStart` waiting on the permission dialog).
+    public let startHold = BlockingHold()
+    /// Held: `stop` and each `destroy*` call do not return until released.
+    public let teardownHold = BlockingHold()
 
     public static let tapID: AudioObjectID = 101
     public static let aggregateID: AudioObjectID = 202
@@ -37,12 +41,7 @@ public final class FakeTapHardware: TapHardware, @unchecked Sendable {
         get { lock.withLock { _failOn } }
         set { lock.withLock { _failOn = newValue } }
     }
-    /// Blocks the calling thread for this long inside `stop` and each `destroy*` call.
-    public var teardownDelay: Duration {
-        get { lock.withLock { _teardownDelay } }
-        set { lock.withLock { _teardownDelay = newValue } }
-    }
-    /// Blocks the calling thread for this long inside `start` (like `AudioDeviceStart` waiting on the permission dialog).
+    /// Blocks the calling thread for this long inside `start` (a bring-up that takes a while; `startHold` for one that hangs).
     public var startDelay: Duration {
         get { lock.withLock { _startDelay } }
         set { lock.withLock { _startDelay = newValue } }
@@ -76,12 +75,13 @@ public final class FakeTapHardware: TapHardware, @unchecked Sendable {
     private func record(_ name: String, teardown: Bool = false) throws {
         let (fail, delay) = lock.withLock { () -> (Bool, Duration) in
             _calls.append(name)
-            return (_failOn == name, teardown ? _teardownDelay : (name == "start" ? _startDelay : .zero))
+            return (_failOn == name, name == "start" ? _startDelay : .zero)
         }
         if delay > .zero {
             let c = delay.components
             Thread.sleep(forTimeInterval: Double(c.seconds) + Double(c.attoseconds) / 1e18)
         }
+        if teardown { teardownHold.wait() } else if name == "start" { startHold.wait() }
         if fail { throw AudioSourceError.coreAudio(call: name, status: -1) }
     }
 
