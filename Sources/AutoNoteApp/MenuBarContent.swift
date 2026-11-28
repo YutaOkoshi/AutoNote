@@ -3,9 +3,15 @@ import AppKit
 import AutoNoteCore
 import SwiftUI
 
-/// The menu-bar label: `waveform` alone when idle (`scripts/e2e-check.sh` item 7b reads that name); the state symbol and the elapsed
-/// time while recording, paused or in the grace period.
+/// The menu-bar label: `waveform` alone when idle; the state symbol and the elapsed time while recording, paused or in
+/// the grace period.
 struct MenuBarLabel: View {
+    /// The status item's accessibility identifier (`AXIdentifier`), the same in every state and every language.
+    /// `scripts/e2e-check.sh` item 7b finds the item by it: the item's name is the symbol's description, which follows
+    /// the OS language (“waveform” in English, 「オーディオ波形」 in Japanese). An identifier is not read aloud, so
+    /// VoiceOver says what it said before.
+    static let accessibilityID = "autonote-status-item"
+
     let shell: AppShell
     @Environment(\.openWindow) private var openWindow
 
@@ -13,6 +19,7 @@ struct MenuBarLabel: View {
         // The label's `onAppear` never fires in a menu-bar extra, but its body is evaluated to draw the icon.
         let _ = shell.install(openWindow)
         content
+            .accessibilityIdentifier(Self.accessibilityID)
     }
 
     @ViewBuilder private var content: some View {
@@ -26,7 +33,7 @@ struct MenuBarLabel: View {
                 Text(title).monospacedDigit()
             }
         } else {
-            // Idle or countdown: `waveform` alone (E2E item 7b reads that name), or `hourglass` while a job runs.
+            // Idle or countdown: `waveform` alone, or `hourglass` while a job runs.
             Image(systemName: p?.symbol ?? "waveform")
         }
     }

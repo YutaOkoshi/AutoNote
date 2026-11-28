@@ -48,7 +48,7 @@ import AutoNoteTestSupport
 
     @Test func idle() {
         let p = make(state: .idle)
-        #expect(p.symbol == "waveform" && p.title == nil)     // E2E（scripts/e2e-check.sh）の項目 7b はアイドル時の項目名 waveform を見る
+        #expect(p.symbol == "waveform" && p.title == nil)     // アイドル時は waveform だけ。E2E の項目 7b は名前（OS の言語で変わる）ではなく固定の AXIdentifier を見る
         #expect(p.items.contains(start) && !p.items.contains(stop) && !p.items.contains(.cancelCountdown) && p.items.suffix(2) == [.settings, .quit])
         #expect(p.items == [start, .openWindow, .openLatestMinutes(enabled: true), .settings, .quit])
     }

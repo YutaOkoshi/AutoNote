@@ -13,8 +13,15 @@
 #                   all      = baseline + repro + verify（既定）。カンマで並べてもよい
 #   --before-app    修正前のアプリ（既定: この Git リポジトリの他の worktree のうち HEAD が origin/main に含まれる
 #                   （未マージの変更が無い）ものの build/AutoNote.app。修正を含まないことも確かめる）。--build-before で origin/main を一時の worktree でビルド
+#                   ★ 修正は v0.7.0 で main に入ったので、いまは既定の探し方でも --build-before でも修正前のアプリは得られない
+#                   （--build-before は数分ビルドしたあと「before app has the fix」で止まる）。修正前と比べるなら、v0.7.0 より前の
+#                   コミットを自分でビルドして --before-app で渡す。修正後だけを見るなら --plan baseline,verify（修正前のアプリは要らない）
 #   --after-app     修正後のアプリ（既定: この worktree の build/AutoNote.app。scripts/build-app.sh release で作る）
-#   --dry-run       何も鳴らさず、つながず、起動しない。前提と、いま安全に始められるかだけを表示する
+#   --dry-run       何も鳴らさず、つながず、起動しない。前提と、いま安全に始められるかだけを表示する。
+#                   足りない前提（修正前・修正後のアプリ、blueutil、Chrome）は ✗ の行で出すだけで、終了コードは 0。
+#                   ✗ があるときはそこで終わり、ヘッドセットの検索と安全条件（safe now）までは見ない。既定の計画は修正前の
+#                   アプリを必要とするので、そこまで見るには --plan baseline,verify か --before-app を付ける
+#                   （ヘッドセットもアプリも無い Mac で通る。scripts/e2e-check.sh の項目 17 が使う）
 # 安全条件（各試行の前に確かめる。満たさなければ 5 分待って確かめ直し、--wait-max 分（既定 120）で諦めて終了コード 75）:
 #   どの入力デバイスも動作中でない / どの出力デバイスも動作中でない（誰も音を出していない）/ /Applications の AutoNote が録音中でない。
 #   /Applications の AutoNote が待機中で動いていれば実験の間だけ終了し、終わったら起動し直す。
@@ -42,7 +49,7 @@ while [[ $# -gt 0 ]]; do
         --bt-name|--plan|--only|--seconds|--repeat-before|--repeat-after|--sound-budget|--wait-max|--port)
             [[ $# -ge 2 ]] || { echo "$1 には値が要ります" >&2; exit 2; }
             PASS+=("$1" "$2"); shift 2 ;;
-        -h|--help) sed -n 2,24p "$0"; exit 0 ;;
+        -h|--help) sed -n 2,31p "$0"; exit 0 ;;
         *) echo "不明なオプション: $1（--help で使い方）" >&2; exit 2 ;;
     esac
 done
@@ -77,7 +84,7 @@ if [[ -z "${BEFORE_APP}" && ${BUILD_BEFORE} == 1 && ${DRY} == 0 ]]; then
 fi
 
 python3 -I "${ROOT}/scripts/bt-verify.py" --root "${ROOT}" --meter "${OUT}/bt-verify-meter" --out "${OUT}" \
-    --before-app "${BEFORE_APP:-${OUT}/no-before-app}" --after-app "${AFTER_APP}" "${PASS[@]}"
+    --before-app "${BEFORE_APP}" --after-app "${AFTER_APP}" "${PASS[@]}"
 code=$?
 [[ ${DRY} == 1 ]] || echo "結果: ${OUT}/summary.md"
 exit ${code}

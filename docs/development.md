@@ -23,7 +23,13 @@ AutoNote をソースからビルドし、テストし、変更を入れるた�
 - テスト: `swift test`
 - アプリ（.app）のビルド: `scripts/build-app.sh [debug|release]`（既定は debug）。成果物は `build/AutoNote.app`、同梱の CLI は `build/AutoNote.app/Contents/MacOS/autonote`
 - 動作確認（E2E）: `scripts/e2e-check.sh`。CLI・ソケット・ファイルで確かめられる範囲を人の手なしで見る。`--quick` は時間のかかる項目（`swift test`・`build-app`・whisper を使う項目）を飛ばし、前回ビルドした `build/AutoNote.app` をそのまま確かめる。`--verbose` で各コマンドの出力をそのまま見せる
-- Bluetooth ヘッドセットの実機確認: `scripts/bt-verify.sh --bt-name <名前の一部>`。ヘッドセットの切断・接続（blueutil）、一時プロファイルの Chrome で鳴らすトーンや WebRTC のループバック、独立したタップでの計測を、人の手なしで回す。修正前と修正後のビルドを比べられる。入力・出力が動作中なら始めない。結果は `summary.md`・`results.json`。`scripts/e2e-check.sh` の項目 17 は、構文・計測プログラムのコンパイル・`--dry-run` だけを見る
+  - インストール済みの AutoNote（`/Applications/AutoNote.app`）が待機中で動いていてもよい。録音中・後処理中は回さず、`/Applications/AutoNote.app/Contents/MacOS/autonote status --json` の `status.recorder.state` が `idle`、`status.queue` が空になるのを待つ（録音中に別のプロセスがマイクを開いたときの影響は確かめていない）。それでも録音中に回した場合、マイクを数秒開く 06.7・09.3・02.1 は、その `recorder.state` が `idle` でない・読めないときに SKIP になる（07.3 がメニューを 1〜2 秒出すのは変わらない）。メニューバーを触る項目（7b・07.3・06.7）は、検査が自分で起動した `build/AutoNote.app` のプロセスだけを pid で指し、同じ名前の別のアプリは開かない・押さない・止めない。別のアプリに届くのは 07.3 の見張りだけ: 自分のメニューを開く前と後に、別の AutoNoteApp のメニューが開いているか（`AXSelected`）を 1 回ずつ読み、その間に新しく開いていたら閉じる操作（`AXCancel`）を送って FAIL にする（宛先の取り違えを見つけるため。利用者が同じときに自分で開いた場合も FAIL になる）
+  - 自分のアプリと確かめられない・アクセシビリティの権限が無いときは SKIP、起動したアプリが落ちている（そのアプリを使う項目すべて）・System Events の一覧に出てこない（1 秒おきに 3 回試す）ときは FAIL になる
+  - 2026-11-28 のこの修正（PR #25）より前に main から切ったブランチは、main を取り込んでから E2E を回す。古い `scripts/e2e-check.sh` は名前でアプリを指すので、インストール済みのアプリのメニューを開いたままにする。複数の worktree で同時に回すのも避ける（07.3 の見張りが互いのメニューを取り違えと見て FAIL にしうる）
+  - GUI を触る項目を足すときは、`tell process "AutoNoteApp"` と名前で指さない・System Events の参照を AppleScript の変数に入れない・キー入力を送らない（理由はスクリプトのコメントにある）。スクリプトの `app_ax` はこの形でステータス項目（メニューバー項目）に命令を送る補助で、ウィンドウなど他の要素には向かない。他の要素を触るなら、同じ形（pid で引く `tell` の入れ子）の補助を足す
+  - 項目 7b と 06.7 は、メニューバー項目の名前（OS の言語で変わる）ではなく、アプリが付ける固定の `AXIdentifier`（`autonote-status-item`。`MenuBarLabel.accessibilityID`）を見る。識別子の無い古い `build/AutoNote.app` では FAIL するので、`--quick` の前に 1 回 `scripts/build-app.sh` で作り直す
+  - 項目 08.1（確定版のメモリが入力の長さに比例しない）は `MallocLargeCache=0` で測る。しきい値と実測値はスクリプトのコメントにある
+- Bluetooth ヘッドセットの実機確認: `scripts/bt-verify.sh --bt-name <名前の一部>`。ヘッドセットの切断・接続（blueutil）、一時プロファイルの Chrome で鳴らすトーンや WebRTC のループバック、独立したタップでの計測を、人の手なしで回す。修正前と修正後のビルドを比べられる。入力・出力が動作中なら始めない。結果は `summary.md`・`results.json`。修正は v0.7.0 で main に入ったので、既定の探し方でも `--build-before` でも修正前のビルドは得られない。修正前と比べるなら v0.7.0 より前のコミットを自分でビルドして `--before-app` で渡し、修正後だけを見るなら `--plan baseline,verify` を使う（既定の計画のままだと `✗ before app missing` で止まり、`--dry-run` も安全条件の表示まで進まない）。実機の実行は、待機中の `/Applications` の AutoNote を実験の間だけ終了して、終わったら起動し直す（録音中なら始めない）。`--dry-run` は何も起動・終了せず、足りない前提（修正前・修正後のアプリなど）を表示するだけで終了コード 0 を返す。`scripts/e2e-check.sh` の項目 17 は、構文・計測プログラムのコンパイル・`--dry-run` だけを見る
 - CI と同じ .app を手元で作るなら `AUTONOTE_BUILD_ARCHS="arm64 x86_64" AUTONOTE_CODESIGN_IDENTITY=- scripts/build-app.sh release`（`AUTONOTE_BUILD_ARCHS` を付けなければホストのアーキテクチャだけ、`AUTONOTE_CODESIGN_IDENTITY` を付けなければ `AutoNote Dev` で署名）
 
 ### `AUTONOTE_DATA_DIR`
@@ -105,7 +111,7 @@ autonote dev translate <transcript.json> [--target auto|ja|en] [--model <gguf>] 
 | `build-whisper-xcframework.sh` | `tools/whisper.cpp`（v1.9.5）と `tools/llama.cpp`（b12359）を 1 つの ggml でビルドし、`tools/whisper.xcframework` を作る（x86_64 は AVX2 付き、arm64 は Metal・Core ML） |
 | `make-dev-cert.sh` | 自己署名の証明書 `AutoNote Dev` をログインキーチェーンに作り、コード署名用に信頼する（冪等） |
 | `e2e-check.sh` | E2E の動作確認 |
-| `tcc-check.sh` | マイク・システム音声録音などの許可（TCC）の持続と許可なしの挙動を、手順を自動化して記録する |
+| `tcc-check.sh` | マイク・システム音声録音などの許可（TCC）の持続と許可なしの挙動を、手順を自動化して記録する。終了・操作するのは `build/AutoNote.app` から起動したプロセスだけ。別の場所の AutoNoteApp（インストール済みのアプリなど）が動いていると、何もせずに終了コード 3 で止まる（録音中・後処理中でないのを確かめて自分で終了し、終わったら起動し直す）。`audio-persist` の初回と `--reset`、`dictation` は `tccutil reset` を実行する。許可は Bundle ID 単位なので、インストール済みの AutoNote の許可も消え、許可し直すまでシステム音声の録音・音声認識が使えない |
 | `setup-whisper.sh` | whisper.cpp を `tools/whisper.cpp` に clone してビルドし、ベンチ用のモデルを取る |
 | `make-sample-audio.sh` | ベンチ用のサンプル音声を `scripts/samples/*.txt` から合成して `tools/samples/` に置く |
 | `bench-whisper.sh` | whisper.cpp のモデル別ベンチを取り、Markdown の表で出す |
