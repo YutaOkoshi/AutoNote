@@ -65,7 +65,7 @@ private struct Fixture {
 }
 
 /// First snapshot matching `condition`; records an issue and returns nil after `timeout` of real time.
-private func waitFor(_ queue: PostProcessingQueue, timeout: Duration = .seconds(10),
+private func waitFor(_ queue: PostProcessingQueue, timeout: Duration = testPatience,
                      sourceLocation: SourceLocation = #_sourceLocation,
                      _ condition: @escaping @Sendable (QueueSnapshot) -> Bool) async -> QueueSnapshot? {
     let found = await withTaskGroup(of: QueueSnapshot?.self) { group in

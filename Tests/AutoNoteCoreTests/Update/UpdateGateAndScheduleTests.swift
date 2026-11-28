@@ -111,7 +111,8 @@ import AutoNoteTestSupport
     }
 
     private func waitFor(_ condition: @Sendable () async -> Bool) async throws {
-        for _ in 0..<400 {
+        let deadline = ContinuousClock.now + testPatience
+        while ContinuousClock.now < deadline {
             if await condition() { return }
             try await Task.sleep(for: .milliseconds(5))
         }

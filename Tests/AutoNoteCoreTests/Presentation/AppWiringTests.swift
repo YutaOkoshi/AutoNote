@@ -191,7 +191,7 @@ private func all<T: Sendable>(_ stream: AsyncStream<T>) async -> [T]? {
         #expect(await slow.events == [])
         // Cancelling run() ends it (the slow listener's sleep is cancelled too).
         running.cancel()
-        try await withTimeout(.seconds(2)) { await running.value }
+        try await withTimeout(testPatience) { await running.value }
     }
 
     // MeetingsAdapter(route: wiring.route).importAudio(3 秒の WAV) → ids == [新しい id]

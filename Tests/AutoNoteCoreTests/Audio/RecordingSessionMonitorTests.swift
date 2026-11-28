@@ -47,7 +47,7 @@ import AutoNoteTestSupport
         await session.waitUntilIdle()
         h.disk.bytes = 400_000_000
         await session.tick()
-        let received = try await withTimeout(.seconds(5)) { await eventsUntilStopped(events) }
+        let received = try await withTimeout(testPatience) { await eventsUntilStopped(events) }
         guard case .stopped(let m, .diskFull) = received.last else {
             Issue.record("expected .stopped(_, .diskFull), got \(String(describing: received.last))"); return
         }
@@ -66,7 +66,7 @@ import AutoNoteTestSupport
         h.disk.bytes = 400_000_000
         h.clock.advance(10); await h.session.tick()
         h.clock.advance(10); await h.session.tick()         // after the stop request: no second stop
-        let received = try await withTimeout(.seconds(5)) { await eventsUntilStopped(events) }
+        let received = try await withTimeout(testPatience) { await eventsUntilStopped(events) }
         #expect(received.filter { if case .diskSpaceLow = $0 { true } else { false } } == [.diskSpaceLow(availableBytes: 900_000_000)])
         #expect(received.filter { if case .stopped(_, .diskFull) = $0 { true } else { false } }.count == 1)
         #expect(await h.session.state == .idle)

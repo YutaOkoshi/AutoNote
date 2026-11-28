@@ -19,7 +19,7 @@ import AutoNoteTestSupport
     }
 
     /// Polls `condition` every few milliseconds until it holds or `timeout` passes (the caller's `#expect` then fails).
-    private func waitUntil(timeout: Duration = .seconds(2), _ condition: () async -> Bool) async {
+    private func waitUntil(timeout: Duration = testPatience, _ condition: () async -> Bool) async {
         let clock = ContinuousClock()
         let deadline = clock.now + timeout
         while await !condition(), clock.now < deadline {

@@ -79,7 +79,7 @@ private struct RetentionFixture {
 }
 
 /// Polls `condition` (real time) until it holds; records an issue on timeout.
-private func eventually(timeout: Duration = .seconds(10), sourceLocation: SourceLocation = #_sourceLocation,
+private func eventually(timeout: Duration = testPatience, sourceLocation: SourceLocation = #_sourceLocation,
                         _ condition: () async -> Bool) async {
     let deadline = ContinuousClock.now + timeout
     while ContinuousClock.now < deadline {

@@ -73,7 +73,7 @@ final class Collected<T: Sendable>: Sendable {
     }
 }
 
-func pollTranslation(_ timeout: Duration = .seconds(2), _ condition: () async -> Bool) async -> Bool {
+func pollTranslation(_ timeout: Duration = testPatience, _ condition: () async -> Bool) async -> Bool {
     let deadline = ContinuousClock.now + timeout
     while ContinuousClock.now < deadline {
         if await condition() { return true }

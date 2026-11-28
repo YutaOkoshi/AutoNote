@@ -92,12 +92,16 @@ import Testing
         let first = summary("古い話題", ["古い決定その一", "古い決定その二"])
         let newest = summary("新しい話題", ["新しい決定"])
         let line = utterance(5, "New line while busy.")
-        // While the first summary text is being translated, a new utterance and a newer summary arrive.
+        // While the first summary text is being translated, a new utterance and a newer summary arrive. The call
+        // returns once both reached the session (not after a fixed sleep, which a busy machine outlasts).
         let fake = FakeTextCompleter(onCall: { n in
             guard n == 2, let r = box.withLock({ $0 }) else { return }
             r.lists.yield([utterance(0, "最初の発話です。", .me), line])
             r.summaries.yield(LiveSummaryUpdate(meetingID: f.id, state: newest, status: .active))
-            try? await Task.sleep(for: .milliseconds(30))
+            _ = await pollTranslation {
+                let received = await r.translator.received(f.id)
+                return received.list?.count == 2 && received.summary == newest
+            }
         })
         let r = await start(f, fake)
         box.withLock { $0 = r }

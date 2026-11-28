@@ -336,7 +336,7 @@ import AutoNoteTestSupport
     private struct WaitTimedOut: Error {}
 
     private func waitUntil(_ condition: () async -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(5)
+        let deadline = ContinuousClock.now + testPatience
         while await !condition() {
             guard ContinuousClock.now < deadline else { throw WaitTimedOut() }
             try await Task.sleep(for: .milliseconds(2))

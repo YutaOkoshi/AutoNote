@@ -185,16 +185,16 @@ private func failed(_ events: [RecordingEvent], _ track: Track) -> Bool {
         let feeder = feedTap(t.factory.hardware, host: t.host) { level.withLock { $0 } }
         await settle(tap, fed: true)
         for _ in 0..<70 { t.host.advance(1); await settle(tap, fed: true) }      // 70 s of zeros
-        #expect(await eventuallyTrue(.seconds(30)) { log.all == ["nothingArrived"] })    // not one sample so far
+        #expect(await eventuallyTrue { log.all == ["nothingArrived"] })    // not one sample so far
         await t.session.tick()                                                   // 70 s without a non-zero sample
         level.withLock { $0 = 0.25 }
-        #expect(await eventuallyTrue(.seconds(30)) { log.all == ["nothingArrived", "again"] })
+        #expect(await eventuallyTrue { log.all == ["nothingArrived", "again"] })
         level.withLock { $0 = 0 }
         let fired = await tap.statistics().callbacks
-        #expect(await eventuallyTrue(.seconds(10)) { (tap.health?.callbacks ?? 0) >= fired + 2 })
+        #expect(await eventuallyTrue { (tap.health?.callbacks ?? 0) >= fired + 2 })
         await settle(tap)
         for _ in 0..<70 { t.host.advance(1); await settle(tap, fed: true) }      // and another 70 s
-        #expect(await eventuallyTrue(.seconds(30)) { log.all.count == 3 })
+        #expect(await eventuallyTrue { log.all.count == 3 })
         feeder.cancel(); await feeder.value
         let m = try await t.session.stop()
         await collector.value

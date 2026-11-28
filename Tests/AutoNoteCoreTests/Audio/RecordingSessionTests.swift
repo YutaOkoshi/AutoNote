@@ -184,7 +184,7 @@ private func t(_ s: Double) -> TimelineTime { TimelineTime(seconds: s) }
         let h = try await SessionHarness.make(mic: FakeAudioSource(track: .mic, startError: AudioSourceError.microphonePermission(.denied)))
         let audio = await h.session.audio(for: .mic)
         await #expect(throws: RecordingError.microphonePermission(.denied)) { try await h.session.start(.init(language: .ja)) }
-        let count = try await withTimeout(.seconds(2)) {
+        let count = try await withTimeout(testPatience) {
             var n = 0
             for await _ in audio { n += 1 }   // finished by the abandoned start
             return n
@@ -289,10 +289,10 @@ private func t(_ s: Double) -> TimelineTime { TimelineTime(seconds: s) }
     @Test func waitUntilIdleReturnsWhenNothingQueued() async throws {
         let h = try await SessionHarness.make()
         let session = h.session
-        try await withTimeout(.seconds(2)) { await session.waitUntilIdle() }
+        try await withTimeout(testPatience) { await session.waitUntilIdle() }
         #expect(await session.state == .idle)
         let id = try await session.start(.init(language: .ja))
-        try await withTimeout(.seconds(2)) { await session.waitUntilIdle() }
+        try await withTimeout(testPatience) { await session.waitUntilIdle() }
         #expect(await session.state == .recording(id))
         #expect(await session.statistics()[.mic]?.chunks == 0)
         _ = try await session.stop()
@@ -307,12 +307,12 @@ private func t(_ s: Double) -> TimelineTime { TimelineTime(seconds: s) }
         h.clock.advance(15)
         try await Task.sleep(for: .milliseconds(100))
         // Only the real ticker can have produced the warning: `tick()` is never called here.
-        let warning = try await withTimeout(.seconds(2)) { () -> SilenceWarning? in
+        let warning = try await withTimeout(testPatience) { () -> SilenceWarning? in
             for await e in events { if case .silenceWarning(let w) = e { return w } }
             return nil
         }
         #expect(warning?.track == .mic)
-        let m = try await withTimeout(.seconds(2)) { try await session.stop() }
+        let m = try await withTimeout(testPatience) { try await session.stop() }
         #expect(m.silenceWarning && m.status == .tooShort)
     }
 

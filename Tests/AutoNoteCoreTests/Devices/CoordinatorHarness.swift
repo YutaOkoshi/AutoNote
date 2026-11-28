@@ -71,7 +71,7 @@ final class CoordinatorHarness: Sendable {
 
     /// Polls `condition` (real time, at most 2 s). Used only where work runs in another task (reattach, `run()`).
     func waitUntil(_ condition: () async -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(2)
+        let deadline = ContinuousClock.now + testPatience
         while await !condition() {
             guard ContinuousClock.now < deadline else { throw WaitTimedOut() }
             try await Task.sleep(for: .milliseconds(2))

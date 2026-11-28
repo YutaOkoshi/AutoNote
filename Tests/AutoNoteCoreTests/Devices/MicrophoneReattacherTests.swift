@@ -179,12 +179,12 @@ enum AttachFailure: String, CaseIterable, Sendable {
 
         _ = try await control.start(device: nil, language: .ja, manual: true)
         await control.stop(reason: .manual)
-        _ = try await withTimeout(.seconds(5)) { await eventsUntilStopped(events) }
+        _ = try await withTimeout(testPatience) { await eventsUntilStopped(events) }
 
         _ = try await control.start(device: nil, language: .ja, manual: true)
         h.disk.bytes = 100_000_000
         await h.session.tick()
-        let received = try await withTimeout(.seconds(5)) { await eventsUntilStopped(events) }
+        let received = try await withTimeout(testPatience) { await eventsUntilStopped(events) }
         guard case .stopped(_, .diskFull) = received.last else {
             Issue.record("expected .stopped(_, .diskFull), got \(String(describing: received.last))"); return
         }
@@ -207,7 +207,7 @@ enum AttachFailure: String, CaseIterable, Sendable {
         _ = try await control.start(device: nil, language: .ja, manual: true)
         h.disk.bytes = 100_000_000
         await h.session.tick()
-        _ = try await withTimeout(.seconds(5)) { await eventsUntilStopped(events) }
+        _ = try await withTimeout(testPatience) { await eventsUntilStopped(events) }
         #expect(await receives(selfStops, within: .seconds(5)))
     }
 
