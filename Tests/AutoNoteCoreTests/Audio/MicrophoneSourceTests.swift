@@ -89,12 +89,14 @@ private final class ChunkCollector: Sendable {
     }
 
     @Test func stopReturnsWithinTimeoutWhenEngineStopBlocks() async throws {
-        let engine = FakeMicrophoneEngine(); engine.stopDelay = .seconds(3)
+        // The engine's stop does not return until released: the verdict is that `stop()` came back meanwhile.
+        let engine = FakeMicrophoneEngine(); engine.stopHold.hold()
+        defer { engine.stopHold.release() }
         let src = MicrophoneSource(deviceUID: nil, clock: .fake(), permission: FakeMicrophonePermission(.authorized),
                                    engine: engine, lookup: FakeDeviceLookup(), stopTimeout: .milliseconds(200))
         try await src.start { _ in }
-        let t0 = ContinuousClock.now; await src.stop()
-        #expect(ContinuousClock.now - t0 < .seconds(1))
+        await src.stop()
+        #expect(!engine.stopHold.expired)
         #expect(!engine.isStopped)
         #expect(await src.lastStopTimedOut)
     }

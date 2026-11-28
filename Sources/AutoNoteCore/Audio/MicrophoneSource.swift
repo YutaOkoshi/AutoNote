@@ -94,6 +94,9 @@ public actor MicrophoneSource: AudioSource {
     private let stopTimeout: Duration
     private let policy: MicrophoneRecoveryPolicy
     private let inputHold: any MicrophoneInputHolding
+    /// The clock of every wait of the recovery (settle, stall, back-off, budget, zeros). Tests move it instead of
+    /// sleeping; how often the watchdog looks (`checkInterval`) stays wall time, as in `ProcessTapSource`.
+    private let now: @Sendable () -> ContinuousClock.Instant
     private let controlQueue = DispatchQueue(label: "com.yutaokoshi.autonote.mic.control", qos: .userInitiated)
 
     private var state: State = .idle
@@ -107,7 +110,7 @@ public actor MicrophoneSource: AudioSource {
     private var watchdog: Task<Void, Never>?
     private var rebuildTask: Task<Void, Never>?
     private var lastRecords = 0
-    private var lastCallbackAt = ContinuousClock.now
+    private var lastCallbackAt: ContinuousClock.Instant
     private var configurationChangedAt: ContinuousClock.Instant?
     private var lastRebuildStartedAt: ContinuousClock.Instant?
     private var consecutiveFailures = 0
@@ -116,17 +119,21 @@ public actor MicrophoneSource: AudioSource {
     private var rebuildsInBudget = 0
     /// Since when callbacks have flowed without a rebuild in between (nil right after a rebuild until the first one).
     private var healthySince: ContinuousClock.Instant?
-    private var nextRebuildAllowedAt = ContinuousClock.now
+    private var nextRebuildAllowedAt: ContinuousClock.Instant
     private var gaveUp = false
     // The zero watch (`policy.zeroTimeout`): its own wait, apart from the stall budget above.
     private var lastNonZeroCallbacks = 0
-    private var lastNonZeroAt = ContinuousClock.now
+    private var lastNonZeroAt: ContinuousClock.Instant
     private var zeroWait = Duration.zero
-    private var nextZeroRebuildAt = ContinuousClock.now
+    private var nextZeroRebuildAt: ContinuousClock.Instant
     private var zeroRebuildsInStretch = 0
     /// Test hooks: when each rebuild for zeros began, and the wait before the next one.
     private(set) var zeroRebuildStarts: [ContinuousClock.Instant] = []
     var currentZeroWait: Duration { zeroWait }
+    /// Test hooks: looks of the watchdog that came to their end (also those that found a rebuild under way and left
+    /// it alone), and whether the watchdog still runs (not after `stop` or after giving up).
+    private(set) var watchdogLooks = 0
+    var isWatching: Bool { watchdog != nil }
     /// Whether `inputHold` holds a Bluetooth input for this recording.
     private var holdingInput = false
 
@@ -136,10 +143,13 @@ public actor MicrophoneSource: AudioSource {
                 lookup: any AudioDeviceLookup = CoreAudioDeviceLookup(),
                 stopTimeout: Duration = .seconds(5),
                 policy: MicrophoneRecoveryPolicy = .standard,
-                inputHold: any MicrophoneInputHolding = NoMicrophoneInputHold()) {
+                inputHold: any MicrophoneInputHolding = NoMicrophoneInputHold(),
+                now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }) {
         self.deviceUID = deviceUID; self.clock = clock; self.voiceProcessing = voiceProcessing
         self.permission = permission; self.engine = engine; self.lookup = lookup; self.stopTimeout = stopTimeout
-        self.policy = policy; self.inputHold = inputHold
+        self.policy = policy; self.inputHold = inputHold; self.now = now
+        let start = now()
+        lastCallbackAt = start; nextRebuildAllowedAt = start; lastNonZeroAt = start; nextZeroRebuildAt = start
     }
 
     /// Safety net when the owner drops a running source without `stop()`: no waiting, the engine stops in the background.
@@ -170,8 +180,8 @@ public actor MicrophoneSource: AudioSource {
         // Held before the engine opens the input, so rebuilds find the headset already on HFP.
         holdingInput = await controlQueue.runAwaiting(timeout: stopTimeout, { hold.hold(deviceID: deviceID) },
                                                       abandoned: { held in if held { hold.release() } }) ?? false
-        let handler: @Sendable () -> Void = { [weak self] in
-            let postedAt = ContinuousClock.now   // before the hop, so a rebuild in between can tell it is stale
+        let handler: @Sendable () -> Void = { [weak self, now] in
+            let postedAt = now()   // before the hop, so a rebuild in between can tell it is stale
             Task { await self?.configurationChanged(postedAt: postedAt) }
         }
         let format: InputFormat
@@ -244,19 +254,19 @@ public actor MicrophoneSource: AudioSource {
 
     private func resetRecoveryState() {
         lastRecords = 0
-        lastCallbackAt = .now
+        lastCallbackAt = now()
         configurationChangedAt = nil
         lastRebuildStartedAt = nil
         consecutiveFailures = 0
         rebuilds = 0
         rebuildsInBudget = 0
         healthySince = nil
-        nextRebuildAllowedAt = .now
+        nextRebuildAllowedAt = now()
         gaveUp = false
         lastNonZeroCallbacks = health?.nonZeroCallbacks ?? 0
-        lastNonZeroAt = .now
+        lastNonZeroAt = now()
         zeroWait = policy.zeroTimeout ?? .zero
-        nextZeroRebuildAt = .now
+        nextZeroRebuildAt = now()
         zeroRebuildsInStretch = 0
     }
 
@@ -268,7 +278,7 @@ public actor MicrophoneSource: AudioSource {
             return
         }
         Self.logger.notice("mic engine configuration changed \(self.engine.routeDescription(), privacy: .public)")
-        configurationChangedAt = .now
+        configurationChangedAt = now()
     }
 
     private func makeWatchdog() -> Task<Void, Never> {
@@ -284,8 +294,9 @@ public actor MicrophoneSource: AudioSource {
 
     /// One look at the engine. Decides whether a rebuild is due; never runs two rebuilds at once.
     private func check() async {
+        defer { watchdogLooks += 1 }
         guard case .running = state, !gaveUp, rebuildTask == nil else { return }
-        let now = ContinuousClock.now
+        let now = self.now()
         let records = pipeline?.ring.recordsWritten ?? 0
         if records != lastRecords {
             lastRecords = records
@@ -369,12 +380,12 @@ public actor MicrophoneSource: AudioSource {
     /// next look finds "engine not running" and the budgeted rebuilds take over.
     private func rebuild(reason: String, forZeros: Bool = false) async {
         defer { rebuildTask = nil }
-        lastRebuildStartedAt = .now
+        lastRebuildStartedAt = now()
         rebuilds += 1
         var backoff = policy.retryDelay
         if forZeros {
             zeroRebuildsInStretch += 1
-            zeroRebuildStarts.append(.now)
+            zeroRebuildStarts.append(now())
         } else {
             rebuildsInBudget += 1
             healthySince = nil
@@ -452,23 +463,23 @@ public actor MicrophoneSource: AudioSource {
             }
             pipeline = Pipeline(ring: ring, drain: drain, format: format)
             lastRecords = 0
-            lastCallbackAt = .now
+            lastCallbackAt = now()
             configurationChangedAt = nil
             if forZeros {
                 zeroWait = min(zeroWait * 2, policy.zeroRetryMax)
-                nextZeroRebuildAt = .now + zeroWait
+                nextZeroRebuildAt = now() + zeroWait
                 if zeroRebuildsInStretch >= policy.maxZeroRebuilds {
                     Self.logger.notice("mic input still delivers only zeros after \(self.zeroRebuildsInStretch, privacy: .public) rebuild(s): taken as muted, no more rebuilds until a non-zero sample arrives")
                 }
             } else {
-                nextRebuildAllowedAt = .now + backoff
+                nextRebuildAllowedAt = now() + backoff
             }
             Self.logger.notice("mic rebuild #\(attempt, privacy: .public) restarted the engine (\(Self.describe(format), privacy: .public))")
         }
     }
 
     private func fail(_ attempt: Int, _ step: String, _ error: any Error, backoff: Duration) {
-        nextRebuildAllowedAt = .now + backoff
+        nextRebuildAllowedAt = now() + backoff
         Self.logger.error("mic rebuild #\(attempt, privacy: .public) failed at \(step, privacy: .public): \(String(describing: error), privacy: .public)")
     }
 
@@ -494,16 +505,16 @@ public actor MicrophoneSource: AudioSource {
     /// Lets the held headset settle on HFP before the engine opens the input again; bounded by `holdSettleTimeout`.
     private func waitForSteadyInput(_ attempt: Int) async {
         let hold = inputHold, need = policy.holdSettle
-        let started = ContinuousClock.now, deadline = started + policy.holdSettleTimeout
-        while ContinuousClock.now < deadline {
+        let started = now(), deadline = started + policy.holdSettleTimeout
+        while now() < deadline {
             if hold.isSteady(for: need) {
-                Self.logger.notice("mic rebuild #\(attempt, privacy: .public): held input steady after \(Self.seconds(.now - started), privacy: .public) s")
+                Self.logger.notice("mic rebuild #\(attempt, privacy: .public): held input steady after \(Self.seconds(self.now() - started), privacy: .public) s")
                 return
             }
             guard case .running = state else { return }
             try? await Task.sleep(for: .milliseconds(25))
         }
-        Self.logger.notice("mic rebuild #\(attempt, privacy: .public): held input not steady after \(Self.seconds(.now - started), privacy: .public) s; starting anyway")
+        Self.logger.notice("mic rebuild #\(attempt, privacy: .public): held input not steady after \(Self.seconds(self.now() - started), privacy: .public) s; starting anyway")
     }
 
     private func releaseHold() async {
