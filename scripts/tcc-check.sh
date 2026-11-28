@@ -17,6 +17,8 @@
 # 終了・操作するのは build/AutoNote.app から起動したプロセスだけ（pid で指す。名前では指さない）。
 # それ以外の場所から起動した AutoNoteApp（インストール済みのアプリなど）が動いていると、何もせずに終了コード 3 で止まる
 # （同じ Bundle ID のアプリが動いていると `open` がどちらを起動するか確かめていないのと、許可の判定が混ざるため）。
+# ★ audio-persist の初回と --reset、dictation は tccutil reset を実行する。許可は Bundle ID 単位なので、インストール済みの
+#   AutoNote（同じ Bundle ID）の許可も消え、利用者が許可し直すまでシステム音声の録音・音声認識が使えなくなる。
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -354,7 +356,7 @@ phase_bt_silence() {
     TODO+=("Shokz（OpenRun Pro 2）と内蔵スピーカーの両方で 1 回ずつ回す: 出力を切り替えて scripts/tcc-check.sh bt-silence（今回の出力: ${dev:-unknown}）")
 }
 
-case "${PHASE}" in audio-persist|audio-denied|dictation|bt-silence) ;; *) sed -n '2,19p' "$0"; exit 2 ;; esac
+case "${PHASE}" in audio-persist|audio-denied|dictation|bt-silence) ;; *) sed -n '2,21p' "$0"; exit 2 ;; esac
 
 # 別の場所から起動した AutoNoteApp（/Applications のインストール済みのアプリなど）が動いていたら、何もせずに止まる。
 # 終了・操作は pid で指すのでそちらには届かないが、同じ Bundle ID のアプリが動いているときに `open` が build/AutoNote.app を
@@ -363,10 +365,13 @@ if [[ -n "$(foreign_apps)" ]]; then
     {
         echo "別の場所から起動した AutoNoteApp が動いているので始めません:"
         foreign_apps | sed 's/^/  pid /'
-        echo "そのアプリを自分で終了してから実行し直してください（このスクリプトは終了させません）。"
-        echo "インストール済みの AutoNote なら、録音中・後処理中でないことを先に確かめます:"
+        echo "そのアプリを自分で終了してから実行し直してください（このスクリプトは終了も起動もしません）。"
+        echo "インストール済みの AutoNote なら、録音中・後処理中でないことを先に確かめてから終了します:"
         echo "  /Applications/AutoNote.app/Contents/MacOS/autonote status --json  →  status.queue が空、status.recorder.state が idle"
-        echo "確認が終わったら起動し直します（open -g /Applications/AutoNote.app）。起動し直すまで自動録音は動きません。"
+        echo "  osascript -e 'tell application id \"${BUNDLE_ID}\" to quit'"
+        echo "確認が終わったら、自分で起動し直してください: open -g /Applications/AutoNote.app（起動し直すまで自動録音は動きません）"
+        echo "★ audio-persist の初回と --reset、dictation は tccutil reset を実行します。許可は Bundle ID 単位なので、"
+        echo "  インストール済みの AutoNote の許可も消え、許可し直すまでシステム音声の録音・音声認識が使えなくなります。"
     } >&2
     exit 3
 fi
@@ -379,7 +384,7 @@ case "${PHASE}" in
     audio-denied) phase_audio_denied ;;
     dictation) phase_dictation ;;
     bt-silence) phase_bt_silence ;;
-    *) sed -n '2,19p' "$0"; exit 2 ;;
+    *) sed -n '2,21p' "$0"; exit 2 ;;
 esac
 
 echo

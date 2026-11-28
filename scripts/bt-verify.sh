@@ -18,7 +18,9 @@
 #                   コミットを自分でビルドして --before-app で渡す。修正後だけを見るなら --plan baseline,verify（修正前のアプリは要らない）
 #   --after-app     修正後のアプリ（既定: この worktree の build/AutoNote.app。scripts/build-app.sh release で作る）
 #   --dry-run       何も鳴らさず、つながず、起動しない。前提と、いま安全に始められるかだけを表示する。
-#                   足りない前提（修正前・修正後のアプリ、blueutil、Chrome）は ✗ の行で出すだけで、終了コードは 0
+#                   足りない前提（修正前・修正後のアプリ、blueutil、Chrome）は ✗ の行で出すだけで、終了コードは 0。
+#                   ✗ があるときはそこで終わり、ヘッドセットの検索と安全条件（safe now）までは見ない。既定の計画は修正前の
+#                   アプリを必要とするので、そこまで見るには --plan baseline,verify か --before-app を付ける
 #                   （ヘッドセットもアプリも無い Mac で通る。scripts/e2e-check.sh の項目 17 が使う）
 # 安全条件（各試行の前に確かめる。満たさなければ 5 分待って確かめ直し、--wait-max 分（既定 120）で諦めて終了コード 75）:
 #   どの入力デバイスも動作中でない / どの出力デバイスも動作中でない（誰も音を出していない）/ /Applications の AutoNote が録音中でない。
@@ -47,7 +49,7 @@ while [[ $# -gt 0 ]]; do
         --bt-name|--plan|--only|--seconds|--repeat-before|--repeat-after|--sound-budget|--wait-max|--port)
             [[ $# -ge 2 ]] || { echo "$1 には値が要ります" >&2; exit 2; }
             PASS+=("$1" "$2"); shift 2 ;;
-        -h|--help) sed -n 2,29p "$0"; exit 0 ;;
+        -h|--help) sed -n 2,31p "$0"; exit 0 ;;
         *) echo "不明なオプション: $1（--help で使い方）" >&2; exit 2 ;;
     esac
 done
