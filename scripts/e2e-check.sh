@@ -16,6 +16,7 @@
 # 同じ名前のインストール済みのアプリ（/Applications/AutoNote.app）が動いていても、そちらは開かない・押さない・止めない。
 # そちらに届くのは 07.3 の見張りだけ: メニューが開いているか（AXSelected）を、自分のメニューを開く前と後に 1 回ずつ読む。
 # 07.3 の間にそちらのメニューが新しく開いていたときに限り、閉じる操作（AXCancel）を送って FAIL にする（宛先の取り違え）。
+# そちらが録音中のとき（autonote status --json の recorder.state が idle でない・読めない）は、マイクを開く 06.7・09.3・02.1 を SKIP にする。
 #
 # 各項目は PASS / FAIL / SKIP の 1 行を出す。最後に集計し、FAIL が 1 つでもあれば終了コード 1。
 # 機材・許可ダイアログ・ネットワーク・GUI に依存する項目は、条件がそろわなければ SKIP（失敗にしない）。
@@ -34,7 +35,7 @@ for arg in "$@"; do
     case "${arg}" in
         --quick) QUICK=1 ;;
         --verbose) VERBOSE=1 ;;
-        -h|--help) sed -n "2,25p" "$0"; exit 0 ;;
+        -h|--help) sed -n "2,26p" "$0"; exit 0 ;;
         *) echo "不明な引数: ${arg}（使えるのは --quick と --verbose）" >&2; exit 2 ;;
     esac
 done
@@ -145,7 +146,8 @@ end timeout
 OSA
 }
 # app_ax <秒> <tell の中身>: run_timeout と同じ（出力は LAST_LOG、時間切れは 124）。送る前に APP_PID を確かめる:
-#   - 動いていない（落ちた）→ 何も送らず 1。呼び手は FAIL にする（SKIP の理由にはしない）
+#   - 動いていない（落ちた）→ 何も送らず 1。呼び手は FAIL にする（SKIP の理由にはしない。項目の前に落ちていれば、
+#     先に app_or_skip が FAIL にする）
 #   - 動いているが自分の起動したアプリと確かめられない → 何も送らず、AX_NOT_OURS の行を LAST_LOG に書いて 1（呼び手が SKIP）
 # System Events の一覧に pid がまだ無いとき（起動直後や負荷の高いとき。何も送られていない）は 1 秒おいて 3 回まで試し、
 # それでも無ければ失敗のまま返す（SKIP にしない: GUI のプロセスとして立ち上がらない退行を見逃さないため）
@@ -469,10 +471,38 @@ end timeout" >/dev/null 2>&1
     pass "「録音開始」あり、「保存先が見つかりません」なし、メニューは閉じた"
 }
 
-# 06.3〜06.6 の前提: 項目 7 で起動したアプリが生きていること。生きていなければ skip して 1 を返す
+# 起動したアプリを使う項目の前提: 項目 7 で起動したアプリが生きていること。使えなければ skip か fail を出して 1 を返す。
+#   - 起動していない（項目 7 が SKIP・FAIL だった、06.6 が止めた後）→ SKIP
+#   - 起動したのに落ちている → FAIL（SKIP にすると、途中で落ちる退行が「0 failed」で通ってしまう。app.log の末尾は最初の 1 回だけ出す）
+#   - 動いているが自分の起動したアプリと確かめられない → SKIP（別のアプリには当てない）
+APP_DEATH_SHOWN=0
 app_or_skip() {
+    if [[ -z "${APP_PID}" ]]; then skip "アプリが起動していない"; return 1; fi
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        if [[ "${APP_DEATH_SHOWN}" -eq 0 ]]; then LAST_LOG="${WORK}/app.log"; APP_DEATH_SHOWN=1; else LAST_LOG=""; fi
+        fail "項目 7 で起動したアプリ（pid ${APP_PID}）が落ちている"; return 1
+    fi
     if app_is_ours; then return 0; fi
-    skip "アプリが起動していない"; return 1
+    skip "pid ${APP_PID} を、項目 7 で起動したアプリとして特定できない（同じ名前の別のアプリには当てない）"; return 1
+}
+
+# マイクを開く項目（06.7・09.3・02.1）の前提: インストール済みの AutoNote が録音中でないこと。録音中（か、動いているのに
+# 状態を読めない）なら skip して 1 を返す。利用者の録音の最中に別のプロセスがマイクを開いたときの影響は確かめていないため。
+# 状態は同梱の CLI の `status --json`（recorder.state）で読む。そのアプリが動いていないときは呼ばない（呼ぶとアプリが起動する）
+INSTALLED_APP="/Applications/AutoNote.app"
+mic_or_skip() {
+    local pid state="" log="${LAST_LOG}"
+    pid="$(LC_ALL=C ps -axo pid=,comm= | BIN="${INSTALLED_APP}/Contents/MacOS/AutoNoteApp" \
+        awk '{ p = $1; sub(/^ *[0-9]+ +/, ""); if ($0 == ENVIRON["BIN"]) { print p; exit } }')"
+    [[ -n "${pid}" ]] || return 0
+    if run_timeout 5 env -u AUTONOTE_DATA_DIR "${INSTALLED_APP}/Contents/MacOS/autonote" status --json; then
+        state="$(plutil -extract status.recorder.state raw -o - "${LAST_LOG}" 2>/dev/null)"
+    fi
+    LAST_LOG="${log}"
+    [[ "${state}" == "idle" ]] && return 0
+    if [[ -n "${state}" ]]; then skip "インストール済みの AutoNote（pid ${pid}）が待機中でない（recorder.state ${state}）ので、マイクを開かない"
+    else skip "インストール済みの AutoNote（pid ${pid}）が録音中かどうかを読めない（status --json が 5 秒で答えない）ので、マイクを開かない"; fi
+    return 1
 }
 
 check_cli_app_not_running() {
@@ -549,6 +579,7 @@ check_recording_main_thread() {
     CURRENT="06.7 録音開始のあと主スレッドが回り続けない"
     app_or_skip || return
     cli_or_skip || return
+    mic_or_skip || return
     # 2026-10-27: メニューバーのラベルの TimelineView が SwiftUI の更新を抜けられず、録音開始から終了まで主スレッドが
     # 100 % で回り、ウィンドウもアクセシビリティも固まった。録音を始めて 3 秒後の CPU と、System Events から
     # メニューバー項目が読めることで再発を見る。マイク許可が無い環境では start が失敗するので skip
@@ -580,6 +611,7 @@ check_live_summary_default_off() {
     CURRENT="09.3 リアルタイム要約は既定オフ（録音しても要約せず通常どおり止まる）"
     app_or_skip || return
     cli_or_skip || return
+    mic_or_skip || return
     # 項目 7 の settings.json は live_summary_enabled を書かない（既定 false）。マイク許可が無い環境では start が失敗するので skip
     # 同じ app.log には 06.7 の録音の off 行もあるので、start 前の件数から 1 件以上増えることを見る
     local offs_before; offs_before="$(grep -c "live summary: off (" "${WORK}/app.log" 2>/dev/null)"; offs_before="${offs_before:-0}"
@@ -783,7 +815,7 @@ check_bt_verify_script() {
     grep -q '^✗ after app lacks the fix' "${LAST_LOG}" \
         && { fail "build/AutoNote.app に bt-verify が探す目印（mic rebuild #）が無い（実機の確認が始まらない）"; return; }
     local lacking; lacking="$(grep '^✗ ' "${LAST_LOG}" | sed -E 's/^✗ //; s/: .*//' | awk 'BEGIN { ORS = "" } NR > 1 { print "、" } { print }')"
-    LAST_LOG=""; pass "--dry-run が挙げた不足: ${lacking:-なし}（実機の Bluetooth での実行は scripts/bt-verify.sh --bt-name <名前の一部>）"
+    LAST_LOG=""; pass "--dry-run が挙げた不足: ${lacking:-なし}（実機の Bluetooth での実行は scripts/bt-verify.sh --bt-name <名前の一部> --plan baseline,verify。修正前との比較は --before-app）"
 }
 
 check_render_fixture() {
@@ -808,6 +840,7 @@ check_render_fixture_detects_diff() {
 check_dev_record() {
     CURRENT="02.1 dev record で 5 秒の WAV と manifest"
     cli_or_skip || return
+    mic_or_skip || return
     run "${AUTONOTE_CLI}" dev record --check-permission
     grep -q '"mic_permission":"authorized"' "${LAST_LOG}" || { skip "マイク許可がない（責任プロセス: ターミナル）"; return; }
     local out="${WORK}/rec" code
@@ -1031,7 +1064,8 @@ check_dev_transcribe_whisper_resampled() {
 
 # 08.1: 確定版の文字起こしは窓（約 10 分）ごとに読むので、メモリは入力の長さに比例して増えない。それを 10 分（1 窓）と
 # 60 分（6 窓）の peak footprint の差で見る。検出したいのは次の 2 つ:
-#   - ファイル全体を一度に持つ実装への後戻り: 1 窓の中では 12.6 MiB/分 増える（300〜717 秒の 1 窓で実測）ので、60 分なら +630 MiB
+#   - ファイル全体を一度に持つ実装への後戻り: 1 窓の中では、この項目の測り方（MallocLargeCache=0）で約 8 MiB/分 増える
+#     （300 秒と 717 秒の 1 窓で実測。216〜219 → 273 MiB）ので、60 分なら約 +400 MiB（付けない条件では 12.6 MiB/分、+630 MiB）
 #   - 窓ごとに何かを持ち続ける漏れ: 60 分は 5 窓多いので、1 窓あたり約 10 MiB 以上の漏れで 100 MiB を超える
 #     （漏れの無いときの差が最小の 53.5 でも、(100 − 53.5) ÷ 5 = 9.3 MiB で超える）
 #     1 窓の Int16 の PCM が 18 MiB、Float の標本が 37 MiB、メルが 18 MiB なので、どれを持ち続けても超える
@@ -1078,7 +1112,7 @@ check_batch_memory_flat() {
     if [[ -z "${last}" || "${wi}" != "${wn}" || "${wn}" -lt 5 ]]; then fail "60 分: 最後の窓の行が「窓 N/N」（N >= 5）でない（「${last}」）"; return; fi
     if [[ -z "${rss10}" || -z "${rss60}" || -z "${fp10}" || -z "${fp60}" ]]; then fail "max RSS / peak footprint を読めない（RSS ${rss10}/${rss60}, footprint ${fp10}/${fp60}）"; return; fi
     local detail="RSS $((rss10 / 1048576))→$((rss60 / 1048576)) MiB, footprint $((fp10 / 1048576))→$((fp60 / 1048576)) MiB（差 $(((fp60 - fp10) / 1048576)) MiB、窓 ${wn} 個）"
-    if (( fp60 - fp10 > 104857600 )); then fail "peak footprint の差が 100 MiB を超えた: ${detail}"
+    if (( fp60 - fp10 > 104857600 )); then fail "peak footprint の差が 100 MiB を超えた: ${detail}。切り分けは check_batch_memory_flat の上のコメント（まず MallocLargeCache=0 が効いているかを見る）"
     elif (( rss60 - rss10 > 262144000 )); then fail "max RSS の差が 250 MiB を超えた: ${detail}"
     else pass "${detail}"; fi
 }
