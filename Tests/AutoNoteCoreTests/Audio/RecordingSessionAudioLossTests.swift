@@ -68,7 +68,7 @@ private func failed(_ events: [RecordingEvent], _ track: Track) -> Bool {
 
 /// What the recording says afterwards about system audio that did not arrive (`manifest.audio_loss`), and what it
 /// must not say about plain silence.
-@Suite struct RecordingSessionAudioLossTests {
+@Suite(.timeLimit(.minutes(10))) struct RecordingSessionAudioLossTests {
     /// Another app plays the whole time, the tap calls back, every sample is exactly zero.
     @Test func systemAudioThatStaysZeroWhileAnotherProcessPlaysIsALoss() async throws {
         let t = try TapSession(); t.factory.hardware.othersPlaying = true
@@ -185,16 +185,16 @@ private func failed(_ events: [RecordingEvent], _ track: Track) -> Bool {
         let feeder = feedTap(t.factory.hardware, host: t.host) { level.withLock { $0 } }
         await settle(tap, fed: true)
         for _ in 0..<70 { t.host.advance(1); await settle(tap, fed: true) }      // 70 s of zeros
-        #expect(await eventuallyTrue { log.all == ["nothingArrived"] })    // not one sample so far
+        #expect(await soon { log.all == ["nothingArrived"] })    // not one sample so far
         await t.session.tick()                                                   // 70 s without a non-zero sample
         level.withLock { $0 = 0.25 }
-        #expect(await eventuallyTrue { log.all == ["nothingArrived", "again"] })
+        #expect(await soon { log.all == ["nothingArrived", "again"] })
         level.withLock { $0 = 0 }
         let fired = await tap.statistics().callbacks
-        #expect(await eventuallyTrue { (tap.health?.callbacks ?? 0) >= fired + 2 })
+        #expect(await soon { (tap.health?.callbacks ?? 0) >= fired + 2 })
         await settle(tap)
         for _ in 0..<70 { t.host.advance(1); await settle(tap, fed: true) }      // and another 70 s
-        #expect(await eventuallyTrue { log.all.count == 3 })
+        #expect(await soon { log.all.count == 3 })
         feeder.cancel(); await feeder.value
         let m = try await t.session.stop()
         await collector.value
@@ -238,7 +238,7 @@ private func failed(_ events: [RecordingEvent], _ track: Track) -> Bool {
         while !log.all.contains("failed"), steps < 60 { t.host.advance(3); await settle(tap, or: { log.all.contains("failed") }); steps += 1 }
         #expect(log.all.contains("failed"))
         let feeder = feedTap(t.factory.hardware, host: t.host) { 0.25 }
-        #expect(await eventuallyTrue { log.all.contains("recovered") })
+        #expect(await soon { log.all.contains("recovered") })
         for _ in 0..<5 { t.host.advance(1); await settle(tap, fed: true) }
         feeder.cancel(); await feeder.value
         let m = try await t.session.stop()

@@ -6,10 +6,13 @@ import AutoNoteTestSupport
 @Suite struct TimerSchedulingTests {
     private struct WaitTimedOut: Error {}
 
-    private func waitUntil(_ condition: () -> Bool) async throws {
+    private func waitUntil(sourceLocation: SourceLocation = #_sourceLocation, _ condition: () -> Bool) async throws {
         let deadline = ContinuousClock.now + testPatience
         while !condition() {
-            guard ContinuousClock.now < deadline else { throw WaitTimedOut() }
+            guard ContinuousClock.now < deadline else {
+                Issue.record("waitUntil: the condition did not hold within \(testPatience)", sourceLocation: sourceLocation)
+                throw WaitTimedOut()
+            }
             try await Task.sleep(for: .milliseconds(2))
         }
     }

@@ -93,16 +93,10 @@ import Testing
             listContinuation.yield([utterances[0]])
             return fake.snapshot.prompts.count == 1
         })
-        // The translator is stuck inside the model; feeding 50 more lists must not block the producer. `yield` does
-        // not wait, so getting past the loop is the producer flowing; the stream kept the newest list and dropped
-        // the ones before it, and the translator is still inside its first call.
-        var last: AsyncStream<[Utterance]>.Continuation.YieldResult?
-        for n in 1..<utterances.count { last = listContinuation.yield(Array(utterances.prefix(n + 1))) }
-        guard case .dropped(let replaced) = last else {
-            Issue.record("the newest list should replace the one waiting, got \(String(describing: last))")
-            return
-        }
-        #expect(replaced.count == utterances.count - 1)
+        // The translator is stuck inside the model. The lists go on being taken all the same: the newest of 50 more
+        // reaches the session while the translator is still inside its first call.
+        for n in 1..<utterances.count { listContinuation.yield(Array(utterances.prefix(n + 1))) }
+        #expect(await pollTranslation { await translator.received(f.id).list?.count == utterances.count })
         #expect(fake.snapshot.prompts.count == 1)
         listContinuation.finish()
         feedsContinuation.finish()

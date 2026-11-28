@@ -96,6 +96,10 @@ private final class LogLines: Sendable {
     }
 
     // MARK: - Backlog (a decoder slower than the audio). No clock: the fake decoder waits until it is released.
+    //
+    // `speak` gives 3 s of speech, so the planner asks for a partial result at 2 s first. That partial is what the
+    // held decoder is stuck in, and every commit of these tests waits behind it: none of them is "in work". The one
+    // test where a commit itself is in work is `theCommitInWorkCountsInTheDepth` (speech too short for a partial).
 
     /// One utterance that ends in silence: one commit (3 s of audio in a 4 s stretch).
     private func speak(_ t: WhisperLiveTranscriber, _ count: Int, from first: Int = 0) async {
@@ -114,7 +118,7 @@ private final class LogLines: Sendable {
         await speak(t, 3)
         #expect(log.all.isEmpty)                                    // 3 件までは出さない
         await speak(t, 1, from: 3)
-        // 4 件目の確定の終わり（15 秒）− 復号中の窓の終わり（3 秒）: 先頭の窓の後ろで待っている音声
+        // 4 件目の確定の終わり（15 秒）− 先頭の確定の終わり（3 秒）: 先頭の窓の後ろで待っている音声
         #expect(log.all == ["live backlog: track=mic depth=4 lag=12.0s"])
         await speak(t, 3, from: 4)
         #expect(log.all.count == 1)                                 // 5〜7 件では出さない
@@ -141,16 +145,30 @@ private final class LogLines: Sendable {
         #expect(log.all.first?.hasSuffix(" max_depth=3 max_lag=8.0s") == true)
     }
 
-    /// 待ちが無ければ遅れは 0。復号中の 1 件は深さに数えるが、その後ろに何も無ければ遅れではない。
-    @Test func nothingWaitingBehindTheWindowInWorkIsNoLag() async throws {
+    /// 確定が 1 件だけなら、その後ろで待つ音声は無いので遅れは 0（その 1 件は、止まっている部分結果の後ろで待っている）。
+    @Test func oneCommitWithNothingBehindItIsNoLag() async throws {
         let core = FakeWhisperCore(fixedText: "テスト"); core.hold()
         let log = LogLines(); let t = WhisperLiveTranscriber(core: core, log: log.sink)
         let s = try await t.start(language: .ja, hints: [])
-        await speak(t, 1)                                           // 0〜3 秒を復号中、待ちなし
+        await speak(t, 1)                                           // 確定 0〜3 秒が 1 件、その後ろは無し
         #expect(await t.worstBacklog == .init(depth: 1, lagSeconds: 0))
-        await speak(t, 1, from: 1)                                  // 4〜7 秒が後ろで待つ: 7 − 3
+        await speak(t, 1, from: 1)                                  // 確定 4〜7 秒が後ろに付く: 7 − 3
         #expect(await t.worstBacklog == .init(depth: 2, lagSeconds: 4))
         core.release(); await t.finish(); _ = await collect(s)
+    }
+
+    /// 復号中の確定も深さに数える。1 秒の発話は部分結果（2 秒ごと）が出ないので、止まるのは確定そのもの。
+    @Test func theCommitInWorkCountsInTheDepth() async throws {
+        let core = FakeWhisperCore(fixedText: "テスト"); core.hold()
+        let log = LogLines(); let t = WhisperLiveTranscriber(core: core, log: log.sink)
+        let s = try await t.start(language: .ja, hints: [])
+        await feed(t, tone(1) + silence(1), at: 0)                  // 確定 0〜1 秒
+        try await waitUntil { core.runCount == 1 }                  // 復号がそれを取った: 列は空で、復号中が 1 件
+        #expect(core.requests.first?.samples.count == Int(PCMAudio.sampleRate))   // 1 秒ぶん = 確定（部分結果ではない）
+        await feed(t, tone(1) + silence(1), at: 2)                  // 確定 2〜3 秒が待つ: 復号中の 1 件 + 待ち 1 件
+        #expect(await t.worstBacklog == .init(depth: 2, lagSeconds: 2))   // 3 − 復号中の窓の終わり（1 秒）
+        core.release(); await t.finish()
+        #expect(await collect(s).filter(\.isFinal).count == 2)
     }
 
     /// 追いついている復号: 確定を 1 件ずつ読み切ってから次を話す。停止の行は出るが、遅れは 0 のまま。

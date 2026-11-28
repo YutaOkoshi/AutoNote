@@ -1,6 +1,7 @@
 import AutoNoteCore
 import AutoNoteTestSupport
 import Foundation
+import Testing
 import Synchronization
 
 /// Shared audio/stream helpers for the transcription tests (and the one module-wide `waitUntil`).
@@ -37,11 +38,15 @@ func collect<T: Sendable>(_ stream: AsyncStream<T>) async -> [T] {
 
 struct WaitTimedOut: Error {}
 
-/// Polls `condition` every 10 ms until it holds (`testPatience` ends a wait that would never end).
-func waitUntil(_ condition: () async -> Bool) async throws {
+/// Polls `condition` every 10 ms until it holds (`testPatience` ends a wait that would never end, with an issue at
+/// the line of the call: a test has several of these, and the thrown error alone does not say which one).
+func waitUntil(sourceLocation: SourceLocation = #_sourceLocation, _ condition: () async -> Bool) async throws {
     let deadline = ContinuousClock.now + testPatience
     while await !condition() {
-        guard ContinuousClock.now < deadline else { throw WaitTimedOut() }
+        guard ContinuousClock.now < deadline else {
+            Issue.record("waitUntil: the condition did not hold within \(testPatience)", sourceLocation: sourceLocation)
+            throw WaitTimedOut()
+        }
         try await Task.sleep(for: .milliseconds(10))
     }
 }

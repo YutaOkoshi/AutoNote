@@ -67,11 +67,13 @@ import AutoNoteTestSupport
         // first); a time limit here would also fail when the machine merely stalls.
         let dir = try TemporaryDirectory.make()
         let pidFile = dir.appending(path: "pid")
+        let start = ContinuousClock.now
         let result = try await FoundationProcessRunner().run(
             executable: sh, arguments: ["-c", "echo $$ > \"$0\"; exec sleep 300", pidFile.path], stdin: Data(),
             workingDirectory: dir, environment: env, timeout: .seconds(1))
         #expect(result.timedOut == true)
         #expect(result.exitCode == SIGTERM)
+        #expect(ContinuousClock.now - start < testPatience)      // the 1 s given, not some longer wait of its own
         let pid = try #require(pid_t(String(decoding: try Data(contentsOf: pidFile), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)))
         #expect(kill(pid, 0) != 0)
@@ -113,11 +115,14 @@ import AutoNoteTestSupport
         }
         let pid = try #require(pid_t(String(decoding: try Data(contentsOf: pidFile), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)))
+        let cancelled = ContinuousClock.now
         task.cancel()
-        // What happened, not how fast: it came back with `CancellationError` (left alone, the child would have
-        // been stopped by the runner's own timeout, which ends in a result, not in this error) and the child is gone.
         await #expect(throws: CancellationError.self) { try await task.value }
         #expect(kill(pid, 0) != 0)
+        // The error and the missing child alone do not show that the cancel stopped it: left alone, the runner's
+        // own timeout stops the child, and a task cancelled by then still ends in `CancellationError`. That timeout
+        // is `testPatience` here, so "the cancel did it" is: it came back before the timeout could have.
+        #expect(ContinuousClock.now - cancelled < testPatience)
     }
 
     @Test func cancellationAfterTimeoutStillThrowsCancellationError() async throws {

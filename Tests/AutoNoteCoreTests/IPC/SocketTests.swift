@@ -278,9 +278,10 @@ private enum RawSocket {
         let error = await clientError(client(t, launcher: launcher, launchTimeout: .seconds(1)))
         let elapsed = ContinuousClock.now - started
         // It gave up (it came back with `.timedOut`), and not before the second it was given. How much later is up
-        // to the machine, so there is no upper limit.
+        // to the machine; the limit only tells the second it was given from a much longer wait of its own.
         #expect(error == .timedOut)
         #expect(elapsed >= .milliseconds(900))
+        #expect(elapsed < testPatience)
         #expect(launcher.launches == 1)
     }
 

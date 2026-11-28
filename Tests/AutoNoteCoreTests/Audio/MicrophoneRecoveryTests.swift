@@ -37,9 +37,9 @@ func eventuallyTrue(_ limit: Duration = testPatience, _ condition: () async -> B
 }
 
 func makeRecoveringMicSource(_ engine: FakeMicrophoneEngine, _ clock: MeetingClock, policy: MicrophoneRecoveryPolicy = micRecoveryTestPolicy,
-                             time: StepClock) -> MicrophoneSource {
+                             time: StepClock, stopTimeout: Duration = .seconds(5)) -> MicrophoneSource {
     MicrophoneSource(deviceUID: nil, clock: clock, permission: FakeMicrophonePermission(.authorized), engine: engine,
-                     lookup: FakeDeviceLookup(), policy: policy, now: time.now)
+                     lookup: FakeDeviceLookup(), stopTimeout: stopTimeout, policy: policy, now: time.now)
 }
 
 /// Pushes 50 ms of input every 5 ms of wall time, advancing host time, until cancelled. How fast it pushes says
@@ -208,7 +208,9 @@ func feed(_ engine: FakeMicrophoneEngine, host: FakeHostClock, from: Double) -> 
     @Test func stopDuringARebuildLeavesTheEngineStopped() async throws {
         let engine = FakeMicrophoneEngine()
         let time = StepClock()
-        let src = makeRecoveringMicSource(engine, .fake(), time: time)
+        // `stopTimeout` is real time and the rebuild's `engine.stop()` is held below: with the 5 s of the other tests,
+        // a machine that stalls between the hold and the release lets the rebuild give up on the stop and go on.
+        let src = makeRecoveringMicSource(engine, .fake(), time: time, stopTimeout: testPatience)
         try await src.start { _ in }
         engine.stopHold.hold()                                   // the rebuild pauses in its first step, stopping the old engine
         defer { engine.stopHold.release() }
