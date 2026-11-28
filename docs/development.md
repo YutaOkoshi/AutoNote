@@ -44,7 +44,7 @@ AutoNote をソースからビルドし、テストし、変更を入れるた�
 - ライブ文字起こしの開始の行（`LiveTranscriptionWiring`）は、実際に動いたエンジンを `engine:` で示す（`EngineChoice.displayName`）
 - ライブ要約の `claude -p` が失敗すると、`ClaudeLiveSummarizer` カテゴリに `live claude -p failed: <種類> (exit N): <claude のエラー文>` が `error` で出る。エラー文は `ClaudeResultClassifier.failureText`（エラーエンベロープの `subtype`・`result`・`errors` と stderr）で、`claude_env` の値（8 文字以上）と `sk-…` 形のトークンを `***` にしてから 1 行・200 文字に切る（切ってから伏せると、切れ目にかかった値が残る）。指示文・文字起こし・成功時の出力は出さない。文が何も無いときは出力の形（バイト数）だけ、`claude` を起動できなかったときは `live claude -p did not run: <型> (<domain> <code>)` が出る。会議 ID はこの行には無い（スケジューラの `live summary: failed (...) (<会議 ID>)` は `NSLog` で出るので、時刻で突き合わせる）
 - 録音の最初の確認（`checkReady`: 実行ファイルの確認と `claude auth status --json`）や `LiveSummarizerFactory` が失敗すると、スケジューラはその録音の要約を止めて以後呼ばない。このときは `live claude -p unavailable: <種類> (<理由>)` が同じカテゴリに出る（確認の終了コード、JSON の `loggedIn`、stderr。stdout と `claude` のパスは出さない）
-- ライブの whisper の復号が音声に追いつかないと、`WhisperLiveTranscriber` カテゴリに `live backlog: track=mic depth=4 lag=15.0s` が `notice` で出る（`depth` は復号待ちの確定窓の数、`lag` は復号中の窓の始まりから最新の窓の終わりまでの音声の秒数。3 を超えたときと、その後は倍になるたび）。列が空に戻ると `live backlog cleared: …`、停止時には必ず `live backlog at stop: … max_depth=… max_lag=…` が出る。窓は捨てない（見えるようにするだけ）。`autonote dev transcribe --engine whisper-live --realtime` の `summary` にも `max_backlog`・`max_lag_seconds` が入る
+- ライブの whisper の復号が音声に追いつかないと、`WhisperLiveTranscriber` カテゴリに `live backlog: track=mic depth=4 lag=15.0s` が `notice` で出る（`depth` は復号待ちの確定窓の数、`lag` は復号中の窓の始まりから最新の窓の終わりまでの音声の秒数。3 を超えたときと、その後は倍になるたび）。列が空に戻ると `live backlog cleared: …`、停止時には（音声が 1 度でも届いていれば）`live backlog at stop: … max_depth=… max_lag=…` が出る。窓は捨てない（見えるようにするだけ）。`autonote dev transcribe --engine whisper-live --realtime` の `summary` にも `max_backlog`・`max_lag_seconds` が入る
 - `swift test` と `autonote` の CLI も同じ行を本物のログに書く（テストは架空の値を使う）。アプリの行だけを読むなら、条件に `AND process == "AutoNoteApp"` を足す
 
 ## リポジトリ構成
@@ -71,6 +71,7 @@ AutoNote をソースからビルドし、テストし、変更を入れるた�
 - 音声はローカルから出さない。外部に渡すのは `claude -p` への文字起こしテキストだけ
 - `claude` の起動（引数と子プロセスの環境変数）は `Sources/AutoNoteCore/Minutes/ClaudeLaunch.swift` の 1 か所で組み立てる。議事録とリアルタイム要約は設定の `claude_args` と `claude_env` を、ログイン確認（`claude auth status`）は `claude_env` だけをここで足す
 - TDD で進める（失敗するテストを書く → 実装する → 通す）。ハードウェアが要る部分だけ手動で確認する
+- テストの合否を実時間で決めない（CI の並列実行では全テストが 20〜40 秒止まることがある）。条件が成り立つまで待ち、待ちの上限は `testPatience`（終わらない待ちを切るための長さで、速さの基準ではない）。「N 秒以内に戻る」は、止まる側の偽物を `BlockingHold` で止めたまま戻ったことで見る。時計で決まる動き（マイクの復旧は `StepClock`、システム音声は `FakeHostClock`）は、テストが時計を進めて見る。子プロセスを本当に止めるテストは、経過時間の上限ではなく終わり方（どのシグナルで終わったか）で見る
 - コミットメッセージは英語の Conventional Commits
 - タスクを完了とする前に `scripts/e2e-check.sh` を回す
 
