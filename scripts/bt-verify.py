@@ -662,7 +662,14 @@ def main():
                 problems.append(f"{which} app {'lacks' if which == 'after' else 'has'} the fix: {path}")
     if problems:
         print("\n".join("✗ " + p for p in problems))
-        return 1
+        if not a.dry_run:
+            return 1
+        # --dry-run only reports. It starts nothing, so it needs neither the headset nor the apps: the build before the
+        # fix exists only where someone kept one (the fix is on main since v0.7.0), and scripts/e2e-check.sh item 17
+        # runs this on Macs that have none of them.
+        print("[dry-run] a real run would stop here until the lines above are fixed")
+        print("[dry-run] nothing was played, connected or started")
+        return 0
     if not a.bt_name:
         print("[dry-run] no --bt-name: headset not looked up")
         print("[dry-run] nothing was played, connected or started")
