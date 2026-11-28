@@ -14,6 +14,8 @@
 #
 # 記録先: docs/superpowers/research/2026-10-24-spike-raw/tcc-check.log（追記。Bluetooth の UID は下 3 オクテットを伏せる）
 # 許可ダイアログはこのスクリプトでは押さない。出ていれば記録して、利用者に頼む内容を最後に表示する。
+# build/AutoNote.app 以外の場所から起動した AutoNoteApp（インストール済みのアプリなど）が動いていると、何もせずに終了コード 3 で止まる
+# （このスクリプトは AutoNoteApp を名前で終了・操作するため）。
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -330,6 +332,20 @@ phase_bt_silence() {
 }
 
 case "${PHASE}" in audio-persist|audio-denied|dictation|bt-silence) ;; *) sed -n '2,18p' "$0"; exit 2 ;; esac
+
+# このスクリプトは AutoNoteApp を名前で指す（pkill -x AutoNoteApp、tell process "AutoNoteApp"）。別の場所から起動した
+# AutoNoteApp（/Applications のインストール済みのアプリなど）が動いていると、そちらを終了させたり、そちらのメニューを
+# 開いたままにしたりする（2026-11-28、e2e-check.sh で発生）。そのときは何もせずに止まる。
+foreign_apps() {
+    ps -axo pid=,comm= | awk -v own="${APP}/Contents/MacOS/AutoNoteApp" \
+        '{ pid = $1; sub(/^ *[0-9]+ +/, ""); if ($0 ~ /\/AutoNoteApp$/ && $0 != own) print pid " " $0 }'
+}
+if [[ -n "$(foreign_apps)" ]]; then
+    echo "別の場所から起動した AutoNoteApp が動いているので始めません（このスクリプトは AutoNoteApp を名前で終了・操作します）:" >&2
+    foreign_apps | sed 's/^/  pid /' >&2
+    echo "そのアプリを自分で終了してから実行し直してください。" >&2
+    exit 3
+fi
 [[ -f "${OUT}" ]] || printf '# TCC 確認（scripts/tcc-check.sh の出力。Bluetooth の UID は下 3 オクテットを伏せる）\n' > "${OUT}"
 rec ""
 rec "# ===== [$(now)] tcc-check.sh ${PHASE} $(sw_vers -productVersion) $(uname -m) ====="
