@@ -14,8 +14,11 @@ import Synchronization
 public actor WhisperLiveTranscriber: LiveTranscriber {
     /// The commits not decoded yet (the one being decoded, plus those waiting) and how much audio waits behind the
     /// oldest of them: from its end to the end of the newest, in seconds of received audio.
-    /// A decoder that keeps up has a depth of 0 or 1 and a lag of 0 (nothing waits behind the window it works on);
-    /// each further commit adds one and its stretch of audio (7 s for back-to-back windows of continuous speech).
+    /// Each further commit adds one and its stretch of audio (7 s for back-to-back windows of continuous speech).
+    /// This is the queue of commits only: the time the decoder spends on the window in work, and on the partials
+    /// in between, is not in it. So a small depth does not mean the text is on time. Measured with bursts of
+    /// speech and a decode of 3.5 s: finals 8–11 s late at a worst depth of 2 and a worst lag of 3.6 s. With
+    /// continuous speech and a decoder that keeps up the worst is a depth of 1 and a lag of 0.
     public struct Backlog: Sendable, Equatable {
         public var depth: Int
         public var lagSeconds: Double
