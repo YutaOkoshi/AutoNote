@@ -327,6 +327,8 @@ private func looks(_ src: ProcessTapSource, _ more: Int, or done: () -> Bool) as
         await settle(src)                                        // and seen at this time
         host.advance(5.1)
         #expect(await rebuilt(src, 3))                           // back to 5 s
+        host.advance(10.1)
+        #expect(await rebuilt(src, 4))                           // and the doubling starts over: 10 s next, not 40
         await src.stop()
         #expect(creations(hw) == destructions(hw))
     }

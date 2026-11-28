@@ -73,7 +73,8 @@ import Testing
         #expect(u.map(\.text) == ["一", "二", "三"])
     }
 
-    @Test func cancellationWhilePausedThrowsPromptly() async throws {
+    /// Nothing ends this test if the cancellation does not get through (see below): the time limit then names it.
+    @Test(.timeLimit(.minutes(3))) func cancellationWhilePausedThrowsPromptly() async throws {
         let gate = BatchGate()
         await gate.pause()
         let core = FakeWhisperCore(segments: [.init(start: 0, end: 2, text: "一")])

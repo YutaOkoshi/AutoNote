@@ -79,7 +79,8 @@ import AutoNoteTestSupport
         #expect(kill(pid, 0) != 0)
     }
 
-    @Test func timeoutEscalatesToSigkillWhenSigtermIsIgnored() async throws {
+    /// The child never ends by itself, so without the SIGKILL this test would not end: the time limit then names it.
+    @Test(.timeLimit(.minutes(3))) func timeoutEscalatesToSigkillWhenSigtermIsIgnored() async throws {
         let dir = try TemporaryDirectory.make()
         let pidFile = dir.appending(path: "pid")
         let start = ContinuousClock.now
