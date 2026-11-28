@@ -2,7 +2,8 @@ import AutoNoteCore
 import Foundation
 
 /// `autonote dev transcribe` — runs one engine on a file or the microphone and prints one JSON line per
-/// utterance (`wall` = wall-clock seconds since input started), then a `summary` line. Live engines get the file
+/// utterance (`wall` = wall-clock seconds since input started), then a `summary` line (with `whisper-live` it also
+/// carries `max_backlog` and `max_lag_seconds`, `WhisperLiveTranscriber.Backlog`). Live engines get the file
 /// as 0.1 s `AudioChunk`s (paced with `--realtime`); `whisper` is the batch path. `--text-out` writes the final
 /// utterances joined with no separator (for `scripts/cer.py`). Whisper model load happens before input starts,
 /// so `elapsed` / `rtf` exclude it. Exit codes: 0 ok, 1 error, 2 usage, 3 engine unavailable
@@ -62,6 +63,8 @@ enum DevTranscribe {
         var elapsed: Double
         var rtf: Double
         var finals: Int
+        var maxBacklog: Int?            // whisper-live only: the most commits that waited for the decoder…
+        var maxLagSeconds: Double?      // …and the furthest it was behind the audio
     }
 
     private struct SummaryLine: Encodable { var summary: Summary }
@@ -71,6 +74,7 @@ enum DevTranscribe {
         do {
             let finals: [String]
             let audioSeconds: Double
+            var backlog: WhisperLiveTranscriber.Backlog?
             let clock = ContinuousClock()
             let startedAt: ContinuousClock.Instant
             if engine == .whisper {
@@ -115,10 +119,12 @@ enum DevTranscribe {
                 }
                 await live.finish()
                 finals = await printer.value
+                backlog = await (live as? WhisperLiveTranscriber)?.worstBacklog
             }
             let elapsed = seconds(clock.now - startedAt)
             writeLine(SummaryLine(summary: Summary(engine: engine.rawValue, audioSeconds: round3(audioSeconds), elapsed: round3(elapsed),
-                                                   rtf: audioSeconds > 0 ? round3(elapsed / audioSeconds) : 0, finals: finals.count)))
+                                                   rtf: audioSeconds > 0 ? round3(elapsed / audioSeconds) : 0, finals: finals.count,
+                                                   maxBacklog: backlog?.depth, maxLagSeconds: backlog.map { round3($0.lagSeconds) })))
             if let textOut = options.textOut {
                 try Data(finals.joined().utf8).write(to: textOut, options: .atomic)
             }
