@@ -192,13 +192,14 @@ private func eventually(timeout: Duration = testPatience, sourceLocation: Source
         let clock = FakeQueueClock(now: f.now)
         let scheduler = RetentionScheduler(retention: Retention(paths: f.paths), settings: settings, clock: clock)
 
+        // The run removes the tracks and the merged file one after the other: wait for both, not for the first.
         await scheduler.start()
-        await eventually { !f.exists(f.paths.tracksDirectory(expired)) }
+        await eventually { !f.exists(f.paths.tracksDirectory(expired)) && !f.exists(f.merged(expired)) }
         #expect(!f.exists(f.merged(expired)))
         #expect(f.hasAudio(nextDay))
 
         clock.advance(by: day)
-        await eventually { !f.exists(f.paths.tracksDirectory(nextDay)) }
+        await eventually { !f.exists(f.paths.tracksDirectory(nextDay)) && !f.exists(f.merged(nextDay)) }
         #expect(!f.exists(f.merged(nextDay)))
         await scheduler.stop()
     }
